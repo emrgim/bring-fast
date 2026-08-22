@@ -7,6 +7,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 SHOT_DIR = Path(os.environ.get("BRINGFAST_DATA", Path.home() / ".bring-fast")) / "checkout-shots"
 
@@ -16,6 +17,25 @@ LOGIN = {
     "waitrose": "https://www.waitrose.ae/en/",
     "spinneys": "https://www.spinneys.com/en-ae/",
 }
+
+HOME = {
+    "carrefour": "https://www.carrefouruae.com/mafuae/en",
+    "grandiose": "https://www.grandiose.ae/",
+    "waitrose": "https://www.waitrose.ae/en/",
+    "spinneys": "https://www.spinneys.com/en-ae/",
+}
+
+# Bring Fast is multi-user but the desktop Chrome profile is shared, so a store
+# session has to be tied to the account that opened it before it can be reused.
+ACCOUNT_MARKER = "bringfast_account"
+
+SIGNED_OUT_MARKERS = (
+    "log in or sign up",
+    "login or sign up",
+    "sign in or register",
+    "create an account",
+    "forgot password",
+)
 
 CART = {
     "carrefour": "https://www.carrefouruae.com/mafuae/en",
@@ -29,6 +49,28 @@ CDP = "http://127.0.0.1:9222"
 DESK_PROFILE = Path(os.environ.get("BRINGFAST_DATA", Path.home() / ".bring-fast")) / "chrome-desktop"
 
 
+def _desktop_env() -> dict[str, str]:
+    import glob
+
+    env = os.environ.copy()
+    env.setdefault("DISPLAY", ":0")
+    runtime = env.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    env["XDG_RUNTIME_DIR"] = runtime
+    env.setdefault("WAYLAND_DISPLAY", "wayland-0")
+    if not env.get("XAUTHORITY"):
+        found = sorted(
+            glob.glob(f"{runtime}/.mutter-Xwaylandauth.*") + glob.glob("/run/user/*/.mutter-Xwaylandauth.*"),
+            key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0,
+            reverse=True,
+        )
+        home_auth = os.path.expanduser("~/.Xauthority")
+        if found:
+            env["XAUTHORITY"] = found[0]
+        elif os.path.exists(home_auth):
+            env["XAUTHORITY"] = home_auth
+    return env
+
+
 def _ensure_desktop_chrome() -> None:
     import subprocess
     import urllib.request
@@ -38,11 +80,7 @@ def _ensure_desktop_chrome() -> None:
         return
     except Exception:
         pass
-    env = os.environ.copy()
-    env["DISPLAY"] = ":0"
-    env["XAUTHORITY"] = "/run/user/1000/.mutter-Xwaylandauth.QZJJT3"
-    env["WAYLAND_DISPLAY"] = "wayland-0"
-    env["XDG_RUNTIME_DIR"] = "/run/user/1000"
+    env = _desktop_env()
     DESK_PROFILE.mkdir(parents=True, exist_ok=True)
     log = DESK_PROFILE.parent / "chrome-desktop.log"
     subprocess.Popen(
@@ -195,19 +233,83 @@ def _click_first(page, names: list[str]) -> bool:
     return False
 
 
-def _login_carrefour(page, email: str, password: str) -> str:
-    from urllib.parse import quote
+def _marked_account(page) -> str:
+    """Which Bring Fast store account this browser profile last signed in as."""
+    try:
+        return (page.evaluate(f"() => localStorage.getItem({ACCOUNT_MARKER!r}) || ''") or "").strip().lower()
+    except Exception:
+        return ""
 
-    page.goto("https://www.carrefouruae.com/mafuae/en", wait_until="domcontentloaded", timeout=45000)
-    page.wait_for_timeout(1500)
-    _dismiss(page)
+
+def _mark_account(page, email: str) -> None:
+    try:
+        page.evaluate(f"(v) => localStorage.setItem({ACCOUNT_MARKER!r}, v)", (email or "").strip().lower())
+    except Exception:
+        pass
+
+
+def _looks_signed_out(page) -> bool:
     try:
         text = (page.inner_text("body") or "").lower()
     except Exception:
-        text = ""
-    if "emiliano" in text or ("login" not in (page.url or "").lower() and "sign in" not in text[:200]):
-        if "log in or sign up" not in text:
-            return page.url
+        return False
+    return any(marker in text for marker in SIGNED_OUT_MARKERS)
+
+
+def _drop_store_session(page, store: str) -> None:
+    """Wipe the store session so the next login cannot inherit another account."""
+    try:
+        page.evaluate("() => { try { localStorage.clear(); sessionStorage.clear(); } catch (e) {} }")
+    except Exception:
+        pass
+    context = getattr(page, "context", None)
+    if context is None:
+        return
+    host = urlsplit(HOME.get(store, "")).hostname or ""
+    domain = ".".join(host.split(".")[-2:]) if host else ""
+    if domain:
+        try:
+            context.clear_cookies(domain=domain)
+            return
+        except Exception:
+            pass
+    try:
+        context.clear_cookies()
+    except Exception:
+        pass
+
+
+def _session_state(page, email: str) -> str:
+    """"mine" when this profile is signed in as `email`, else "other" or "anonymous"."""
+    marked = _marked_account(page)
+    if _looks_signed_out(page):
+        return "anonymous"
+    if marked and marked == (email or "").strip().lower():
+        return "mine"
+    return "other" if marked else "anonymous"
+
+
+def _reuse_session(page, store: str, email: str) -> bool:
+    """Reuse a live store session instead of logging in again on every tool call."""
+    page.goto(HOME.get(store, LOGIN[store]), wait_until="domcontentloaded", timeout=45000)
+    page.wait_for_timeout(1200)
+    _dismiss(page)
+    state = _session_state(page, email)
+    if state == "mine":
+        return True
+    if state == "other":
+        _drop_store_session(page, store)
+        try:
+            page.reload(wait_until="domcontentloaded", timeout=45000)
+        except Exception:
+            pass
+        _dismiss(page)
+    return False
+
+
+def _login_carrefour(page, email: str, password: str) -> str:
+    from urllib.parse import quote
+
     url = (
         "https://www.carrefouruae.com/mafuae/en/login/email/password"
         f"?email={quote(email)}&hasPassword=true&hasOtpEmail=true"
@@ -251,6 +353,53 @@ def _login_spinneys_waitrose(page, store: str, email: str, password: str) -> str
     _click_first(page, ["Sign in", "Log in", "Login"])
     page.wait_for_timeout(2500)
     return page.url
+
+
+def ensure_store_login(page, store: str, email: str, password: str) -> dict[str, Any]:
+    """Get this page to a session that belongs to `email`, reusing one when possible."""
+    wanted = (email or "").strip().lower()
+    if not wanted or not password:
+        return {
+            "logged_in": False,
+            "reused": False,
+            "final_url": "",
+            "error": f"No {store} login saved. Add the store email and password on the Bring Fast dashboard.",
+        }
+    if _reuse_session(page, store, wanted):
+        return {"logged_in": True, "reused": True, "final_url": page.url, "error": None}
+    try:
+        if store == "carrefour":
+            _login_carrefour(page, email, password)
+        elif store == "grandiose":
+            _login_grandiose(page, email, password)
+        else:
+            _login_spinneys_waitrose(page, store, email, password)
+    except Exception as e:
+        return {
+            "logged_in": False,
+            "reused": False,
+            "final_url": getattr(page, "url", ""),
+            "error": (
+                f"The {store} sign-in page did not accept the saved login for {email} ({e}). "
+                "Check the store email and password on the Bring Fast dashboard."
+            ),
+        }
+    if "login" in (page.url or "").lower():
+        page.wait_for_timeout(2000)
+    ok = "login" not in (page.url or "").lower() and not _looks_signed_out(page)
+    if ok:
+        _mark_account(page, wanted)
+    return {
+        "logged_in": ok,
+        "reused": False,
+        "final_url": page.url,
+        "error": None
+        if ok
+        else (
+            f"Could not sign in to {store} as {email}. Check the store password on the Bring Fast dashboard; "
+            "the store may also be asking for a one-time code."
+        ),
+    }
 
 
 def _add_items(page, store: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -394,6 +543,40 @@ def _in_thread(fn, **kwargs):
         return pool.submit(fn, **kwargs).result(timeout=240)
 
 
+def verify_login(*, store: str, email: str, password: str) -> dict[str, Any]:
+    """Check a saved store login on demand, so problems surface before a checkout."""
+    return _in_thread(_verify_login_sync, store=store, email=email, password=password)
+
+
+def _verify_login_sync(*, store: str, email: str, password: str) -> dict[str, Any]:
+    if store not in LOGIN:
+        return {"ok": False, "error": f"Unknown store {store}."}
+    if not email or not password:
+        return {
+            "ok": False,
+            "error": "Save the store email and password first, then check the login again.",
+        }
+    pw = browser = context = None
+    try:
+        pw, browser, context = _launch()
+        page = context.new_page()
+        session = ensure_store_login(page, store, email, password)
+        return {
+            "ok": bool(session["logged_in"]),
+            "reused": bool(session.get("reused")),
+            "url": session.get("final_url"),
+            "error": session.get("error"),
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"Could not open a browser to check the login: {e}"}
+    finally:
+        try:
+            if pw:
+                pw.stop()
+        except Exception:
+            pass
+
+
 def official_cart(
     *,
     store: str,
@@ -422,28 +605,27 @@ def _official_cart_sync(
 ) -> dict[str, Any]:
     """Login on the official site and mutate the real cart. Returns official_count."""
     if not email or not password:
-        return {"ok": False, "official_count": None, "error": "store login missing on dashboard"}
+        return {
+            "ok": False,
+            "official_count": None,
+            "logged_in": False,
+            "error": f"No {store} login saved. Add the store email and password on the Bring Fast dashboard.",
+        }
     pw = browser = context = None
     try:
         pw, browser, context = _launch()
         page = context.new_page()
-        if store == "carrefour":
-            _login_carrefour(page, email, password)
-        elif store == "grandiose":
-            _login_grandiose(page, email, password)
-        else:
-            _login_spinneys_waitrose(page, store, email, password)
-        if "login" in (page.url or "").lower() and store == "carrefour":
-            page.wait_for_timeout(2000)
-        logged = "login" not in (page.url or "").lower()
-        if store == "carrefour" and not logged:
+        session = ensure_store_login(page, store, email, password)
+        logged = bool(session["logged_in"])
+        if not logged:
             return {
                 "ok": False,
                 "official_count": None,
                 "items": [],
                 "logged_in": False,
-                "final_url": page.url,
-                "error": "Could not log into the Carrefour account from Domvs. Store cart was not changed.",
+                "session_reused": False,
+                "final_url": session.get("final_url") or page.url,
+                "error": f"{session['error']} Store cart was not changed.",
             }
         if store == "carrefour":
             if action in ("add", "set") and items:
@@ -470,6 +652,7 @@ def _official_cart_sync(
                 "official_count": count,
                 "items": live_items,
                 "logged_in": True,
+                "session_reused": bool(session.get("reused")),
                 "final_url": page.url,
                 "error": None,
             }
@@ -487,6 +670,7 @@ def _official_cart_sync(
             "official_count": count if count is not None else len(live_items),
             "items": live_items,
             "logged_in": logged,
+            "session_reused": bool(session.get("reused")),
             "final_url": page.url,
             "error": None if ok else "Store cart unavailable after login.",
         }
@@ -616,13 +800,17 @@ def _run_checkout_sync(
     try:
         pw, browser, context = _launch()
         page = context.new_page()
-        if store == "carrefour":
-            login_url = _login_carrefour(page, email, password)
-        elif store == "grandiose":
-            login_url = _login_grandiose(page, email, password)
-        else:
-            login_url = _login_spinneys_waitrose(page, store, email, password)
+        session = ensure_store_login(page, store, email, password)
         shots.append(_shot(page, f"{store}-login"))
+        if not session["logged_in"]:
+            return {
+                "ok": False,
+                "stage": "login",
+                "login_url": session.get("final_url") or LOGIN.get(store),
+                "error": f"{session['error']} Nothing was ordered.",
+                "screenshots": [s for s in shots if s],
+            }
+        login_url = session.get("final_url") or page.url
         added = _add_items(page, store, items)
         shots.append(_shot(page, f"{store}-added"))
         checkout_url = _goto_checkout(page, store)
@@ -641,6 +829,7 @@ def _run_checkout_sync(
             "checkout_url": checkout_url,
             "final_url": page.url,
             "delivery_address": address,
+            "session_reused": bool(session.get("reused")),
             "items_on_site": added,
             "page_excerpt": text[:500],
             "screenshots": [s for s in shots if s],

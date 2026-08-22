@@ -35,7 +35,10 @@
       </p>
     </form>
     {% if r.linked %}
-    <form method="post" action="/retailers/{{ r.id }}/clear"><button class="ghost" type="submit">Remove login</button></form>
+    <div class="split">
+      <form method="post" action="/retailers/{{ r.id }}/check"><button class="ghost" type="submit">Check login</button></form>
+      <form method="post" action="/retailers/{{ r.id }}/clear"><button class="ghost" type="submit">Remove login</button></form>
+    </div>
     {% endif %}
   </div>
 {% endfor %}
