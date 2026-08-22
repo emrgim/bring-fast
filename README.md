@@ -26,6 +26,22 @@ BRINGFAST_HOST=127.0.0.1 BRINGFAST_PORT=8765 \
 - Health: `/health`
 - OAuth: `/.well-known/oauth-authorization-server`, `/oauth/register`, `/oauth/authorize`, `/oauth/token`
 
+`BRINGFAST_PUBLIC_URL` is what the server tells clients to call back on. Leave it unset
+behind a reverse proxy or tunnel that sends `X-Forwarded-Proto` / `X-Forwarded-Host` and
+the public URL is taken from the request; set it explicitly for anything else, because a
+server that advertises `127.0.0.1` gives the connector nothing reachable to authenticate
+against.
+
+## Tests
+
+```bash
+.venv/bin/pip install -e ".[dev]"
+.venv/bin/python -m pytest
+```
+
+`tests/test_mcp_handshake.py` replays the OAuth and MCP handshake a client performs, and
+covers the protocol details that break a connector without any obvious error.
+
 ## Grok
 
 Custom connector URL: `https://<your-host>/mcp`
