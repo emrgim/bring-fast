@@ -313,13 +313,20 @@ def create_order(user_id: int, retailer: str, items: list, address: str, checkou
     }
 
 
-def list_orders(user_id: int, retailer: str, limit: int = 5) -> list[dict[str, Any]]:
+def list_orders(user_id: int, retailer: str | None = None, limit: int = 5) -> list[dict[str, Any]]:
     con = connect()
-    rows = con.execute(
-        """SELECT id, retailer, items_json, address, status, checkout_url, created_at
-           FROM orders WHERE user_id=? AND retailer=? ORDER BY id DESC LIMIT ?""",
-        (user_id, retailer, limit),
-    ).fetchall()
+    if retailer:
+        rows = con.execute(
+            """SELECT id, retailer, items_json, address, status, checkout_url, created_at
+               FROM orders WHERE user_id=? AND retailer=? ORDER BY id DESC LIMIT ?""",
+            (user_id, retailer, limit),
+        ).fetchall()
+    else:
+        rows = con.execute(
+            """SELECT id, retailer, items_json, address, status, checkout_url, created_at
+               FROM orders WHERE user_id=? ORDER BY id DESC LIMIT ?""",
+            (user_id, limit),
+        ).fetchall()
     con.close()
     out = []
     for r in rows:

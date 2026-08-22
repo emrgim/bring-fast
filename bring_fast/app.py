@@ -333,12 +333,21 @@ def _store_tools() -> list[dict[str, Any]]:
     tools = [
         {
             "name": "bf_whoami",
-            "description": "Show the Bring Fast user bound to this MCP token (never another account).",
+            "description": (
+                "THIS user's snapshot: email, which supermarket logins are saved, "
+                "recent official orders (items + the address used on the store), last seen cart. "
+                "linked=true means the store login is saved. Do not say logins are missing when linked is true. "
+                "Delivery address lives on the supermarket account, not on Bring Fast."
+            ),
             "inputSchema": {"type": "object", "properties": {}},
         },
         {
             "name": "bf_stores",
-            "description": "List THIS user's stores: login linked?, delivery address, checkout URL, last cart count.",
+            "description": (
+                "THIS user's stores. linked=true means the supermarket login is saved. "
+                "Includes last official orders and last seen cart. "
+                "Address is the one on the supermarket account / last official order — do not ask to set it on Bring Fast."
+            ),
             "inputSchema": {"type": "object", "properties": {}},
         },
         {
@@ -414,7 +423,8 @@ def _store_tools() -> list[dict[str, Any]]:
                 {
                     "name": f"{sid}_status",
                     "description": (
-                        f"What is happening at {name}: delivery address, current cart, last checkout snapshots."
+                        f"Saved {name} state for THIS user: login saved?, last official orders, last seen cart. "
+                        "Then tries the live store cart. A live-cart failure does not mean the login is missing."
                     ),
                     "inputSchema": {"type": "object", "properties": {}},
                 },
@@ -430,9 +440,65 @@ def _ok(**kw):
     return json.dumps({"success": True, **kw}, ensure_ascii=False)
 
 
-def _store_ctx(user: dict[str, Any], retailer: str, items: list | None = None, total: float | None = None) -> dict[str, Any]:
+def _last_order_address(orders: list[dict[str, Any]]) -> str | None:
+    for order in orders:
+        addr = (order.get("delivery_address") or "").strip()
+        if addr:
+            return addr
+    return None
+
+
+def _store_snapshot(user: dict[str, Any], retailer: str) -> dict[str, Any]:
+    """Saved Bring Fast state. Does not invent or write a dashboard delivery address."""
     stores = {s["id"]: s for s in db.list_retailer_accounts(user["id"])}
     s = stores[retailer]
+    orders = db.list_orders(user["id"], retailer, 5)
+    last_cart = db.load_cart(user["id"], retailer)
+    last_items = last_cart.get("items") or []
+    last_addr = _last_order_address(orders)
+    return {
+        "store": s["name"],
+        "store_id": retailer,
+        "store_url": s["url"],
+        "owner": user["email"],
+        "linked": bool(s.get("linked")),
+        "login_saved": bool(s.get("linked")),
+        "login_email": s.get("login_email"),
+        "last_delivery_address": last_addr,
+        "address_source": "supermarket_order" if last_addr else "supermarket_account",
+        "address_note": (
+            "Delivery address is the one already saved on the supermarket account. "
+            "Do not change it on Bring Fast."
+        ),
+        "delivery_instruction": "Leave with security. Do not ring, call, or leave at the door.",
+        "cart_url": s.get("cart_url"),
+        "checkout_url": s.get("checkout_url"),
+        "last_seen_cart": last_items,
+        "last_seen_count": sum(int(i.get("qty") or 1) for i in last_items),
+        "recent_orders": orders,
+        "tools": [f"{retailer}_search", f"{retailer}_cart", f"{retailer}_checkout", f"{retailer}_status"],
+    }
+
+
+def _account_snapshot(user: dict[str, Any]) -> dict[str, Any]:
+    stores = [_store_snapshot(user, s["id"]) for s in db.RETAILERS]
+    linked = [s["store_id"] for s in stores if s["login_saved"]]
+    return {
+        "email": user["email"],
+        "user_id": user["id"],
+        "linked_stores": linked,
+        "unlinked_stores": [s["store_id"] for s in stores if not s["login_saved"]],
+        "note": (
+            "linked=true / login_saved=true means the supermarket login is saved. "
+            "Do not say a store has no login when it is in linked_stores. "
+            "Delivery address lives on the supermarket account, not on Bring Fast."
+        ),
+        "stores": stores,
+    }
+
+
+def _store_ctx(user: dict[str, Any], retailer: str, items: list | None = None, total: float | None = None) -> dict[str, Any]:
+    snap = _store_snapshot(user, retailer)
     items = items or []
     if total is None:
         total = 0.0
@@ -441,27 +507,26 @@ def _store_ctx(user: dict[str, Any], retailer: str, items: list | None = None, t
                 total += float(i.get("price") or 0) * int(i.get("qty") or 0)
             except (TypeError, ValueError):
                 pass
-    addr = (s.get("delivery_address") or "").strip()
     return {
-        "store": s["name"],
+        "store": snap["store"],
         "store_id": retailer,
-        "store_url": s["url"],
+        "store_url": snap["store_url"],
         "owner": user["email"],
-        "login_linked": bool(s.get("linked")),
-        "login_email": s.get("login_email"),
-        "delivery_address": addr or None,
-        "delivery_note": (
-            "Leave with security. Do not ring, call, or leave at the door."
-            if addr
-            else "No delivery address saved for this store. Add it on the Bring Fast dashboard store card."
-        ),
-        "cart_url": s.get("cart_url"),
-        "checkout_url": s.get("checkout_url"),
+        "login_linked": snap["login_saved"],
+        "login_saved": snap["login_saved"],
+        "login_email": snap["login_email"],
+        "delivery_address": snap["last_delivery_address"],
+        "last_delivery_address": snap["last_delivery_address"],
+        "delivery_note": snap["address_note"],
+        "delivery_instruction": snap["delivery_instruction"],
+        "cart_url": snap["cart_url"],
+        "checkout_url": snap["checkout_url"],
         "items": items,
         "item_count": sum(int(i.get("qty") or 1) for i in items),
         "currency": "AED",
         "estimated_total": round(total, 2) if total else None,
         "cart_source": "store",
+        "recent_orders": snap["recent_orders"],
     }
 
 
@@ -493,6 +558,8 @@ def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> s
         items=payload,
     )
     items = live.get("items") or []
+    if live.get("ok") and items:
+        db.save_cart(user["id"], retailer, {"items": items, "currency": "AED"})
     ctx = _store_ctx(user, retailer, items=items)
     ctx["action"] = action
     ctx["official_count"] = live.get("official_count")
@@ -504,10 +571,14 @@ def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> s
             {
                 "success": False,
                 **ctx,
-                "items": [],
-                "item_count": 0,
-                "estimated_total": None,
-                "what_happens": live.get("error") or "Could not read or update the store cart.",
+                "items": items,
+                "item_count": sum(int(i.get("qty") or 1) for i in items),
+                "live_cart_ok": False,
+                "what_happens": live.get("error") or "Could not read or update the live store cart.",
+                "note": (
+                    "A live cart failure does not mean the supermarket login is missing. "
+                    f"login_saved={ctx['login_saved']}."
+                ),
             },
             ensure_ascii=False,
         )
@@ -605,7 +676,7 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
     uid = user["id"]
     name, args = _normalize_tool(name, args or {})
     if name == "bf_whoami":
-        return _ok(email=user["email"], user_id=uid, note="tools only see this Bring Fast account")
+        return _ok(**_account_snapshot(user))
     if name == "bf_search":
         return _search_stores(
             user,
@@ -619,21 +690,13 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
             return json.dumps({"success": False, "error": "retailer required: carrefour|grandiose|waitrose|spinneys"})
         return _mutate_cart(user, retailer, args)
     if name == "bf_stores":
-        stores = []
-        for s in db.list_retailer_accounts(uid):
-            stores.append(
-                {
-                    "store_id": s["id"],
-                    "store": s["name"],
-                    "url": s["url"],
-                    "checkout_url": s.get("checkout_url"),
-                    "linked": s["linked"],
-                    "login_email": s.get("login_email"),
-                    "delivery_address": s.get("delivery_address") or None,
-                    "tools": [f"{s['id']}_search", f"{s['id']}_cart", f"{s['id']}_checkout", f"{s['id']}_status"],
-                }
-            )
-        return _ok(stores=stores)
+        snap = _account_snapshot(user)
+        return _ok(
+            linked_stores=snap["linked_stores"],
+            unlinked_stores=snap["unlinked_stores"],
+            note=snap["note"],
+            stores=snap["stores"],
+        )
     for r in db.RETAILERS:
         sid = r["id"]
         if name == f"{sid}_search":
@@ -646,8 +709,28 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
         if name == f"{sid}_checkout":
             return _checkout_store(user, sid)
         if name == f"{sid}_status":
+            snap = _store_snapshot(user, sid)
             listed = json.loads(_mutate_cart(user, sid, {"action": "list"}))
-            listed["recent_orders"] = db.list_orders(uid, sid, 5)
+            listed.update(
+                {
+                    "linked": snap["login_saved"],
+                    "login_saved": snap["login_saved"],
+                    "login_email": snap["login_email"],
+                    "last_delivery_address": snap["last_delivery_address"],
+                    "address_note": snap["address_note"],
+                    "recent_orders": snap["recent_orders"],
+                    "last_seen_cart": snap["last_seen_cart"],
+                }
+            )
+            if not listed.get("success"):
+                listed["success"] = True
+                listed["live_cart_ok"] = False
+                listed["items"] = listed.get("items") or snap["last_seen_cart"]
+                listed["item_count"] = listed.get("item_count") or snap["last_seen_count"]
+                listed["what_happens"] = (
+                    f"{snap['store']}: login_saved={snap['login_saved']}. "
+                    f"{listed.get('what_happens') or 'Live cart not read.'}"
+                )
             return json.dumps(listed, ensure_ascii=False)
     return json.dumps(
         {
@@ -707,9 +790,14 @@ async def _dispatch(user: dict[str, Any], message: Any) -> dict[str, Any] | None
                 "serverInfo": {"name": "Bring Fast", "version": __version__},
                 "instructions": (
                     f"Bring Fast for {user['email']} only. "
+                    "Call bf_whoami first: it already lists linked supermarket logins, last official orders, "
+                    "and last seen carts. linked=true / login_saved=true means that store login is saved — "
+                    "never say the login is missing for a store in linked_stores. "
+                    "The delivery address is the one already on the supermarket account; do not change it on Bring Fast. "
                     "Tools are split per store: carrefour_*, grandiose_*, waitrose_*, spinneys_* "
-                    "(search, cart, checkout, status). Always report delivery_address. "
-                    "Checkout prepares the official store URL; payment stays on the supermarket site."
+                    "(search, cart, checkout, status). "
+                    "A live cart/status failure is not proof the login is missing. "
+                    "Checkout opens the official store; payment stays on the supermarket site."
                 ),
             },
         )
