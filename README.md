@@ -37,9 +37,16 @@ test the saved credentials.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e .
-BRINGFAST_HOST=127.0.0.1 BRINGFAST_PORT=8765 \
+BRINGFAST_HOST=0.0.0.0 BRINGFAST_PORT=8877 \
   BRINGFAST_PUBLIC_URL=https://your-public-host \
   .venv/bin/python -m bring_fast.app
+```
+
+Official store checkout (Playwright) is optional:
+
+```bash
+.venv/bin/pip install -e ".[checkout]"
+.venv/bin/playwright install chromium
 ```
 
 - Dashboard: `/`
@@ -47,12 +54,15 @@ BRINGFAST_HOST=127.0.0.1 BRINGFAST_PORT=8765 \
 - Health: `/health`
 - OAuth: `/.well-known/oauth-authorization-server`, `/oauth/register`, `/oauth/authorize`, `/oauth/token`
 
-## Tests
+`BRINGFAST_PUBLIC_URL` is what the server tells clients to call back on. Leave it unset behind a reverse proxy or tunnel that sends `X-Forwarded-Proto` / `X-Forwarded-Host` and the public URL is taken from the request. Set it explicitly only to a **public https origin**. A server that advertises `127.0.0.1` gives the connector nothing reachable to authenticate against.
+
+If Grok hangs on “Checking authentication…” or reports “Connection failed”, diagnose the live URL:
 
 ```bash
-.venv/bin/pip install -e ".[dev]"
-.venv/bin/python -m pytest
+.venv/bin/python -m bring_fast.doctor https://your-public-host/mcp
 ```
+
+The first `FAIL` line is the reason the connector never finishes.
 
 ## Grok
 
@@ -61,6 +71,27 @@ Custom connector URL: `https://<your-host>/mcp`
 Grok discovers OAuth and opens the Bring Fast login. Friends register their own Bring Fast account; they never see another user’s stores.
 
 Official checkout stays on each supermarket site.
+
+## Tests
+
+```bash
+.venv/bin/pip install -e ".[dev]"
+.venv/bin/python -m pytest
+```
+
+`tests/test_mcp_handshake.py` replays the OAuth and MCP handshake a client performs.
+Login, refresh tokens, and per-user store sessions are covered in `tests/test_login.py`,
+`tests/test_oauth.py`, and `tests/test_store_login.py`.
+
+## Docker
+
+```bash
+docker build -t bring-fast .
+docker run --rm -p 8877:8877 \
+  -e BRINGFAST_PUBLIC_URL=https://your-public-host \
+  -v bringfast-data:/data \
+  bring-fast
+```
 
 ## License
 

@@ -1,0 +1,3 @@
+include README.md LICENSE
+recursive-include bring_fast/templates *
+recursive-include bring_fast/static *
