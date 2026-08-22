@@ -145,6 +145,35 @@ def _store_tools() -> list[dict[str, Any]]:
             "description": "List THIS user's stores: login linked?, delivery address, checkout URL, last cart count.",
             "inputSchema": {"type": "object", "properties": {}},
         },
+        {
+            "name": "bf_search",
+            "description": "Search one or all stores. retailer=carrefour|grandiose|waitrose|spinneys or omit to search all.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "retailer": {"type": "string"},
+                    "limit": {"type": "integer"},
+                },
+                "required": ["query"],
+            },
+        },
+        {
+            "name": "bf_cart",
+            "description": "Cart alias. retailer=carrefour|grandiose|waitrose|spinneys. action=list|add|set|remove|clear.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "retailer": {"type": "string"},
+                    "action": {"type": "string"},
+                    "product_id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "qty": {"type": "integer"},
+                    "price": {"type": "number"},
+                },
+                "required": ["retailer", "action"],
+            },
+        },
     ]
     for r in db.RETAILERS:
         sid, name = r["id"], r["name"]
@@ -281,10 +310,72 @@ def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> s
     return _ok(**ctx)
 
 
+def _normalize_tool(name: str, args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    raw = (name or "").strip()
+    n = raw.lower().replace("-", "_").replace(" ", "_")
+    for prefix in ("bring_fast_", "bringfast_", "fast_bring_", "fastbring_"):
+        if n.startswith(prefix):
+            n = n[len(prefix) :]
+    aliases = {
+        "search": "bf_search",
+        "product_search": "bf_search",
+        "catalog_search": "bf_search",
+        "search_products": "bf_search",
+        "retailers": "bf_stores",
+        "stores": "bf_stores",
+        "whoami": "bf_whoami",
+        "cart": "bf_cart",
+        "add_to_cart": "bf_cart",
+        "checkout": "bf_checkout",
+        "status": "bf_status",
+        "bf_retailers": "bf_stores",
+    }
+    n = aliases.get(n, n)
+    ids = [r["id"] for r in db.RETAILERS]
+    for sid in ids:
+        if sid in n and "search" in n:
+            return f"{sid}_search", args
+        if sid in n and "checkout" in n:
+            return f"{sid}_checkout", args
+        if sid in n and "status" in n:
+            return f"{sid}_status", args
+        if sid in n and "cart" in n:
+            return f"{sid}_cart", args
+    retailer = (args.get("retailer") or args.get("store") or "").lower()
+    if n == "bf_checkout" and retailer in ids:
+        return f"{retailer}_checkout", args
+    if n == "bf_status" and retailer in ids:
+        return f"{retailer}_status", args
+    return n, args
+
+
+def _search_stores(user: dict[str, Any], query: str, retailer: str, limit: int) -> str:
+    ids = [retailer] if retailer in {r["id"] for r in db.RETAILERS} else [r["id"] for r in db.RETAILERS]
+    out = []
+    for sid in ids:
+        block = catalog.search(sid, query, limit)
+        block["delivery_address"] = _store_ctx(user, sid)["delivery_address"]
+        out.append(block)
+    return json.dumps({"success": True, "query": query, "stores": out}, ensure_ascii=False)
+
+
 def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
     uid = user["id"]
+    name, args = _normalize_tool(name, args or {})
     if name == "bf_whoami":
         return _ok(email=user["email"], user_id=uid, note="tools only see this Bring Fast account")
+    if name == "bf_search":
+        return _search_stores(
+            user,
+            args.get("query") or args.get("q") or "",
+            (args.get("retailer") or args.get("store") or "").lower(),
+            int(args.get("limit") or 6),
+        )
+    if name == "bf_cart":
+        retailer = (args.get("retailer") or args.get("store") or "").lower()
+        if retailer not in {r["id"] for r in db.RETAILERS}:
+            return json.dumps({"success": False, "error": "retailer required: carrefour|grandiose|waitrose|spinneys"})
+        return _mutate_cart(user, retailer, args)
     if name == "bf_stores":
         stores = []
         for s in db.list_retailer_accounts(uid):
@@ -355,7 +446,14 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
                 "Bring Fast does not charge the card; it tells you exactly what and where to confirm."
             )
             return _ok(**ctx)
-    return json.dumps({"success": False, "error": f"unknown tool {name}"})
+    return json.dumps(
+        {
+            "success": False,
+            "error": f"unknown tool {name}",
+            "use": "bf_search with query=... or carrefour_search / grandiose_search / waitrose_search / spinneys_search",
+            "available": [t["name"] for t in TOOLS],
+        }
+    )
 
 
 @app.api_route("/mcp", methods=["GET", "HEAD", "POST"])
