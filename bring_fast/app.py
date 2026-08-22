@@ -234,17 +234,17 @@ def _ok(**kw):
     return json.dumps({"success": True, **kw}, ensure_ascii=False)
 
 
-def _store_ctx(user: dict[str, Any], retailer: str) -> dict[str, Any]:
+def _store_ctx(user: dict[str, Any], retailer: str, items: list | None = None, total: float | None = None) -> dict[str, Any]:
     stores = {s["id"]: s for s in db.list_retailer_accounts(user["id"])}
     s = stores[retailer]
-    cart = db.load_cart(user["id"], retailer)
-    items = cart.get("items") or []
-    total = 0.0
-    for i in items:
-        try:
-            total += float(i.get("price") or 0) * int(i.get("qty") or 0)
-        except (TypeError, ValueError):
-            pass
+    items = items or []
+    if total is None:
+        total = 0.0
+        for i in items:
+            try:
+                total += float(i.get("price") or 0) * int(i.get("qty") or 0)
+            except (TypeError, ValueError):
+                pass
     addr = (s.get("delivery_address") or "").strip()
     return {
         "store": s["name"],
@@ -262,75 +262,96 @@ def _store_ctx(user: dict[str, Any], retailer: str) -> dict[str, Any]:
         "cart_url": s.get("cart_url"),
         "checkout_url": s.get("checkout_url"),
         "items": items,
-        "item_count": sum(int(i.get("qty") or 0) for i in items),
-        "currency": cart.get("currency") or "AED",
+        "item_count": sum(int(i.get("qty") or 1) for i in items),
+        "currency": "AED",
         "estimated_total": round(total, 2) if total else None,
+        "cart_source": "store",
     }
 
 
 def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> str:
     action = (args.get("action") or "list").lower()
-    cart = db.load_cart(user["id"], retailer)
-    items = cart.setdefault("items", [])
-    if action == "clear":
-        db.save_cart(user["id"], retailer, {"items": [], "currency": "AED"})
-    elif action == "remove":
-        pid = str(args.get("product_id") or "")
-        cart["items"] = [i for i in items if str(i.get("id")) != pid]
-        db.save_cart(user["id"], retailer, cart)
-    elif action in ("add", "set"):
-        pid = str(args.get("product_id") or "")
-        if not pid:
-            return json.dumps({"success": False, "error": "product_id required", "store_id": retailer})
-        qty = int(args.get("qty") or 1)
-        found = next((i for i in items if str(i.get("id")) == pid), None)
-        if action == "set" and qty <= 0:
-            cart["items"] = [i for i in items if str(i.get("id")) != pid]
-        elif found:
-            found["qty"] = (int(found.get("qty") or 0) + qty) if action == "add" else qty
-            if args.get("name"):
-                found["name"] = args["name"]
-            if args.get("price") is not None:
-                found["price"] = args["price"]
-        else:
-            items.append(
-                {
-                    "id": pid,
-                    "name": args.get("name") or pid,
-                    "qty": max(1, qty),
-                    "price": args.get("price"),
-                    "currency": "AED",
-                }
-            )
-        db.save_cart(user["id"], retailer, cart)
-    elif action != "list":
+    if action not in ("list", "add", "set", "remove", "clear"):
         return json.dumps({"success": False, "error": f"unknown action {action}", "store_id": retailer})
-    ctx = _store_ctx(user, retailer)
+    if action in ("add", "set") and not args.get("product_id"):
+        return json.dumps({"success": False, "error": "product_id required", "store_id": retailer})
+    creds = db.get_retailer_secret(user["id"], retailer) or {}
+    payload = []
+    if action in ("add", "set"):
+        payload = [
+            {
+                "id": str(args.get("product_id")),
+                "name": args.get("name") or args.get("product_id"),
+                "qty": int(args.get("qty") or 1),
+                "price": args.get("price"),
+                "url": args.get("url") or "",
+            }
+        ]
+    elif action == "remove":
+        payload = [{"id": str(args.get("product_id") or ""), "qty": 0}]
+    live = checkout.official_cart(
+        store=retailer,
+        email=creds.get("email") or "",
+        password=creds.get("password") or "",
+        action=action,
+        items=payload,
+    )
+    items = live.get("items") or []
+    ctx = _store_ctx(user, retailer, items=items)
     ctx["action"] = action
-    if action in ("add", "set", "remove", "clear"):
-        creds = db.get_retailer_secret(user["id"], retailer) or {}
-        live = checkout.official_cart(
-            store=retailer,
-            email=creds.get("email") or "",
-            password=creds.get("password") or "",
-            action=action,
-            items=ctx["items"] if action != "remove" else [{"id": args.get("product_id"), "qty": 0}],
+    ctx["official_count"] = live.get("official_count")
+    ctx["official_ok"] = bool(live.get("ok"))
+    if not live.get("ok"):
+        return json.dumps(
+            {
+                "success": False,
+                **ctx,
+                "items": [],
+                "item_count": 0,
+                "estimated_total": None,
+                "what_happens": live.get("error") or "Could not read or update the store cart.",
+            },
+            ensure_ascii=False,
         )
-        ctx["official_count"] = live.get("official_count")
-        ctx["official_ok"] = bool(live.get("ok"))
-        ctx["official_error"] = live.get("error")
-        if action in ("add", "set") and not live.get("official_count"):
-            return json.dumps(
-                {
-                    "success": False,
-                    **ctx,
-                    "what_happens": "NOT on the official Carrefour/app cart. "
-                    + (live.get("error") or "Official add failed (login/Akamai)."),
-                },
-                ensure_ascii=False,
-            )
-        ctx["what_happens"] = f"Official {retailer} cart count: {live.get('official_count')}"
+    ctx["what_happens"] = f"{ctx['store']} cart: {ctx['item_count']} item(s)."
     return _ok(**ctx)
+
+
+def _checkout_store(user: dict[str, Any], sid: str) -> str:
+    listed = json.loads(_mutate_cart(user, sid, {"action": "list"}))
+    if not listed.get("success"):
+        return json.dumps(listed, ensure_ascii=False)
+    if not listed.get("items"):
+        listed["ready"] = False
+        listed["what_happens"] = "Store cart is empty."
+        return json.dumps(listed, ensure_ascii=False)
+    creds = db.get_retailer_secret(user["id"], sid) or {}
+    live = checkout.run_checkout(
+        store=sid,
+        email=creds.get("email") or "",
+        password=creds.get("password") or "",
+        address=listed.get("delivery_address") or creds.get("address") or "",
+        items=listed.get("items") or [],
+    )
+    order = db.create_order(
+        user["id"],
+        sid,
+        listed.get("items") or [],
+        listed.get("delivery_address") or "",
+        live.get("final_url") or listed.get("checkout_url") or "",
+    )
+    listed.update(
+        {
+            "ready": bool(live.get("ok")),
+            "order_id": order["order_id"],
+            "status": live.get("stage") or order["status"],
+            "payment_completed": bool(live.get("payment_completed")),
+            "live_checkout": live,
+            "checkout_url": live.get("final_url") or listed.get("checkout_url"),
+            "what_happens": live.get("what_happens") or live.get("error"),
+        }
+    )
+    return json.dumps(listed, ensure_ascii=False)
 
 
 def _normalize_tool(name: str, args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -402,7 +423,6 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
     if name == "bf_stores":
         stores = []
         for s in db.list_retailer_accounts(uid):
-            cart = db.load_cart(uid, s["id"])
             stores.append(
                 {
                     "store_id": s["id"],
@@ -412,7 +432,6 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
                     "linked": s["linked"],
                     "login_email": s.get("login_email"),
                     "delivery_address": s.get("delivery_address") or None,
-                    "cart_items": len(cart.get("items") or []),
                     "tools": [f"{s['id']}_search", f"{s['id']}_cart", f"{s['id']}_checkout", f"{s['id']}_status"],
                 }
             )
@@ -427,48 +446,11 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
         if name == f"{sid}_cart":
             return _mutate_cart(user, sid, args)
         if name == f"{sid}_checkout":
-            ctx = _store_ctx(user, sid)
-            if not ctx["items"]:
-                return _ok(**ctx, ready=False, what_happens="Cart is empty. Search and add items first.")
-            creds = db.get_retailer_secret(uid, sid) or {}
-            if not creds.get("password"):
-                return _ok(
-                    **ctx,
-                    ready=False,
-                    what_happens="Save this store's email and password on the Bring Fast dashboard so the server can log in and checkout.",
-                )
-            live = checkout.run_checkout(
-                store=sid,
-                email=creds.get("email") or "",
-                password=creds.get("password") or "",
-                address=ctx["delivery_address"] or creds.get("address") or "",
-                items=ctx["items"],
-            )
-            order = db.create_order(
-                uid,
-                sid,
-                ctx["items"],
-                ctx["delivery_address"] or creds.get("address") or "",
-                live.get("final_url") or live.get("checkout_url") or ctx["checkout_url"],
-            )
-            return _ok(
-                **ctx,
-                ready=bool(live.get("ok")),
-                order_id=order["order_id"],
-                status=live.get("stage") or order["status"],
-                payment_completed=bool(live.get("payment_completed")),
-                live_checkout=live,
-                checkout_url=live.get("final_url") or ctx["checkout_url"],
-                what_happens=live.get("what_happens") or live.get("error"),
-            )
+            return _checkout_store(user, sid)
         if name == f"{sid}_status":
-            ctx = _store_ctx(user, sid)
-            ctx["recent_orders"] = db.list_orders(uid, sid, 5)
-            ctx["what_happens"] = (
-                "Search → add to this store cart → checkout (snapshot + official URL) → pay on the store site. "
-                "Bring Fast does not charge the card; it tells you exactly what and where to confirm."
-            )
-            return _ok(**ctx)
+            listed = json.loads(_mutate_cart(user, sid, {"action": "list"}))
+            listed["recent_orders"] = db.list_orders(uid, sid, 5)
+            return json.dumps(listed, ensure_ascii=False)
     return json.dumps(
         {
             "success": False,

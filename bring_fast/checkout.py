@@ -237,7 +237,32 @@ def _goto_checkout(page, store: str) -> str:
     return page.url
 
 
+def _in_thread(fn, **kwargs):
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(fn, **kwargs).result(timeout=180)
+
+
 def official_cart(
+    *,
+    store: str,
+    email: str,
+    password: str,
+    action: str,
+    items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return _in_thread(
+        _official_cart_sync,
+        store=store,
+        email=email,
+        password=password,
+        action=action,
+        items=items,
+    )
+
+
+def _official_cart_sync(
     *,
     store: str,
     email: str,
@@ -261,7 +286,18 @@ def official_cart(
         if "login" in (page.url or "").lower() and store == "carrefour":
             page.wait_for_timeout(2000)
         logged = "login" not in (page.url or "").lower()
+        if store == "carrefour" and not logged:
+            return {
+                "ok": False,
+                "official_count": None,
+                "items": [],
+                "logged_in": False,
+                "final_url": page.url,
+                "error": "Could not log into the Carrefour account from Domvs. Store cart was not changed.",
+            }
         if store == "carrefour":
+            if action in ("add", "set") and items:
+                _add_items(page, store, items)
             api = page.evaluate(
                 """async ({action, items}) => {
                   const tries = [];
@@ -313,13 +349,17 @@ def official_cart(
             if action in ("add", "set"):
                 _add_items(page, store, items)
         count = _extract_count(api if store == "carrefour" else None, page)
+        live_items = _extract_items(api if isinstance(api, dict) else None)
+        ok = logged and (
+            action in ("list", "clear", "remove") or (count or 0) > 0 or bool(live_items)
+        )
         return {
-            "ok": count is not None and (action == "clear" or action == "list" or count > 0 or action == "remove"),
-            "official_count": count,
+            "ok": ok,
+            "official_count": count if count is not None else len(live_items),
+            "items": live_items,
             "logged_in": logged,
             "final_url": page.url,
-            "api": {k: api.get(k) for k in ("tries",) if isinstance(api, dict)},
-            "error": None if count not in (None, 0) or action in ("clear", "remove", "list") else "official cart still 0 after add",
+            "error": None if ok else "Store cart unavailable after login.",
         }
     except Exception as e:
         return {"ok": False, "official_count": None, "error": str(e)}
@@ -333,6 +373,37 @@ def official_cart(
                 pw.stop()
         except Exception:
             pass
+
+
+def _extract_items(api) -> list[dict[str, Any]]:
+    if not isinstance(api, dict):
+        return []
+    for blob in (api.get("lite"), api.get("v8")):
+        obj = blob
+        if isinstance(obj, str):
+            try:
+                obj = json.loads(obj)
+            except Exception:
+                continue
+        if not isinstance(obj, dict):
+            continue
+        data = obj.get("data") or obj.get("cart") or obj.get("basket") or obj
+        items = data.get("items") or data.get("products") or data.get("entries") or []
+        if isinstance(items, list) and items:
+            out = []
+            for i in items:
+                if not isinstance(i, dict):
+                    continue
+                out.append(
+                    {
+                        "id": str(i.get("id") or i.get("productId") or i.get("sku") or ""),
+                        "name": i.get("name") or i.get("title") or "",
+                        "qty": int(i.get("qty") or i.get("quantity") or 1),
+                        "price": i.get("price") or i.get("unitPrice"),
+                    }
+                )
+            return out
+    return []
 
 
 def _extract_count(api, page) -> int | None:
@@ -381,6 +452,24 @@ def _count_from_obj(obj) -> int | None:
 
 
 def run_checkout(
+    *,
+    store: str,
+    email: str,
+    password: str,
+    address: str,
+    items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return _in_thread(
+        _run_checkout_sync,
+        store=store,
+        email=email,
+        password=password,
+        address=address,
+        items=items,
+    )
+
+
+def _run_checkout_sync(
     *,
     store: str,
     email: str,
