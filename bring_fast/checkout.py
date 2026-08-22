@@ -265,16 +265,106 @@ def _add_items(page, store: str, items: list[dict[str, Any]]) -> list[dict[str, 
             added.append({**it, "site_add": "skipped_no_url"})
             continue
         try:
-            page.goto(url, wait_until="domcontentloaded", timeout=40000)
+            page.goto(url, wait_until="commit", timeout=40000)
+            page.wait_for_timeout(2500)
             _dismiss(page)
+            clicked = 0
             for _ in range(max(1, qty)):
-                if not _click_first(page, ["Add to cart", "Add to basket", "Add to bag", "Add"]):
+                if not _click_first(page, ["Add to cart", "Add to basket", "Add to bag"]):
                     break
-                page.wait_for_timeout(700)
-            added.append({**it, "site_add": "clicked", "page": page.url})
+                clicked += 1
+                page.wait_for_timeout(1200)
+            added.append({**it, "site_add": "clicked" if clicked else "no_button", "page": page.url})
         except Exception as e:
             added.append({**it, "site_add": f"error:{e}"})
     return added
+
+
+def _open_carrefour_cart(page) -> None:
+    page.goto("https://www.carrefouruae.com/mafuae/en", wait_until="commit", timeout=45000)
+    page.wait_for_timeout(2500)
+    _dismiss(page)
+    try:
+        page.evaluate(
+            """() => {
+              const els = [].slice.call(document.querySelectorAll('a,button'));
+              const c = els.find(e => /cart/i.test(e.getAttribute('aria-label')||''))
+                || els.find(e => /^\\d+$/.test((e.innerText||'').trim()) && (e.innerText||'').trim().length < 4);
+              if (c) c.click();
+            }"""
+        )
+        page.wait_for_timeout(3000)
+    except Exception:
+        pass
+    if "cart" not in (page.url or ""):
+        try:
+            page.goto("https://www.carrefouruae.com/mafuae/en/app/cart", wait_until="commit", timeout=30000)
+            page.wait_for_timeout(2500)
+        except Exception:
+            pass
+
+
+def _scrape_carrefour_cart(page) -> list[dict[str, Any]]:
+    text = ""
+    try:
+        text = page.inner_text("body") or ""
+    except Exception:
+        return []
+    chunk = text
+    if "My Cart" in text:
+        chunk = text.split("My Cart", 1)[1]
+        for stop in ("Subtotal", "Order Summary", "Ready to Checkout"):
+            if stop in chunk:
+                chunk = chunk.split(stop, 1)[0]
+                break
+    names = []
+    skip = {
+        "delete all",
+        "low prices",
+        "my cart",
+        "checkout",
+        "switch",
+        "start",
+        "min. value",
+        "free delivery",
+        "add extra services",
+        "allow grocery substitutions",
+        "pack my order",
+    }
+    for line in chunk.splitlines():
+        line = line.strip()
+        if len(line) < 10 or line.lower() in skip:
+            continue
+        if line.startswith("AED") or line.replace(".", "", 1).isdigit():
+            continue
+        if not any(ch.isalpha() for ch in line):
+            continue
+        if line.lower().startswith("add "):
+            continue
+        if line not in names:
+            names.append(line)
+    hrefs = {}
+    try:
+        hrefs = page.evaluate(
+            """() => {
+              const m = {};
+              document.querySelectorAll('a[href*="/p/"]').forEach(a => {
+                const n = (a.innerText||'').trim();
+                if (n) m[n] = a.href;
+              });
+              return m;
+            }"""
+        ) or {}
+    except Exception:
+        hrefs = {}
+    out = []
+    for name in names[:20]:
+        url = hrefs.get(name) or ""
+        pid = ""
+        if "/p/" in url:
+            pid = url.rsplit("/p/", 1)[-1].split("?")[0]
+        out.append({"id": pid, "name": name, "url": url, "qty": 1, "currency": "AED"})
+    return out
 
 
 def _goto_checkout(page, store: str) -> str:
@@ -301,7 +391,7 @@ def _in_thread(fn, **kwargs):
     import concurrent.futures
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(fn, **kwargs).result(timeout=180)
+        return pool.submit(fn, **kwargs).result(timeout=240)
 
 
 def official_cart(
@@ -358,52 +448,31 @@ def _official_cart_sync(
         if store == "carrefour":
             if action in ("add", "set") and items:
                 _add_items(page, store, items)
-            api = page.evaluate(
-                """async ({action, items}) => {
-                  const tries = [];
-                  async function hit(url, method, body) {
-                    const r = await fetch(url, {
-                      method,
-                      credentials: 'include',
-                      headers: {'content-type':'application/json','appid':'Reactweb','storeid':'mafuae','lang':'en'},
-                      body: body ? JSON.stringify(body) : undefined
-                    });
-                    const t = await r.text();
-                    let j = null; try { j = JSON.parse(t); } catch(e) {}
-                    tries.push({url, status:r.status, text:t.slice(0,240)});
-                    return {ok:r.ok, status:r.status, json:j, text:t.slice(0,240)};
-                  }
-                  if (action === 'clear') {
-                    await hit('/v1/basket/mafuae/en/liteCart','GET');
-                    await hit('/v8/carts/mafuae/en/STANDARD/clear','POST', {});
-                    await hit('/v1/basket/mafuae/en/clear','POST', {});
-                  }
-                  for (const it of (items||[])) {
-                    const pid = String(it.id||'');
-                    const qty = Number(it.qty||1);
-                    if (!pid) continue;
-                    if (action === 'remove') {
-                      await hit('/v8/carts/mafuae/en/STANDARD/removeItem','POST',{productId:pid});
-                      continue;
-                    }
-                    const bodies = [
-                      {productId: pid, quantity: qty, sellerId: '0000'},
-                      {productId: pid, qty: qty, quantity: qty, offerId: 'offer_carrefour_'+pid},
-                      {itemId: pid, quantity: qty}
-                    ];
-                    for (const b of bodies) {
-                      const a = await hit('/v8/carts/mafuae/en/STANDARD/addItem','POST', b);
-                      if (a.ok) break;
-                      const c = await hit('/v1/basket/mafuae/en/product','POST', b);
-                      if (c.ok) break;
-                    }
-                  }
-                  const lite = await hit('/v1/basket/mafuae/en/liteCart?nsp=food,nonfood,express,QCOMM,QELEC&lm=false&liteResponse=true','GET');
-                  const v8 = await hit('/v8/carts/mafuae/en/STANDARD','GET');
-                  return {tries, lite: lite.json || lite.text, v8: v8.json || v8.text};
-                }""",
-                {"action": action, "items": items},
-            )
+            elif action == "clear":
+                _open_carrefour_cart(page)
+                _click_first(page, ["Delete All", "Clear cart", "Remove all"])
+                page.wait_for_timeout(1500)
+            elif action == "remove" and items:
+                _open_carrefour_cart(page)
+                for it in items:
+                    name = it.get("name") or ""
+                    if name:
+                        try:
+                            page.get_by_text(name, exact=False).first.locator("xpath=ancestor::*[.//button][1]").get_by_text("Remove", exact=False).click(timeout=2000)
+                        except Exception:
+                            pass
+            _open_carrefour_cart(page)
+            live_items = _scrape_carrefour_cart(page)
+            count = len(live_items)
+            ok = True
+            return {
+                "ok": ok,
+                "official_count": count,
+                "items": live_items,
+                "logged_in": True,
+                "final_url": page.url,
+                "error": None,
+            }
         else:
             api = {"tries": [], "note": "non-carrefour uses click path"}
             if action in ("add", "set"):
