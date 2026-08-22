@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from typing import Any
@@ -500,7 +501,7 @@ async def mcp_endpoint(request: Request):
         params = body.get("params") or {}
         name = params.get("name")
         args = params.get("arguments") or {}
-        text = _call_tool(user, name, args)
+        text = await asyncio.to_thread(_call_tool, user, name, args)
         return JSONResponse(
             {"jsonrpc": "2.0", "id": rid, "result": {"content": [{"type": "text", "text": text}]}}
         )
