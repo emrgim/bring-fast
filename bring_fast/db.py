@@ -238,6 +238,26 @@ def set_retailer_account(
     con.close()
 
 
+def get_retailer_secret(user_id: int, retailer: str) -> dict[str, Any] | None:
+    con = connect()
+    row = con.execute(
+        "SELECT email, secret, address FROM retailer_accounts WHERE user_id=? AND retailer=?",
+        (user_id, retailer),
+    ).fetchone()
+    con.close()
+    if not row:
+        return None
+    data = {"email": row["email"], "password": "", "address": row["address"] or ""}
+    if row["secret"]:
+        try:
+            payload = json.loads(_fernet().decrypt(row["secret"]).decode())
+            data["email"] = payload.get("email") or data["email"]
+            data["password"] = payload.get("password") or ""
+        except Exception:
+            pass
+    return data
+
+
 def clear_retailer_account(user_id: int, retailer: str) -> None:
     con = connect()
     con.execute("DELETE FROM retailer_accounts WHERE user_id=? AND retailer=?", (user_id, retailer))

@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import catalog, db
+from . import catalog, checkout, db
 
 HOST = os.environ.get("BRINGFAST_HOST", "127.0.0.1")
 PORT = int(os.environ.get("BRINGFAST_PORT", "8877"))
@@ -180,8 +180,9 @@ def _store_tools() -> list[dict[str, Any]]:
                 {
                     "name": f"{sid}_checkout",
                     "description": (
-                        f"Prepare a {name} order: snapshot cart + delivery address + official checkout URL. "
-                        "Payment is completed on the {name} website (Akamai/login). Does not invent a paid order."
+                        f"Run the official {name} checkout inside the Bring Fast server: "
+                        "login with this user's store account, add the cart on the live site, open checkout. "
+                        "Returns delivery address, live URL, and what happened."
                     ),
                     "inputSchema": {"type": "object", "properties": {}},
                 },
@@ -314,29 +315,37 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
         if name == f"{sid}_checkout":
             ctx = _store_ctx(user, sid)
             if not ctx["items"]:
+                return _ok(**ctx, ready=False, what_happens="Cart is empty. Search and add items first.")
+            creds = db.get_retailer_secret(uid, sid) or {}
+            if not creds.get("password"):
                 return _ok(
                     **ctx,
                     ready=False,
-                    what_happens="Cart is empty. Search and add items first.",
+                    what_happens="Save this store's email and password on the Bring Fast dashboard so the server can log in and checkout.",
                 )
-            if not ctx["delivery_address"]:
-                return _ok(
-                    **ctx,
-                    ready=False,
-                    what_happens="Save the delivery address on the Bring Fast dashboard for this store, then checkout again.",
-                )
-            order = db.create_order(uid, sid, ctx["items"], ctx["delivery_address"], ctx["checkout_url"])
+            live = checkout.run_checkout(
+                store=sid,
+                email=creds.get("email") or "",
+                password=creds.get("password") or "",
+                address=ctx["delivery_address"] or creds.get("address") or "",
+                items=ctx["items"],
+            )
+            order = db.create_order(
+                uid,
+                sid,
+                ctx["items"],
+                ctx["delivery_address"] or creds.get("address") or "",
+                live.get("final_url") or live.get("checkout_url") or ctx["checkout_url"],
+            )
             return _ok(
                 **ctx,
-                ready=True,
+                ready=bool(live.get("ok")),
                 order_id=order["order_id"],
-                status=order["status"],
-                what_happens=(
-                    f"Order snapshot #{order['order_id']} saved for {r['name']}. "
-                    f"Open checkout_url, sign in as {ctx.get('login_email') or 'your store account'}, "
-                    f"confirm delivery to {ctx['delivery_address']}, pay on the official site. "
-                    f"{ctx['delivery_note']}"
-                ),
+                status=live.get("stage") or order["status"],
+                payment_completed=bool(live.get("payment_completed")),
+                live_checkout=live,
+                checkout_url=live.get("final_url") or ctx["checkout_url"],
+                what_happens=live.get("what_happens") or live.get("error"),
             )
         if name == f"{sid}_status":
             ctx = _store_ctx(user, sid)
