@@ -24,6 +24,8 @@ RETAILERS = [
         "url": "https://www.carrefouruae.com/mafuae/en",
         "logo": "/static/logos/carrefour.svg",
         "color": "#004e9f",
+        "cart_url": "https://www.carrefouruae.com/mafuae/en",
+        "checkout_url": "https://www.carrefouruae.com/mafuae/en/cart",
     },
     {
         "id": "grandiose",
@@ -31,6 +33,8 @@ RETAILERS = [
         "url": "https://www.grandiose.ae/",
         "logo": "/static/logos/grandiose.svg",
         "color": "#c9a227",
+        "cart_url": "https://www.grandiose.ae/checkout/cart/",
+        "checkout_url": "https://www.grandiose.ae/checkout/",
     },
     {
         "id": "waitrose",
@@ -38,6 +42,8 @@ RETAILERS = [
         "url": "https://www.waitrose.ae/en/",
         "logo": "/static/logos/waitrose.png",
         "color": "#007a33",
+        "cart_url": "https://www.waitrose.ae/en/",
+        "checkout_url": "https://www.waitrose.ae/en/checkout/",
     },
     {
         "id": "spinneys",
@@ -45,6 +51,8 @@ RETAILERS = [
         "url": "https://www.spinneys.com/en-ae/",
         "logo": "/static/logos/spinneys.svg",
         "color": "#8b1e3f",
+        "cart_url": "https://www.spinneys.com/en-ae/",
+        "checkout_url": "https://www.spinneys.com/en-ae/checkout/",
     },
 ]
 
@@ -78,6 +86,21 @@ def connect() -> sqlite3.Connection:
             email TEXT,
             secret BLOB,
             UNIQUE(user_id, retailer)
+        )"""
+    )
+    cols = {r[1] for r in con.execute("PRAGMA table_info(retailer_accounts)").fetchall()}
+    if "address" not in cols:
+        con.execute("ALTER TABLE retailer_accounts ADD COLUMN address TEXT")
+    con.execute(
+        """CREATE TABLE IF NOT EXISTS orders (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            retailer TEXT NOT NULL,
+            items_json TEXT NOT NULL,
+            address TEXT,
+            status TEXT NOT NULL,
+            checkout_url TEXT,
+            created_at INTEGER NOT NULL
         )"""
     )
     con.execute(
@@ -188,15 +211,28 @@ def rotate_token(user_id: int) -> str:
     return token
 
 
-def set_retailer_account(user_id: int, retailer: str, email: str, password: str) -> None:
+def set_retailer_account(
+    user_id: int, retailer: str, email: str, password: str = "", address: str = ""
+) -> None:
     f = _fernet()
-    blob = f.encrypt(json.dumps({"email": email, "password": password}).encode())
     con = connect()
+    existing = con.execute(
+        "SELECT secret, address FROM retailer_accounts WHERE user_id=? AND retailer=?",
+        (user_id, retailer),
+    ).fetchone()
+    if password:
+        blob = f.encrypt(json.dumps({"email": email, "password": password}).encode())
+    elif existing:
+        blob = existing["secret"]
+    else:
+        blob = f.encrypt(json.dumps({"email": email, "password": ""}).encode())
+    addr = (address or "").strip() or (existing["address"] if existing else "")
     con.execute(
-        """INSERT INTO retailer_accounts(user_id, retailer, email, secret)
-           VALUES (?,?,?,?)
-           ON CONFLICT(user_id, retailer) DO UPDATE SET email=excluded.email, secret=excluded.secret""",
-        (user_id, retailer, email, blob),
+        """INSERT INTO retailer_accounts(user_id, retailer, email, secret, address)
+           VALUES (?,?,?,?,?)
+           ON CONFLICT(user_id, retailer) DO UPDATE SET
+             email=excluded.email, secret=excluded.secret, address=excluded.address""",
+        (user_id, retailer, email, blob, addr),
     )
     con.commit()
     con.close()
@@ -212,13 +248,72 @@ def clear_retailer_account(user_id: int, retailer: str) -> None:
 def list_retailer_accounts(user_id: int) -> list[dict[str, Any]]:
     con = connect()
     rows = con.execute(
-        "SELECT retailer, email FROM retailer_accounts WHERE user_id=?", (user_id,)
+        "SELECT retailer, email, address FROM retailer_accounts WHERE user_id=?", (user_id,)
     ).fetchall()
     con.close()
-    linked = {r["retailer"]: r["email"] for r in rows}
+    linked = {r["retailer"]: r for r in rows}
     out = []
     for r in RETAILERS:
-        out.append({**r, "linked": r["id"] in linked, "login_email": linked.get(r["id"])})
+        row = linked.get(r["id"])
+        out.append(
+            {
+                **r,
+                "linked": row is not None,
+                "login_email": row["email"] if row else None,
+                "delivery_address": (row["address"] if row else None) or "",
+            }
+        )
+    return out
+
+
+def store_meta(retailer: str) -> dict[str, Any] | None:
+    for r in RETAILERS:
+        if r["id"] == retailer:
+            return r
+    return None
+
+
+def create_order(user_id: int, retailer: str, items: list, address: str, checkout_url: str) -> dict[str, Any]:
+    con = connect()
+    cur = con.execute(
+        """INSERT INTO orders(user_id, retailer, items_json, address, status, checkout_url, created_at)
+           VALUES (?,?,?,?,?,?,?)""",
+        (user_id, retailer, json.dumps(items), address, "awaiting_official_payment", checkout_url, int(time.time())),
+    )
+    oid = cur.lastrowid
+    con.commit()
+    con.close()
+    return {
+        "order_id": oid,
+        "retailer": retailer,
+        "items": items,
+        "delivery_address": address,
+        "status": "awaiting_official_payment",
+        "checkout_url": checkout_url,
+    }
+
+
+def list_orders(user_id: int, retailer: str, limit: int = 5) -> list[dict[str, Any]]:
+    con = connect()
+    rows = con.execute(
+        """SELECT id, retailer, items_json, address, status, checkout_url, created_at
+           FROM orders WHERE user_id=? AND retailer=? ORDER BY id DESC LIMIT ?""",
+        (user_id, retailer, limit),
+    ).fetchall()
+    con.close()
+    out = []
+    for r in rows:
+        out.append(
+            {
+                "order_id": r["id"],
+                "retailer": r["retailer"],
+                "items": json.loads(r["items_json"]),
+                "delivery_address": r["address"],
+                "status": r["status"],
+                "checkout_url": r["checkout_url"],
+                "created_at": r["created_at"],
+            }
+        )
     return out
 
 

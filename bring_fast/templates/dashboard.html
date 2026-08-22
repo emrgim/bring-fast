@@ -26,8 +26,10 @@
     <form method="post" action="/retailers/{{ r.id }}">
       <label>Username / email on {{ r.name }}</label>
       <input name="email" type="email" value="{{ r.login_email or '' }}" required placeholder="your store login"/>
-      <label>Password</label>
-      <input name="password" type="password" required placeholder="store password"/>
+      <label>Password (leave blank to keep current)</label>
+      <input name="password" type="password" placeholder="store password"/>
+      <label>Delivery address for {{ r.name }}</label>
+      <input name="address" type="text" value="{{ r.delivery_address or '' }}" placeholder="Building, area, city"/>
       <p class="split">
         <button type="submit">Save {{ r.name }}</button>
       </p>

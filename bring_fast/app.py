@@ -90,13 +90,19 @@ def logout(request: Request):
 
 
 @app.post("/retailers/{retailer}")
-def save_retailer(request: Request, retailer: str, email: str = Form(...), password: str = Form(...)):
+def save_retailer(
+    request: Request,
+    retailer: str,
+    email: str = Form(...),
+    password: str = Form(""),
+    address: str = Form(""),
+):
     user = current_user(request)
     if not user:
         return RedirectResponse("/", status_code=303)
     if retailer not in {r["id"] for r in db.RETAILERS}:
         return RedirectResponse("/", status_code=303)
-    db.set_retailer_account(user["id"], retailer, email.strip(), password)
+    db.set_retailer_account(user["id"], retailer, email.strip(), password, address)
     return RedirectResponse("/", status_code=303)
 
 
@@ -127,112 +133,219 @@ def _user_from_request(request: Request):
     return db.get_user_by_token(token)
 
 
-TOOLS = [
-    {
-        "name": "bf_whoami",
-        "description": "Show the Bring Fast user bound to this MCP token (never another account).",
-        "inputSchema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "bf_retailers",
-        "description": "List supermarket adapters and whether THIS user linked a login.",
-        "inputSchema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "bf_search",
-        "description": "Search a supermarket catalog. retailer=carrefour|grandiose|waitrose|spinneys",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "retailer": {"type": "string"},
-                "query": {"type": "string"},
-                "limit": {"type": "integer"},
-            },
-            "required": ["retailer", "query"],
+def _store_tools() -> list[dict[str, Any]]:
+    tools = [
+        {
+            "name": "bf_whoami",
+            "description": "Show the Bring Fast user bound to this MCP token (never another account).",
+            "inputSchema": {"type": "object", "properties": {}},
         },
-    },
-    {
-        "name": "bf_cart",
-        "description": "THIS user's cart only. action=list|add|set|remove|clear. Does not invent official checkout.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "action": {"type": "string"},
-                "retailer": {"type": "string"},
-                "product_id": {"type": "string"},
-                "name": {"type": "string"},
-                "qty": {"type": "integer"},
-                "price": {"type": "number"},
-            },
-            "required": ["action", "retailer"],
+        {
+            "name": "bf_stores",
+            "description": "List THIS user's stores: login linked?, delivery address, checkout URL, last cart count.",
+            "inputSchema": {"type": "object", "properties": {}},
         },
-    },
-]
+    ]
+    for r in db.RETAILERS:
+        sid, name = r["id"], r["name"]
+        tools.extend(
+            [
+                {
+                    "name": f"{sid}_search",
+                    "description": f"Search products at {name} only.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}},
+                        "required": ["query"],
+                    },
+                },
+                {
+                    "name": f"{sid}_cart",
+                    "description": (
+                        f"{name} cart for THIS user only. action=list|add|set|remove|clear. "
+                        "Always returns the delivery address for this store."
+                    ),
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "action": {"type": "string"},
+                            "product_id": {"type": "string"},
+                            "name": {"type": "string"},
+                            "qty": {"type": "integer"},
+                            "price": {"type": "number"},
+                        },
+                        "required": ["action"],
+                    },
+                },
+                {
+                    "name": f"{sid}_checkout",
+                    "description": (
+                        f"Prepare a {name} order: snapshot cart + delivery address + official checkout URL. "
+                        "Payment is completed on the {name} website (Akamai/login). Does not invent a paid order."
+                    ),
+                    "inputSchema": {"type": "object", "properties": {}},
+                },
+                {
+                    "name": f"{sid}_status",
+                    "description": (
+                        f"What is happening at {name}: delivery address, current cart, last checkout snapshots."
+                    ),
+                    "inputSchema": {"type": "object", "properties": {}},
+                },
+            ]
+        )
+    return tools
+
+
+TOOLS = _store_tools()
 
 
 def _ok(**kw):
     return json.dumps({"success": True, **kw}, ensure_ascii=False)
 
 
+def _store_ctx(user: dict[str, Any], retailer: str) -> dict[str, Any]:
+    stores = {s["id"]: s for s in db.list_retailer_accounts(user["id"])}
+    s = stores[retailer]
+    cart = db.load_cart(user["id"], retailer)
+    items = cart.get("items") or []
+    total = 0.0
+    for i in items:
+        try:
+            total += float(i.get("price") or 0) * int(i.get("qty") or 0)
+        except (TypeError, ValueError):
+            pass
+    addr = (s.get("delivery_address") or "").strip()
+    return {
+        "store": s["name"],
+        "store_id": retailer,
+        "store_url": s["url"],
+        "owner": user["email"],
+        "login_linked": bool(s.get("linked")),
+        "login_email": s.get("login_email"),
+        "delivery_address": addr or None,
+        "delivery_note": (
+            "Leave with security. Do not ring, call, or leave at the door."
+            if addr
+            else "No delivery address saved for this store. Add it on the Bring Fast dashboard store card."
+        ),
+        "cart_url": s.get("cart_url"),
+        "checkout_url": s.get("checkout_url"),
+        "items": items,
+        "item_count": sum(int(i.get("qty") or 0) for i in items),
+        "currency": cart.get("currency") or "AED",
+        "estimated_total": round(total, 2) if total else None,
+    }
+
+
+def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> str:
+    action = (args.get("action") or "list").lower()
+    cart = db.load_cart(user["id"], retailer)
+    items = cart.setdefault("items", [])
+    if action == "clear":
+        db.save_cart(user["id"], retailer, {"items": [], "currency": "AED"})
+    elif action == "remove":
+        pid = str(args.get("product_id") or "")
+        cart["items"] = [i for i in items if str(i.get("id")) != pid]
+        db.save_cart(user["id"], retailer, cart)
+    elif action in ("add", "set"):
+        pid = str(args.get("product_id") or "")
+        if not pid:
+            return json.dumps({"success": False, "error": "product_id required", "store_id": retailer})
+        qty = int(args.get("qty") or 1)
+        found = next((i for i in items if str(i.get("id")) == pid), None)
+        if action == "set" and qty <= 0:
+            cart["items"] = [i for i in items if str(i.get("id")) != pid]
+        elif found:
+            found["qty"] = (int(found.get("qty") or 0) + qty) if action == "add" else qty
+            if args.get("name"):
+                found["name"] = args["name"]
+            if args.get("price") is not None:
+                found["price"] = args["price"]
+        else:
+            items.append(
+                {
+                    "id": pid,
+                    "name": args.get("name") or pid,
+                    "qty": max(1, qty),
+                    "price": args.get("price"),
+                    "currency": "AED",
+                }
+            )
+        db.save_cart(user["id"], retailer, cart)
+    elif action != "list":
+        return json.dumps({"success": False, "error": f"unknown action {action}", "store_id": retailer})
+    ctx = _store_ctx(user, retailer)
+    ctx["action"] = action
+    return _ok(**ctx)
+
+
 def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
     uid = user["id"]
     if name == "bf_whoami":
-        return _ok(email=user["email"], user_id=uid, note="tools only see this account")
-    if name == "bf_retailers":
-        return _ok(retailers=db.list_retailer_accounts(uid))
-    if name == "bf_search":
-        return json.dumps(catalog.search(args.get("retailer") or "", args.get("query") or "", int(args.get("limit") or 8)), ensure_ascii=False)
-    if name == "bf_cart":
-        retailer = args.get("retailer") or ""
-        if retailer not in {r["id"] for r in db.RETAILERS}:
-            return json.dumps({"success": False, "error": "unknown retailer"})
-        action = (args.get("action") or "list").lower()
-        cart = db.load_cart(uid, retailer)
-        items = cart.setdefault("items", [])
-        if action == "list":
-            return _ok(owner=user["email"], retailer=retailer, **cart, note="personal Bring Fast cart for this user only")
-        if action == "clear":
-            db.save_cart(uid, retailer, {"items": [], "currency": "AED"})
-            return _ok(cleared=True, owner=user["email"], retailer=retailer, items=[])
-        if action == "remove":
-            pid = str(args.get("product_id") or "")
-            cart["items"] = [i for i in items if str(i.get("id")) != pid]
-            db.save_cart(uid, retailer, cart)
-            return _ok(owner=user["email"], retailer=retailer, **cart)
-        if action in ("add", "set"):
-            pid = str(args.get("product_id") or "")
-            if not pid:
-                return json.dumps({"success": False, "error": "product_id required"})
-            qty = int(args.get("qty") or 1)
-            found = None
-            for i in items:
-                if str(i.get("id")) == pid:
-                    found = i
-                    break
-            if action == "set" and qty <= 0:
-                cart["items"] = [i for i in items if str(i.get("id")) != pid]
-            elif found:
-                found["qty"] = (int(found.get("qty") or 0) + qty) if action == "add" else qty
-                if args.get("name"):
-                    found["name"] = args["name"]
-            else:
-                items.append(
-                    {
-                        "id": pid,
-                        "name": args.get("name") or pid,
-                        "qty": max(1, qty),
-                        "price": args.get("price"),
-                        "currency": "AED",
-                    }
-                )
-            db.save_cart(uid, retailer, cart)
-            return _ok(
-                owner=user["email"],
-                retailer=retailer,
-                **cart,
-                official_site="not updated — credentials stored on your dashboard; official checkout stays on the retailer site",
+        return _ok(email=user["email"], user_id=uid, note="tools only see this Bring Fast account")
+    if name == "bf_stores":
+        stores = []
+        for s in db.list_retailer_accounts(uid):
+            cart = db.load_cart(uid, s["id"])
+            stores.append(
+                {
+                    "store_id": s["id"],
+                    "store": s["name"],
+                    "url": s["url"],
+                    "checkout_url": s.get("checkout_url"),
+                    "linked": s["linked"],
+                    "login_email": s.get("login_email"),
+                    "delivery_address": s.get("delivery_address") or None,
+                    "cart_items": len(cart.get("items") or []),
+                    "tools": [f"{s['id']}_search", f"{s['id']}_cart", f"{s['id']}_checkout", f"{s['id']}_status"],
+                }
             )
-        return json.dumps({"success": False, "error": f"unknown action {action}"})
+        return _ok(stores=stores)
+    for r in db.RETAILERS:
+        sid = r["id"]
+        if name == f"{sid}_search":
+            result = catalog.search(sid, args.get("query") or "", int(args.get("limit") or 8))
+            result["delivery_address"] = _store_ctx(user, sid)["delivery_address"]
+            result["store"] = r["name"]
+            return json.dumps(result, ensure_ascii=False)
+        if name == f"{sid}_cart":
+            return _mutate_cart(user, sid, args)
+        if name == f"{sid}_checkout":
+            ctx = _store_ctx(user, sid)
+            if not ctx["items"]:
+                return _ok(
+                    **ctx,
+                    ready=False,
+                    what_happens="Cart is empty. Search and add items first.",
+                )
+            if not ctx["delivery_address"]:
+                return _ok(
+                    **ctx,
+                    ready=False,
+                    what_happens="Save the delivery address on the Bring Fast dashboard for this store, then checkout again.",
+                )
+            order = db.create_order(uid, sid, ctx["items"], ctx["delivery_address"], ctx["checkout_url"])
+            return _ok(
+                **ctx,
+                ready=True,
+                order_id=order["order_id"],
+                status=order["status"],
+                what_happens=(
+                    f"Order snapshot #{order['order_id']} saved for {r['name']}. "
+                    f"Open checkout_url, sign in as {ctx.get('login_email') or 'your store account'}, "
+                    f"confirm delivery to {ctx['delivery_address']}, pay on the official site. "
+                    f"{ctx['delivery_note']}"
+                ),
+            )
+        if name == f"{sid}_status":
+            ctx = _store_ctx(user, sid)
+            ctx["recent_orders"] = db.list_orders(uid, sid, 5)
+            ctx["what_happens"] = (
+                "Search → add to this store cart → checkout (snapshot + official URL) → pay on the store site. "
+                "Bring Fast does not charge the card; it tells you exactly what and where to confirm."
+            )
+            return _ok(**ctx)
     return json.dumps({"success": False, "error": f"unknown tool {name}"})
 
 
@@ -259,9 +372,10 @@ async def mcp_endpoint(request: Request):
                     "capabilities": {"tools": {"listChanged": False}},
                     "serverInfo": {"name": "Bring Fast", "version": "1.0.0"},
                     "instructions": (
-                        f"Bring Fast for {user['email']} only. Never use another user's stores. "
-                        "Retailers: carrefour, grandiose, waitrose, spinneys. "
-                        "Carts are private to this account."
+                        f"Bring Fast for {user['email']} only. "
+                        "Tools are split per store: carrefour_*, grandiose_*, waitrose_*, spinneys_* "
+                        "(search, cart, checkout, status). Always report delivery_address. "
+                        "Checkout prepares the official store URL; payment stays on the supermarket site."
                     ),
                 },
             }
