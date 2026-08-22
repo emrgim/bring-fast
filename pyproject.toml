@@ -14,9 +14,21 @@ dependencies = [
   "passlib[bcrypt]>=1.7.4",
 ]
 
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "httpx>=0.27",
+]
+
 [project.scripts]
 bring-fast = "bring_fast.app:main"
 
 [build-system]
 requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["bring_fast*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
