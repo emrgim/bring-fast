@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 bring-fast = "bring_fast.app:main"
+bring-fast-doctor = "bring_fast.doctor:main"
 
 [build-system]
 requires = ["setuptools>=69"]
