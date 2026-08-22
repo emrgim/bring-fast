@@ -68,6 +68,10 @@
     .ok { color:var(--acc); font-size:12px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; }
     .off { color:var(--muted); font-size:12px; }
     .err { color:var(--bad); }
+    .notice {
+      color:var(--acc); background:rgba(124,255,178,.08); border:1px solid rgba(124,255,178,.25);
+      border-radius:12px; padding:10px 14px; margin:0 0 20px; font-weight:600;
+    }
     .token, code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; word-break:break-all; }
     .mcp { background:linear-gradient(180deg, rgba(124,255,178,.08), transparent); }
     .split { display:flex; gap:10px; flex-wrap:wrap; }
@@ -87,7 +91,7 @@
       {% endif %}
     </nav>
     {% if error %}<p class="err">{{ error }}</p>{% endif %}
-    {% if notice %}<p class="ok">{{ notice }}</p>{% endif %}
+    {% if notice %}<p class="notice">{{ notice }}</p>{% endif %}
     {% block body %}{% endblock %}
   </div>
 </body>
