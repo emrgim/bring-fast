@@ -19,7 +19,7 @@ PUBLIC_URL = os.environ.get("BRINGFAST_PUBLIC_URL", "").rstrip("/")
 SECRET = os.environ.get("BRINGFAST_SECRET", "bring-fast-change-me")
 
 templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
-app = FastAPI(title="Fast Bring")
+app = FastAPI(title="Bring Fast")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -44,7 +44,7 @@ def mcp_url() -> str:
 def home(request: Request):
     user = current_user(request)
     if not user:
-        return templates.TemplateResponse(request, "login.html", {"user": None, "title": "Fast Bring"})
+        return templates.TemplateResponse(request, "login.html", {"user": None, "title": "Bring Fast"})
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -52,7 +52,7 @@ def home(request: Request):
             "user": user,
             "retailers": db.list_retailer_accounts(user["id"]),
             "mcp_url": mcp_url(),
-            "title": "Fast Bring",
+            "title": "Bring Fast",
         },
     )
 
@@ -63,7 +63,7 @@ def register(request: Request, email: str = Form(...), password: str = Form(...)
         user = db.create_user(email, password)
     except ValueError as e:
         return templates.TemplateResponse(
-            request, "login.html", {"user": None, "error": str(e), "title": "Fast Bring"}, status_code=400
+            request, "login.html", {"user": None, "error": str(e), "title": "Bring Fast"}, status_code=400
         )
     request.session["uid"] = user["id"]
     return RedirectResponse("/", status_code=303)
@@ -76,7 +76,7 @@ def login(request: Request, email: str = Form(...), password: str = Form(...)):
         return templates.TemplateResponse(
             request,
             "login.html",
-            {"user": None, "error": "Wrong email or password", "title": "Fast Bring"},
+            {"user": None, "error": "Wrong email or password", "title": "Bring Fast"},
             status_code=401,
         )
     request.session["uid"] = user["id"]
@@ -257,7 +257,7 @@ async def mcp_endpoint(request: Request):
                 "result": {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {"tools": {"listChanged": False}},
-                    "serverInfo": {"name": "Fast Bring", "version": "1.0.0"},
+                    "serverInfo": {"name": "Bring Fast", "version": "1.0.0"},
                     "instructions": (
                         f"Bring Fast for {user['email']} only. Never use another user's stores. "
                         "Retailers: carrefour, grandiose, waitrose, spinneys. "
@@ -294,10 +294,10 @@ def _issuer() -> str:
 def _oauth_challenge():
     meta = f"{_issuer()}/.well-known/oauth-protected-resource"
     return JSONResponse(
-        {"jsonrpc": "2.0", "id": None, "error": {"code": -32001, "message": "OAuth required. Sign in with your Fast Bring account."}},
+        {"jsonrpc": "2.0", "id": None, "error": {"code": -32001, "message": "OAuth required. Sign in with your Bring Fast account."}},
         status_code=401,
         headers={
-            "WWW-Authenticate": f'Bearer realm="Fast Bring", resource_metadata="{meta}"',
+            "WWW-Authenticate": f'Bearer realm="Bring Fast", resource_metadata="{meta}"',
             "Access-Control-Expose-Headers": "WWW-Authenticate",
         },
     )
@@ -326,7 +326,7 @@ def _prm_metadata() -> dict:
         "authorization_servers": [base],
         "bearer_methods_supported": ["header"],
         "scopes_supported": ["mcp"],
-        "resource_name": "Fast Bring",
+        "resource_name": "Bring Fast",
     }
 
 
@@ -401,7 +401,7 @@ def oauth_authorize_get(
         "oauth_authorize.html",
         {
             "user": user,
-            "title": "Authorize Fast Bring",
+            "title": "Authorize Bring Fast",
             "redirect_uri": redirect_uri,
             "state": state,
             "client_id": client_id,
@@ -433,7 +433,7 @@ def oauth_authorize_post(
                 "oauth_authorize.html",
                 {
                     "user": None,
-                    "title": "Authorize Fast Bring",
+                    "title": "Authorize Bring Fast",
                     "redirect_uri": redirect_uri,
                     "state": state,
                     "client_id": client_id,

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block body %}
-<h1>Connect Fast Bring</h1>
-<p class="lead">Grok vuole usare il tuo account Fast Bring. Accedi con le stesse credenziali della dashboard.</p>
+<h1>Connect Bring Fast</h1>
+<p class="lead">Grok vuole usare il tuo account Bring Fast. Accedi con le stesse credenziali della dashboard.</p>
 <div class="card">
   <form method="post" action="/oauth/authorize">
     <input type="hidden" name="redirect_uri" value="{{ redirect_uri }}"/>
@@ -9,9 +9,9 @@
     <input type="hidden" name="client_id" value="{{ client_id }}"/>
     <input type="hidden" name="code_challenge" value="{{ code_challenge }}"/>
     <input type="hidden" name="code_challenge_method" value="{{ code_challenge_method }}"/>
-    <label>Email Fast Bring</label>
+    <label>Email Bring Fast</label>
     <input name="email" type="email" required value="{{ email or '' }}" autocomplete="username"/>
-    <label>Password Fast Bring</label>
+    <label>Password Bring Fast</label>
     <input name="password" type="password" required autocomplete="current-password"/>
     <p><button type="submit">Authorize Grok</button></p>
   </form>

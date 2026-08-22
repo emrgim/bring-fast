@@ -1,8 +1,8 @@
-# Fast Bring
+# Bring Fast
 
 Multi-user grocery MCP + dashboard for the UAE.
 
-Each person has a Fast Bring account and only their own supermarket logins. Grok connects with OAuth (Dynamic Client Registration) — users sign in with the same Fast Bring email/password. No Client ID / secret to paste.
+Each person has a Bring Fast account and only their own supermarket logins. Grok connects with OAuth (Dynamic Client Registration) — users sign in with the same Bring Fast email/password. No Client ID / secret to paste.
 
 ## Stores
 
@@ -30,7 +30,7 @@ BRINGFAST_HOST=127.0.0.1 BRINGFAST_PORT=8765 \
 
 Custom connector URL: `https://<your-host>/mcp`
 
-Grok discovers OAuth and opens the Fast Bring login. Friends register their own Fast Bring account; they never see another user’s stores.
+Grok discovers OAuth and opens the Bring Fast login. Friends register their own Bring Fast account; they never see another user’s stores.
 
 Official checkout stays on each supermarket site.
 
