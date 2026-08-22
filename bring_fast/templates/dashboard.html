@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Store logins</h1>
+<p class="lead">Collega l’account di ogni supermercato. Restano solo sul tuo utente Fast Bring.</p>
+
+<div class="card mcp">
+  <h2>Grok connector</h2>
+  <p class="off">URL MCP</p>
+  <p><code>{{ mcp_url }}</code></p>
+  <p class="off">Token personale (Authorization: Bearer) — non condividerlo</p>
+  <p class="token">{{ user.mcp_token }}</p>
+  <form method="post" action="/rotate-token"><button class="ghost" type="submit">Generate new token</button></form>
+</div>
+
+<div class="grid">
+{% for r in retailers %}
+  <div class="card store" style="--store: {{ r.color }}">
+    <div class="head">
+      <img class="logo" src="{{ r.logo }}" alt="{{ r.name }} logo"/>
+      <div>
+        <h2>{{ r.name }}</h2>
+        <div class="site"><a href="{{ r.url }}" target="_blank" rel="noopener">{{ r.url }}</a></div>
+        {% if r.linked %}<div class="ok">Linked · {{ r.login_email }}</div>{% else %}<div class="off">Not linked</div>{% endif %}
+      </div>
+    </div>
+    <form method="post" action="/retailers/{{ r.id }}">
+      <label>Username / email on {{ r.name }}</label>
+      <input name="email" type="email" value="{{ r.login_email or '' }}" required placeholder="your store login"/>
+      <label>Password</label>
+      <input name="password" type="password" required placeholder="store password"/>
+      <p class="split">
+        <button type="submit">Save {{ r.name }}</button>
+      </p>
+    </form>
+    {% if r.linked %}
+    <form method="post" action="/retailers/{{ r.id }}/clear"><button class="ghost" type="submit">Remove login</button></form>
+    {% endif %}
+  </div>
+{% endfor %}
+</div>
+{% endblock %}
