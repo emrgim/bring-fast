@@ -25,34 +25,84 @@ CART = {
 }
 
 
+CDP = "http://127.0.0.1:9222"
+DESK_PROFILE = Path(os.environ.get("BRINGFAST_DATA", Path.home() / ".bring-fast")) / "chrome-desktop"
+
+
+def _ensure_desktop_chrome() -> None:
+    import subprocess
+    import urllib.request
+
+    try:
+        urllib.request.urlopen(f"{CDP}/json/version", timeout=1)
+        return
+    except Exception:
+        pass
+    env = os.environ.copy()
+    env["DISPLAY"] = ":0"
+    env["XAUTHORITY"] = "/run/user/1000/.mutter-Xwaylandauth.QZJJT3"
+    env["WAYLAND_DISPLAY"] = "wayland-0"
+    env["XDG_RUNTIME_DIR"] = "/run/user/1000"
+    DESK_PROFILE.mkdir(parents=True, exist_ok=True)
+    log = DESK_PROFILE.parent / "chrome-desktop.log"
+    subprocess.Popen(
+        [
+            "/usr/bin/google-chrome",
+            f"--user-data-dir={DESK_PROFILE}",
+            "--remote-debugging-port=9222",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-session-crashed-bubble",
+            "--start-maximized",
+        ],
+        stdout=open(log, "ab"),
+        stderr=subprocess.STDOUT,
+        env=env,
+        start_new_session=True,
+    )
+    for _ in range(20):
+        time.sleep(0.4)
+        try:
+            urllib.request.urlopen(f"{CDP}/json/version", timeout=1)
+            return
+        except Exception:
+            continue
+
+
 def _launch():
     from playwright.sync_api import sync_playwright
 
     pw = sync_playwright().start()
-    chrome = "/usr/bin/google-chrome"
-    kwargs = {
-        "headless": True,
-        "args": [
-            "--no-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-gpu",
-            "--headless=new",
-            "--disable-blink-features=AutomationControlled",
-        ],
-    }
-    if Path(chrome).exists():
-        kwargs["executable_path"] = chrome
-    browser = pw.chromium.launch(**kwargs)
-    context = browser.new_context(
-        viewport={"width": 1280, "height": 900},
-        locale="en-AE",
-        user_agent=(
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-        ),
-    )
-    context.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
-    return pw, browser, context
+    try:
+        _ensure_desktop_chrome()
+        browser = pw.chromium.connect_over_cdp(CDP)
+        context = browser.contexts[0] if browser.contexts else browser.new_context()
+        return pw, browser, context
+    except Exception:
+        chrome = "/usr/bin/google-chrome"
+        kwargs = {
+            "headless": True,
+            "args": [
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--headless=new",
+                "--disable-blink-features=AutomationControlled",
+            ],
+        }
+        if Path(chrome).exists():
+            kwargs["executable_path"] = chrome
+        browser = pw.chromium.launch(**kwargs)
+        context = browser.new_context(
+            viewport={"width": 1280, "height": 900},
+            locale="en-AE",
+            user_agent=(
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            ),
+        )
+        context.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
+        return pw, browser, context
 
 
 def _shot(page, name: str) -> str:
@@ -146,27 +196,37 @@ def _click_first(page, names: list[str]) -> bool:
 
 
 def _login_carrefour(page, email: str, password: str) -> str:
-    page.goto(LOGIN["carrefour"], wait_until="domcontentloaded", timeout=45000)
-    page.wait_for_timeout(2000)
+    from urllib.parse import quote
+
+    page.goto("https://www.carrefouruae.com/mafuae/en", wait_until="domcontentloaded", timeout=45000)
+    page.wait_for_timeout(1500)
     _dismiss(page)
     try:
-        page.locator("a.cc-btn.cc-dismiss").click(timeout=4000)
-        page.wait_for_timeout(800)
+        text = (page.inner_text("body") or "").lower()
+    except Exception:
+        text = ""
+    if "emiliano" in text or ("login" not in (page.url or "").lower() and "sign in" not in text[:200]):
+        if "log in or sign up" not in text:
+            return page.url
+    url = (
+        "https://www.carrefouruae.com/mafuae/en/login/email/password"
+        f"?email={quote(email)}&hasPassword=true&hasOtpEmail=true"
+    )
+    page.goto(url, wait_until="domcontentloaded", timeout=45000)
+    page.wait_for_timeout(1500)
+    _dismiss(page)
+    try:
+        page.locator("a.cc-btn.cc-dismiss").click(timeout=2500)
     except Exception:
         pass
-    _dismiss(page)
-    page.wait_for_selector("#email", timeout=10000)
-    loc = page.locator("#email")
-    loc.click()
-    loc.fill("")
-    loc.press_sequentially(email, delay=40)
-    page.wait_for_timeout(400)
-    page.locator("button[type=submit]:has-text('Continue')").click(timeout=8000)
     page.wait_for_selector("input[type=password]", timeout=15000)
     pwd = page.locator("input[type=password]").first
     pwd.click()
     pwd.press_sequentially(password, delay=40)
-    pwd.press("Enter")
+    try:
+        page.locator("button:has-text('Login')").click(timeout=5000)
+    except Exception:
+        pwd.press("Enter")
     page.wait_for_timeout(4000)
     return page.url
 
@@ -365,10 +425,6 @@ def _official_cart_sync(
         return {"ok": False, "official_count": None, "error": str(e)}
     finally:
         try:
-            if context:
-                context.close()
-            if browser:
-                browser.close()
             if pw:
                 pw.stop()
         except Exception:
@@ -535,10 +591,6 @@ def _run_checkout_sync(
         return {"ok": False, "stage": "browser", "error": str(e), "screenshots": shots}
     finally:
         try:
-            if context:
-                context.close()
-            if browser:
-                browser.close()
             if pw:
                 pw.stop()
         except Exception:
