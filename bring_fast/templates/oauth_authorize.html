@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block body %}
 <h1>Connect Bring Fast</h1>
-<p class="lead">Grok vuole usare il tuo account Bring Fast. Accedi con le stesse credenziali della dashboard.</p>
+<p class="lead">Grok vuole usare il tuo account Bring Fast. Email e password: se l'account non esiste ancora lo creiamo e la connessione continua senza altri passaggi.</p>
 <div class="card">
   <form method="post" action="/oauth/authorize">
     <input type="hidden" name="redirect_uri" value="{{ redirect_uri }}"/>
@@ -10,10 +10,11 @@
     <input type="hidden" name="code_challenge" value="{{ code_challenge }}"/>
     <input type="hidden" name="code_challenge_method" value="{{ code_challenge_method }}"/>
     <label>Email Bring Fast</label>
-    <input name="email" type="email" required value="{{ email or '' }}" autocomplete="username"/>
-    <label>Password Bring Fast</label>
-    <input name="password" type="password" required autocomplete="current-password"/>
+    <input name="email" type="email" required value="{{ email or '' }}" autocomplete="username" autofocus/>
+    <label>Password Bring Fast (min 6)</label>
+    <input name="password" type="password" required minlength="6" autocomplete="current-password"/>
     <p><button type="submit">Authorize Grok</button></p>
+    <p class="off">Grok vede solo i tuoi negozi. Il login del supermercato resta sulla dashboard.</p>
   </form>
 </div>
 {% endblock %}

@@ -1,24 +1,28 @@
 {% extends "base.html" %}
 {% block body %}
 <h1>Your stores.<br>Your account.</h1>
-<p class="lead">Accedi a Bring Fast. Ogni persona vede solo i propri login dei supermercati. Gli amici si registrano da soli.</p>
+<p class="lead">Un solo passaggio: email e password. Se non hai ancora un account Bring Fast, lo creiamo adesso. Ogni persona vede solo i propri login dei supermercati.</p>
 <div class="grid">
   <div class="card">
-    <h2>Log in</h2>
+    <h2>Enter Bring Fast</h2>
     <form method="post" action="/login">
-      <label>Email Bring Fast</label><input name="email" type="email" required autocomplete="username"/>
-      <label>Password</label><input name="password" type="password" required autocomplete="current-password"/>
-      <p><button type="submit">Enter dashboard</button></p>
+      <input type="hidden" name="next" value="{{ next or '/' }}"/>
+      <label>Email</label>
+      <input name="email" type="email" required autocomplete="username" autofocus
+             value="{{ email or '' }}" placeholder="you@example.com"/>
+      <label>Password (min 6)</label>
+      <input name="password" type="password" required minlength="6" autocomplete="current-password"
+             placeholder="your Bring Fast password"/>
+      <p><button type="submit">Continue</button></p>
+      <p class="off">Prima volta? Questa email diventa il tuo account. Poi colleghi Carrefour, Grandiose, Waitrose, Spinneys.</p>
     </form>
   </div>
   <div class="card">
-    <h2>Create account</h2>
-    <p class="lead">Per te o per un amico. Poi colleghi Carrefour, Grandiose, Waitrose, Spinneys.</p>
-    <form method="post" action="/register">
-      <label>Email</label><input name="email" type="email" required/>
-      <label>Password (min 6)</label><input name="password" type="password" minlength="6" required/>
-      <p><button type="submit">Register</button></p>
-    </form>
+    <h2>How it works</h2>
+    <p class="off">1 · Entra con la tua email Bring Fast.</p>
+    <p class="off">2 · Salva il login di ogni supermercato che usi.</p>
+    <p class="off">3 · In Grok aggiungi il connettore MCP: ti chiede lo stesso login, una volta sola.</p>
+    <p class="off">Nessun Client ID o secret da incollare. Il pagamento resta sul sito del supermercato.</p>
   </div>
 </div>
 {% endblock %}
