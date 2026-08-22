@@ -25,7 +25,7 @@ CART = {
 }
 
 
-CDP = "http://127.0.0.1:9222"
+CDP = os.environ.get("BRINGFAST_CDP", "http://127.0.0.1:9222")
 DESK_PROFILE = Path(os.environ.get("BRINGFAST_DATA", Path.home() / ".bring-fast")) / "chrome-desktop"
 
 
@@ -38,18 +38,20 @@ def _ensure_desktop_chrome() -> None:
         return
     except Exception:
         pass
+    if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+        return
+    chrome = _chrome_bin()
+    if not chrome:
+        return
     env = os.environ.copy()
-    env["DISPLAY"] = ":0"
-    env["XAUTHORITY"] = "/run/user/1000/.mutter-Xwaylandauth.QZJJT3"
-    env["WAYLAND_DISPLAY"] = "wayland-0"
-    env["XDG_RUNTIME_DIR"] = "/run/user/1000"
     DESK_PROFILE.mkdir(parents=True, exist_ok=True)
     log = DESK_PROFILE.parent / "chrome-desktop.log"
+    port = _cdp_port(CDP)
     subprocess.Popen(
         [
-            "/usr/bin/google-chrome",
+            chrome,
             f"--user-data-dir={DESK_PROFILE}",
-            "--remote-debugging-port=9222",
+            f"--remote-debugging-port={port}",
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-session-crashed-bubble",
@@ -69,8 +71,34 @@ def _ensure_desktop_chrome() -> None:
             continue
 
 
+def _cdp_port(cdp: str) -> int:
+    from urllib.parse import urlparse
+
+    parsed = urlparse(cdp)
+    return parsed.port or 9222
+
+
+def _chrome_bin() -> str | None:
+    candidates = []
+    if os.environ.get("BRINGFAST_CHROME"):
+        candidates.append(os.environ["BRINGFAST_CHROME"])
+    candidates.extend(
+        ["/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome-stable"]
+    )
+    for path in candidates:
+        if Path(path).exists():
+            return path
+    return None
+
+
 def _launch():
-    from playwright.sync_api import sync_playwright
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as e:
+        raise RuntimeError(
+            "Playwright is not installed. Install checkout support with "
+            "`pip install 'bring-fast[checkout]'` and `playwright install chromium`."
+        ) from e
 
     pw = sync_playwright().start()
     try:
@@ -79,7 +107,7 @@ def _launch():
         context = browser.contexts[0] if browser.contexts else browser.new_context()
         return pw, browser, context
     except Exception:
-        chrome = "/usr/bin/google-chrome"
+        chrome = _chrome_bin()
         kwargs = {
             "headless": True,
             "args": [
@@ -90,7 +118,7 @@ def _launch():
                 "--disable-blink-features=AutomationControlled",
             ],
         }
-        if Path(chrome).exists():
+        if chrome:
             kwargs["executable_path"] = chrome
         browser = pw.chromium.launch(**kwargs)
         context = browser.new_context(
@@ -205,9 +233,10 @@ def _login_carrefour(page, email: str, password: str) -> str:
         text = (page.inner_text("body") or "").lower()
     except Exception:
         text = ""
-    if "emiliano" in text or ("login" not in (page.url or "").lower() and "sign in" not in text[:200]):
-        if "log in or sign up" not in text:
-            return page.url
+    if "log in or sign up" in text:
+        pass
+    elif "login" not in (page.url or "").lower() and "sign in" not in text[:400]:
+        return page.url
     url = (
         "https://www.carrefouruae.com/mafuae/en/login/email/password"
         f"?email={quote(email)}&hasPassword=true&hasOtpEmail=true"
@@ -443,7 +472,7 @@ def _official_cart_sync(
                 "items": [],
                 "logged_in": False,
                 "final_url": page.url,
-                "error": "Could not log into the Carrefour account from Domvs. Store cart was not changed.",
+                "error": "Could not log into the Carrefour account. Store cart was not changed.",
             }
         if store == "carrefour":
             if action in ("add", "set") and items:

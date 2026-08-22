@@ -1,8 +1,12 @@
 [project]
 name = "bring-fast"
-version = "1.0.0"
+version = "1.1.0"
 description = "Bring Fast — multi-user grocery MCP + dashboard"
+readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.11"
+authors = [{ name = "Emiliano Morgia" }]
+keywords = ["mcp", "grok", "grocery", "uae", "carrefour"]
 dependencies = [
   "fastapi>=0.115.0",
   "uvicorn>=0.30.0",
@@ -14,9 +18,33 @@ dependencies = [
   "passlib[bcrypt]>=1.7.4",
 ]
 
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+  "httpx>=0.27.0",
+]
+checkout = [
+  "playwright>=1.47.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/emrgim/bring-fast"
+Issues = "https://github.com/emrgim/bring-fast/issues"
+
 [project.scripts]
 bring-fast = "bring_fast.app:main"
+bring-fast-doctor = "bring_fast.doctor:main"
 
 [build-system]
 requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["bring_fast*"]
+
+[tool.setuptools.package-data]
+bring_fast = ["templates/*", "static/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

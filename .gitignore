@@ -12,3 +12,4 @@ master.key
 emiliano_bootstrap.txt
 .DS_Store
 .env
+.pytest_cache/

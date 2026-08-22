@@ -3,21 +3,41 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import secrets
+import sys
 from typing import Any
 
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Form, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import catalog, checkout, db
+from . import __version__, catalog, checkout, db
 
 HOST = os.environ.get("BRINGFAST_HOST", "127.0.0.1")
 PORT = int(os.environ.get("BRINGFAST_PORT", "8877"))
 PUBLIC_URL = os.environ.get("BRINGFAST_PUBLIC_URL", "").rstrip("/")
-SECRET = os.environ.get("BRINGFAST_SECRET", "bring-fast-change-me")
+
+
+def _session_secret() -> str:
+    env = os.environ.get("BRINGFAST_SECRET")
+    if env:
+        return env
+    db.DATA.mkdir(parents=True, exist_ok=True)
+    path = db.DATA / "session.secret"
+    if path.exists():
+        value = path.read_text().strip()
+        if value:
+            return value
+    value = secrets.token_urlsafe(48)
+    path.write_text(value)
+    path.chmod(0o600)
+    return value
+
+
+SECRET = _session_secret()
 
 templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
 app = FastAPI(title="Bring Fast")
@@ -37,8 +57,48 @@ def current_user(request: Request):
     return db.get_user_by_id(uid) if uid else None
 
 
-def mcp_url() -> str:
-    return f"{PUBLIC_URL}/mcp" if PUBLIC_URL else f"http://127.0.0.1:{PORT}/mcp"
+def _is_loopback(url_or_host: str) -> bool:
+    from urllib.parse import urlsplit
+
+    raw = (url_or_host or "").strip()
+    if not raw:
+        return True
+    if "://" not in raw:
+        raw = f"http://{raw}"
+    host = (urlsplit(raw).hostname or "").lower()
+    return host in ("127.0.0.1", "localhost", "0.0.0.0", "::1")
+
+
+def _request_origin(request: Request | None) -> str:
+    if request is None:
+        return ""
+    forwarded_host = (request.headers.get("x-forwarded-host") or "").split(",")[0].strip()
+    host = forwarded_host or (request.headers.get("host") or "").strip()
+    if not host:
+        return ""
+    scheme = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
+    return f"{scheme or request.url.scheme}://{host}".rstrip("/")
+
+
+def _issuer(request: Request | None = None) -> str:
+    """Public base URL clients should call back on.
+
+    A public host on the incoming request wins so a stale BRINGFAST_PUBLIC_URL
+    cannot advertise a different origin than the one Grok actually called.
+    Loopback PUBLIC_URL values are ignored for the same reason.
+    """
+    origin = _request_origin(request)
+    if origin and not _is_loopback(origin):
+        return origin
+    if PUBLIC_URL and not _is_loopback(PUBLIC_URL):
+        return PUBLIC_URL
+    if origin:
+        return origin
+    return PUBLIC_URL or f"http://127.0.0.1:{PORT}"
+
+
+def mcp_url(request: Request | None = None) -> str:
+    return f"{_issuer(request)}/mcp"
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -52,14 +112,13 @@ def home(request: Request):
         {
             "user": user,
             "retailers": db.list_retailer_accounts(user["id"]),
-            "mcp_url": mcp_url(),
+            "mcp_url": mcp_url(request),
             "title": "Bring Fast",
         },
     )
 
 
-@app.post("/register")
-def register(request: Request, email: str = Form(...), password: str = Form(...)):
+def _register_user(request: Request, email: str, password: str):
     try:
         user = db.create_user(email, password)
     except ValueError as e:
@@ -68,6 +127,17 @@ def register(request: Request, email: str = Form(...), password: str = Form(...)
         )
     request.session["uid"] = user["id"]
     return RedirectResponse("/", status_code=303)
+
+
+@app.api_route("/register", methods=["POST", "OPTIONS"])
+async def register(request: Request):
+    """Two callers share this path: the dashboard signup form and OAuth client registration."""
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+    if "json" in (request.headers.get("content-type") or "").lower():
+        return await _register_oauth_client(request)
+    form = await request.form()
+    return _register_user(request, str(form.get("email") or ""), str(form.get("password") or ""))
 
 
 @app.post("/login")
@@ -124,8 +194,16 @@ def rotate(request: Request):
 
 
 @app.get("/health")
-def health():
-    return {"ok": True, "server": "Bring Fast"}
+def health(request: Request):
+    base = _issuer(request)
+    return {
+        "ok": True,
+        "server": "Bring Fast",
+        "version": __version__,
+        "public_url": base,
+        "mcp_url": f"{base}/mcp",
+        "public_url_env": PUBLIC_URL or None,
+    }
 
 
 def _user_from_request(request: Request):
@@ -462,64 +540,150 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
     )
 
 
-@app.api_route("/mcp", methods=["GET", "HEAD", "POST"])
+def _call_tool_safe(user: dict[str, Any], name: str, args: dict[str, Any]) -> tuple[str, bool]:
+    """A failing tool must stay a tool failure; an escaping exception becomes an HTTP 500
+    that the client cannot parse as JSON-RPC."""
+    try:
+        text = _call_tool(user, name, args)
+    except Exception as e:
+        return json.dumps({"success": False, "tool": name, "error": f"{type(e).__name__}: {e}"}), True
+    try:
+        return text, not json.loads(text).get("success", True)
+    except (TypeError, ValueError):
+        return text, False
+
+
+SUPPORTED_PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
+LATEST_PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS[0]
+
+
+def _rpc_result(rid: Any, result: dict[str, Any]) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": rid, "result": result}
+
+
+def _rpc_error(rid: Any, code: int, message: str) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}}
+
+
+def _is_notification(message: dict[str, Any]) -> bool:
+    """JSON-RPC notifications carry no id and must never be answered with a response."""
+    return "id" not in message or str(message.get("method") or "").startswith("notifications/")
+
+
+async def _dispatch(user: dict[str, Any], message: Any) -> dict[str, Any] | None:
+    if not isinstance(message, dict):
+        return _rpc_error(None, -32600, "invalid request: expected a JSON-RPC object")
+    if _is_notification(message):
+        return None
+    rid = message.get("id")
+    method = message.get("method")
+    params = message.get("params") or {}
+    if method == "initialize":
+        asked = params.get("protocolVersion")
+        return _rpc_result(
+            rid,
+            {
+                "protocolVersion": asked if asked in SUPPORTED_PROTOCOL_VERSIONS else LATEST_PROTOCOL_VERSION,
+                "capabilities": {"tools": {"listChanged": False}},
+                "serverInfo": {"name": "Bring Fast", "version": __version__},
+                "instructions": (
+                    f"Bring Fast for {user['email']} only. "
+                    "Tools are split per store: carrefour_*, grandiose_*, waitrose_*, spinneys_* "
+                    "(search, cart, checkout, status). Always report delivery_address. "
+                    "Checkout prepares the official store URL; payment stays on the supermarket site."
+                ),
+            },
+        )
+    if method == "tools/list":
+        return _rpc_result(rid, {"tools": TOOLS})
+    if method in ("resources/list", "prompts/list"):
+        key = "resources" if method.startswith("resources") else "prompts"
+        return _rpc_result(rid, {key: []})
+    if method == "tools/call":
+        name = params.get("name")
+        args = params.get("arguments") or {}
+        text, failed = await asyncio.to_thread(_call_tool_safe, user, name, args)
+        return _rpc_result(rid, {"content": [{"type": "text", "text": text}], "isError": failed})
+    if method == "ping":
+        return _rpc_result(rid, {})
+    return _rpc_error(rid, -32601, f"method not found: {method}")
+
+
+def _mcp_reply(request: Request, payload: dict[str, Any] | list | None, status: int = 200, extra_headers: dict[str, str] | None = None):
+    """JSON by default; one-shot SSE when the client refuses application/json."""
+    headers = extra_headers or {}
+    if payload is None:
+        return Response(status_code=202, headers=headers)
+    accept = (request.headers.get("accept") or "").lower()
+    if "text/event-stream" in accept and "application/json" not in accept:
+        data = json.dumps(payload, ensure_ascii=False)
+        sse_headers = {
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            **headers,
+        }
+        return Response(
+            f"event: message\ndata: {data}\n\n",
+            status_code=status,
+            media_type="text/event-stream",
+            headers=sse_headers,
+        )
+    return JSONResponse(payload, status_code=status, headers=headers)
+
+
+@app.api_route("/mcp", methods=["GET", "HEAD", "POST", "DELETE", "OPTIONS"])
+@app.api_route("/mcp/", methods=["GET", "HEAD", "POST", "DELETE", "OPTIONS"], include_in_schema=False)
 async def mcp_endpoint(request: Request):
-    if request.method in ("GET", "HEAD"):
-        return _oauth_challenge()
+    if request.method == "OPTIONS":
+        return _cors_preflight()
     user = _user_from_request(request)
     if not user:
-        return _oauth_challenge()
+        return _oauth_challenge(request)
+    if request.method in ("GET", "HEAD"):
+        # No server-initiated SSE stream here. Answering an authenticated GET with 401
+        # tells the client its brand new token is bad, so it reports a failed connection.
+        return _mcp_reply(
+            request,
+            _rpc_error(None, -32601, "this endpoint has no SSE stream; POST JSON-RPC instead"),
+            status=405,
+            extra_headers={"Allow": "POST, DELETE"},
+        )
+    if request.method == "DELETE":
+        return Response(status_code=204)
     try:
         body = await request.json()
     except Exception:
-        return JSONResponse({"jsonrpc": "2.0", "error": {"code": -32700, "message": "parse error"}}, status_code=400)
-    rid = body.get("id")
-    method = body.get("method")
-    if method == "initialize":
-        return JSONResponse(
-            {
-                "jsonrpc": "2.0",
-                "id": rid,
-                "result": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {"tools": {"listChanged": False}},
-                    "serverInfo": {"name": "Bring Fast", "version": "1.0.0"},
-                    "instructions": (
-                        f"Bring Fast for {user['email']} only. "
-                        "Tools are split per store: carrefour_*, grandiose_*, waitrose_*, spinneys_* "
-                        "(search, cart, checkout, status). Always report delivery_address. "
-                        "Checkout prepares the official store URL; payment stays on the supermarket site."
-                    ),
-                },
-            }
-        )
-    if method == "notifications/initialized":
-        return JSONResponse({"jsonrpc": "2.0", "id": rid, "result": {}})
-    if method == "tools/list":
-        return JSONResponse({"jsonrpc": "2.0", "id": rid, "result": {"tools": TOOLS}})
-    if method == "tools/call":
-        params = body.get("params") or {}
-        name = params.get("name")
-        args = params.get("arguments") or {}
-        text = await asyncio.to_thread(_call_tool, user, name, args)
-        return JSONResponse(
-            {"jsonrpc": "2.0", "id": rid, "result": {"content": [{"type": "text", "text": text}]}}
-        )
-    if method == "ping":
-        return JSONResponse({"jsonrpc": "2.0", "id": rid, "result": {}})
-    return JSONResponse({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": method}})
+        return _mcp_reply(request, _rpc_error(None, -32700, "parse error"), status=400)
+    try:
+        if isinstance(body, list):
+            if not body:
+                return _mcp_reply(request, _rpc_error(None, -32600, "invalid request: empty batch"), status=400)
+            replies = [r for r in [await _dispatch(user, m) for m in body] if r is not None]
+            return _mcp_reply(request, replies if replies else None)
+        reply = await _dispatch(user, body)
+        return _mcp_reply(request, reply)
+    except Exception as e:
+        rid = body.get("id") if isinstance(body, dict) else None
+        return _mcp_reply(request, _rpc_error(rid, -32603, f"internal error: {e}"))
 
 
 OAUTH_CLIENT_ID = os.environ.get("BRINGFAST_OAUTH_CLIENT_ID", "fast-bring")
 OAUTH_CLIENT_SECRET = os.environ.get("BRINGFAST_OAUTH_CLIENT_SECRET", "fast-bring-grok-secret")
 
 
-def _issuer() -> str:
-    return PUBLIC_URL or f"http://127.0.0.1:{PORT}"
+def _cors_preflight():
+    return Response(
+        status_code=204,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        },
+    )
 
 
-def _oauth_challenge():
-    meta = f"{_issuer()}/.well-known/oauth-protected-resource"
+def _oauth_challenge(request: Request | None = None):
+    meta = f"{_issuer(request)}/.well-known/oauth-protected-resource/mcp"
     return JSONResponse(
         {"jsonrpc": "2.0", "id": None, "error": {"code": -32001, "message": "OAuth required. Sign in with your Bring Fast account."}},
         status_code=401,
@@ -530,8 +694,8 @@ def _oauth_challenge():
     )
 
 
-def _as_metadata() -> dict:
-    base = _issuer()
+def _as_metadata(request: Request | None = None) -> dict:
+    base = _issuer(request)
     return {
         "issuer": base,
         "authorization_endpoint": f"{base}/oauth/authorize",
@@ -546,8 +710,8 @@ def _as_metadata() -> dict:
     }
 
 
-def _prm_metadata() -> dict:
-    base = _issuer()
+def _prm_metadata(request: Request | None = None) -> dict:
+    base = _issuer(request)
     return {
         "resource": f"{base}/mcp",
         "authorization_servers": [base],
@@ -560,14 +724,14 @@ def _prm_metadata() -> dict:
 @app.get("/.well-known/oauth-authorization-server")
 @app.get("/.well-known/oauth-authorization-server/mcp")
 @app.get("/.well-known/openid-configuration")
-def oauth_as_metadata():
-    return _as_metadata()
+def oauth_as_metadata(request: Request):
+    return _as_metadata(request)
 
 
 @app.get("/.well-known/oauth-protected-resource")
 @app.get("/.well-known/oauth-protected-resource/mcp")
-def oauth_prm_metadata():
-    return _prm_metadata()
+def oauth_prm_metadata(request: Request):
+    return _prm_metadata(request)
 
 
 def _safe_redirect(uri: str) -> bool:
@@ -582,11 +746,7 @@ def _issue_code(user, redirect_uri: str, client_id: str, challenge: str, method:
     return RedirectResponse(f"{redirect_uri}{sep}code={code}&state={state}", status_code=302)
 
 
-@app.api_route("/oauth/register", methods=["POST", "OPTIONS"])
-@app.api_route("/register", methods=["POST", "OPTIONS"])
-async def oauth_register(request: Request):
-    if request.method == "OPTIONS":
-        return JSONResponse({}, headers={"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*"})
+async def _register_oauth_client(request: Request):
     try:
         body = await request.json()
     except Exception:
@@ -603,9 +763,17 @@ async def oauth_register(request: Request):
             "client_name": body.get("client_name") or "Grok",
             "grant_types": ["authorization_code"],
             "response_types": ["code"],
+            "client_secret_expires_at": 0,
         }
     )
     return JSONResponse(rec, status_code=201)
+
+
+@app.api_route("/oauth/register", methods=["POST", "OPTIONS"])
+async def oauth_register(request: Request):
+    if request.method == "OPTIONS":
+        return _cors_preflight()
+    return await _register_oauth_client(request)
 
 
 @app.get("/oauth/authorize")
@@ -728,7 +896,21 @@ def main() -> None:
     import uvicorn
 
     db.connect()
-    uvicorn.run("bring_fast.app:app", host=HOST, port=PORT, factory=False)
+    if not PUBLIC_URL:
+        print(
+            "WARNING: BRINGFAST_PUBLIC_URL is unset. "
+            "Set it to the public https origin (or run behind a proxy that sends "
+            "X-Forwarded-Proto and X-Forwarded-Host) so Grok can authenticate.",
+            file=sys.stderr,
+        )
+    uvicorn.run(
+        "bring_fast.app:app",
+        host=HOST,
+        port=PORT,
+        factory=False,
+        proxy_headers=True,
+        forwarded_allow_ips="*",
+    )
 
 
 if __name__ == "__main__":
