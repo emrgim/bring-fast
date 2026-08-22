@@ -110,7 +110,9 @@ def _dismiss(page) -> None:
               document.querySelector('#onetrust-banner-sdk')?.remove();
               document.querySelector('#onetrust-pc-sdk')?.remove();
               document.querySelector('.onetrust-pc-dark-filter')?.remove();
+              document.querySelectorAll('.cmp-body, .f-pref-sdk-banner, .cmp-theme, .show-modal, #_next-securiti-ai, #_next-securiti-ai-gc').forEach(e => e.remove());
               document.body.style.overflow = 'auto';
+              document.body.style.pointerEvents = 'auto';
             }"""
         )
     except Exception:
@@ -145,29 +147,27 @@ def _click_first(page, names: list[str]) -> bool:
 
 def _login_carrefour(page, email: str, password: str) -> str:
     page.goto(LOGIN["carrefour"], wait_until="domcontentloaded", timeout=45000)
-    page.wait_for_timeout(1500)
+    page.wait_for_timeout(2000)
+    _dismiss(page)
+    try:
+        page.locator("a.cc-btn.cc-dismiss").click(timeout=4000)
+        page.wait_for_timeout(800)
+    except Exception:
+        pass
     _dismiss(page)
     page.wait_for_selector("#email", timeout=10000)
     loc = page.locator("#email")
-    loc.click(force=True)
+    loc.click()
     loc.fill("")
-    loc.type(email, delay=40)
+    loc.press_sequentially(email, delay=40)
     page.wait_for_timeout(400)
-    btn = page.locator("button[type=submit]:has-text('Continue')")
-    try:
-        btn.first.wait_for(state="visible", timeout=3000)
-        if btn.first.is_disabled():
-            loc.press("Tab")
-            page.wait_for_timeout(300)
-        btn.first.click(timeout=5000, force=True)
-    except Exception:
-        loc.press("Enter")
+    page.locator("button[type=submit]:has-text('Continue')").click(timeout=8000)
     page.wait_for_selector("input[type=password]", timeout=15000)
     pwd = page.locator("input[type=password]").first
-    pwd.click(force=True)
-    pwd.type(password, delay=40)
+    pwd.click()
+    pwd.press_sequentially(password, delay=40)
     pwd.press("Enter")
-    page.wait_for_timeout(3000)
+    page.wait_for_timeout(4000)
     return page.url
 
 
