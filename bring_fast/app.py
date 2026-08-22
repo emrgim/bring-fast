@@ -1,472 +1,752 @@
-"""Official-site checkout executed inside the Bring Fast MCP server."""
-
 from __future__ import annotations
 
 import json
 import os
-import time
-from pathlib import Path
 from typing import Any
 
-SHOT_DIR = Path(os.environ.get("BRINGFAST_DATA", Path.home() / ".bring-fast")) / "checkout-shots"
+from fastapi import FastAPI, Form, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from starlette.middleware.sessions import SessionMiddleware
 
-LOGIN = {
-    "carrefour": "https://www.carrefouruae.com/mafuae/en/login/email",
-    "grandiose": "https://www.grandiose.ae/customer/account/login/",
-    "waitrose": "https://www.waitrose.ae/en/",
-    "spinneys": "https://www.spinneys.com/en-ae/",
-}
+from . import catalog, checkout, db
 
-CART = {
-    "carrefour": "https://www.carrefouruae.com/mafuae/en",
-    "grandiose": "https://www.grandiose.ae/checkout/cart/",
-    "waitrose": "https://www.waitrose.ae/en/",
-    "spinneys": "https://www.spinneys.com/en-ae/",
-}
+HOST = os.environ.get("BRINGFAST_HOST", "127.0.0.1")
+PORT = int(os.environ.get("BRINGFAST_PORT", "8877"))
+PUBLIC_URL = os.environ.get("BRINGFAST_PUBLIC_URL", "").rstrip("/")
+SECRET = os.environ.get("BRINGFAST_SECRET", "bring-fast-change-me")
+
+templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
+app = FastAPI(title="Bring Fast")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["WWW-Authenticate"],
+)
+app.add_middleware(SessionMiddleware, secret_key=SECRET, same_site="lax")
+app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 
 
-def _launch():
-    from playwright.sync_api import sync_playwright
+def current_user(request: Request):
+    uid = request.session.get("uid")
+    return db.get_user_by_id(uid) if uid else None
 
-    pw = sync_playwright().start()
-    chrome = "/usr/bin/google-chrome"
-    kwargs = {
-        "headless": True,
-        "args": [
-            "--no-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-gpu",
-            "--headless=new",
-            "--disable-blink-features=AutomationControlled",
-        ],
-    }
-    if Path(chrome).exists():
-        kwargs["executable_path"] = chrome
-    browser = pw.chromium.launch(**kwargs)
-    context = browser.new_context(
-        viewport={"width": 1280, "height": 900},
-        locale="en-AE",
-        user_agent=(
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-        ),
+
+def mcp_url() -> str:
+    return f"{PUBLIC_URL}/mcp" if PUBLIC_URL else f"http://127.0.0.1:{PORT}/mcp"
+
+
+@app.get("/", response_class=HTMLResponse)
+def home(request: Request):
+    user = current_user(request)
+    if not user:
+        return templates.TemplateResponse(request, "login.html", {"user": None, "title": "Bring Fast"})
+    return templates.TemplateResponse(
+        request,
+        "dashboard.html",
+        {
+            "user": user,
+            "retailers": db.list_retailer_accounts(user["id"]),
+            "mcp_url": mcp_url(),
+            "title": "Bring Fast",
+        },
     )
-    context.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
-    return pw, browser, context
 
 
-def _shot(page, name: str) -> str:
-    SHOT_DIR.mkdir(parents=True, exist_ok=True)
-    path = SHOT_DIR / f"{int(time.time())}-{name}.png"
+@app.post("/register")
+def register(request: Request, email: str = Form(...), password: str = Form(...)):
     try:
-        page.screenshot(path=str(path), full_page=False)
-        return str(path)
-    except Exception:
-        return ""
-
-
-def _dismiss(page) -> None:
-    for sel in (
-        "#securitiCmpCookiePrefBtn",
-        "button:has-text('Select All')",
-        "button:has-text('Save Changes')",
-        "#cmpCloseBtn",
-        "button#cmpCloseBtn",
-        "#onetrust-accept-btn-handler",
-        "button#onetrust-accept-btn-handler",
-        ".onetrust-accept-btn-handler",
-        "button:has-text('Accept All Cookies')",
-        "button:has-text('Accept all cookies')",
-        "button:has-text('Allow all')",
-        "button:has-text('Accept All')",
-        "button:has-text('I Accept')",
-        "#onetrust-pc-btn-handler",
-    ):
-        try:
-            page.locator(sel).first.click(timeout=1200)
-            page.wait_for_timeout(400)
-        except Exception:
-            pass
-    for label in (
-        "Accept All Cookies",
-        "Accept all",
-        "Accept",
-        "ACCEPT",
-        "Agree",
-        "I agree",
-        "Allow all",
-        "Confirm My Choices",
-        "Continue",
-        "Got it",
-        "OK",
-    ):
-        try:
-            page.get_by_role("button", name=label, exact=False).first.click(timeout=800)
-        except Exception:
-            pass
-    try:
-        page.evaluate(
-            """() => {
-              const b = document.querySelector('#onetrust-accept-btn-handler');
-              if (b) b.click();
-              document.querySelector('#onetrust-banner-sdk')?.remove();
-              document.querySelector('#onetrust-pc-sdk')?.remove();
-              document.querySelector('.onetrust-pc-dark-filter')?.remove();
-              document.body.style.overflow = 'auto';
-            }"""
+        user = db.create_user(email, password)
+    except ValueError as e:
+        return templates.TemplateResponse(
+            request, "login.html", {"user": None, "error": str(e), "title": "Bring Fast"}, status_code=400
         )
-    except Exception:
-        pass
+    request.session["uid"] = user["id"]
+    return RedirectResponse("/", status_code=303)
 
 
-def _fill_first(page, selectors: list[str], value: str) -> bool:
-    for sel in selectors:
+@app.post("/login")
+def login(request: Request, email: str = Form(...), password: str = Form(...)):
+    user = db.get_user_by_email(email)
+    if not user or not db.verify_password(user, password):
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {"user": None, "error": "Wrong email or password", "title": "Bring Fast"},
+            status_code=401,
+        )
+    request.session["uid"] = user["id"]
+    return RedirectResponse("/", status_code=303)
+
+
+@app.get("/logout")
+def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse("/", status_code=303)
+
+
+@app.post("/retailers/{retailer}")
+def save_retailer(
+    request: Request,
+    retailer: str,
+    email: str = Form(...),
+    password: str = Form(""),
+    address: str = Form(""),
+):
+    user = current_user(request)
+    if not user:
+        return RedirectResponse("/", status_code=303)
+    if retailer not in {r["id"] for r in db.RETAILERS}:
+        return RedirectResponse("/", status_code=303)
+    db.set_retailer_account(user["id"], retailer, email.strip(), password, address)
+    return RedirectResponse("/", status_code=303)
+
+
+@app.post("/retailers/{retailer}/clear")
+def clear_retailer(request: Request, retailer: str):
+    user = current_user(request)
+    if user:
+        db.clear_retailer_account(user["id"], retailer)
+    return RedirectResponse("/", status_code=303)
+
+
+@app.post("/rotate-token")
+def rotate(request: Request):
+    user = current_user(request)
+    if user:
+        db.rotate_token(user["id"])
+    return RedirectResponse("/", status_code=303)
+
+
+@app.get("/health")
+def health():
+    return {"ok": True, "server": "Bring Fast"}
+
+
+def _user_from_request(request: Request):
+    auth = request.headers.get("authorization") or ""
+    token = auth[7:].strip() if auth.lower().startswith("bearer ") else auth.strip()
+    return db.get_user_by_token(token)
+
+
+def _store_tools() -> list[dict[str, Any]]:
+    tools = [
+        {
+            "name": "bf_whoami",
+            "description": "Show the Bring Fast user bound to this MCP token (never another account).",
+            "inputSchema": {"type": "object", "properties": {}},
+        },
+        {
+            "name": "bf_stores",
+            "description": "List THIS user's stores: login linked?, delivery address, checkout URL, last cart count.",
+            "inputSchema": {"type": "object", "properties": {}},
+        },
+        {
+            "name": "bf_search",
+            "description": "Search one or all stores. retailer=carrefour|grandiose|waitrose|spinneys or omit to search all.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "retailer": {"type": "string"},
+                    "limit": {"type": "integer"},
+                },
+                "required": ["query"],
+            },
+        },
+        {
+            "name": "bf_cart",
+            "description": "Cart alias. retailer=carrefour|grandiose|waitrose|spinneys. action=list|add|set|remove|clear.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "retailer": {"type": "string"},
+                    "action": {"type": "string"},
+                    "product_id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "qty": {"type": "integer"},
+                    "price": {"type": "number"},
+                },
+                "required": ["retailer", "action"],
+            },
+        },
+    ]
+    for r in db.RETAILERS:
+        sid, name = r["id"], r["name"]
+        tools.extend(
+            [
+                {
+                    "name": f"{sid}_search",
+                    "description": f"Search products at {name} only.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}},
+                        "required": ["query"],
+                    },
+                },
+                {
+                    "name": f"{sid}_cart",
+                    "description": (
+                        f"{name} cart for THIS user only. action=list|add|set|remove|clear. "
+                        "Always returns the delivery address for this store."
+                    ),
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "action": {"type": "string"},
+                            "product_id": {"type": "string"},
+                            "name": {"type": "string"},
+                            "qty": {"type": "integer"},
+                            "price": {"type": "number"},
+                        },
+                        "required": ["action"],
+                    },
+                },
+                {
+                    "name": f"{sid}_checkout",
+                    "description": (
+                        f"Run the official {name} checkout inside the Bring Fast server: "
+                        "login with this user's store account, add the cart on the live site, open checkout. "
+                        "Returns delivery address, live URL, and what happened."
+                    ),
+                    "inputSchema": {"type": "object", "properties": {}},
+                },
+                {
+                    "name": f"{sid}_status",
+                    "description": (
+                        f"What is happening at {name}: delivery address, current cart, last checkout snapshots."
+                    ),
+                    "inputSchema": {"type": "object", "properties": {}},
+                },
+            ]
+        )
+    return tools
+
+
+TOOLS = _store_tools()
+
+
+def _ok(**kw):
+    return json.dumps({"success": True, **kw}, ensure_ascii=False)
+
+
+def _store_ctx(user: dict[str, Any], retailer: str) -> dict[str, Any]:
+    stores = {s["id"]: s for s in db.list_retailer_accounts(user["id"])}
+    s = stores[retailer]
+    cart = db.load_cart(user["id"], retailer)
+    items = cart.get("items") or []
+    total = 0.0
+    for i in items:
         try:
-            loc = page.locator(sel).first
-            if loc.count() and loc.is_visible():
-                loc.fill(value, timeout=2500)
-                return True
-        except Exception:
-            continue
-    return False
-
-
-def _click_first(page, names: list[str]) -> bool:
-    for name in names:
-        try:
-            page.get_by_role("button", name=name, exact=False).first.click(timeout=2000)
-            return True
-        except Exception:
-            try:
-                page.get_by_text(name, exact=False).first.click(timeout=1500)
-                return True
-            except Exception:
-                continue
-    return False
-
-
-def _login_carrefour(page, email: str, password: str) -> str:
-    page.goto(LOGIN["carrefour"], wait_until="domcontentloaded", timeout=45000)
-    page.wait_for_timeout(1200)
-    _dismiss(page)
-    # cookie / consent overlays
-    for sel in ["button:has-text('Accept')", "#onetrust-accept-btn-handler", "button:has-text('Allow')"]:
-        try:
-            page.locator(sel).first.click(timeout=800)
-        except Exception:
+            total += float(i.get("price") or 0) * int(i.get("qty") or 0)
+        except (TypeError, ValueError):
             pass
-    email_ok = _fill_first(
-        page,
-        [
-            "input[type=email]",
-            "input[name=email]",
-            "input[autocomplete=username]",
-            "input[inputmode=email]",
-            "input[placeholder*='mail' i]",
-        ],
-        email,
-    )
-    if not email_ok:
-        page.keyboard.type(email)
-    _click_first(page, ["Continue", "Next", "Submit", "Proceed"])
-    try:
-        page.wait_for_selector("input[type=password]", timeout=8000)
-    except Exception:
-        _click_first(page, ["Continue", "Next"])
-        page.wait_for_timeout(1500)
-    _fill_first(page, ["input[type=password]", "input[name=password]", "input[autocomplete=current-password]"], password)
-    _click_first(page, ["Log in", "Login", "Sign in", "Continue", "Submit"])
-    page.wait_for_timeout(3500)
-    # if still on login, try pressing Enter
-    if "login" in page.url.lower():
-        try:
-            page.locator("input[type=password]").first.press("Enter")
-            page.wait_for_timeout(3000)
-        except Exception:
-            pass
-    return page.url
+    addr = (s.get("delivery_address") or "").strip()
+    return {
+        "store": s["name"],
+        "store_id": retailer,
+        "store_url": s["url"],
+        "owner": user["email"],
+        "login_linked": bool(s.get("linked")),
+        "login_email": s.get("login_email"),
+        "delivery_address": addr or None,
+        "delivery_note": (
+            "Leave with security. Do not ring, call, or leave at the door."
+            if addr
+            else "No delivery address saved for this store. Add it on the Bring Fast dashboard store card."
+        ),
+        "cart_url": s.get("cart_url"),
+        "checkout_url": s.get("checkout_url"),
+        "items": items,
+        "item_count": sum(int(i.get("qty") or 0) for i in items),
+        "currency": cart.get("currency") or "AED",
+        "estimated_total": round(total, 2) if total else None,
+    }
 
 
-def _login_grandiose(page, email: str, password: str) -> str:
-    page.goto(LOGIN["grandiose"], wait_until="domcontentloaded", timeout=45000)
-    _dismiss(page)
-    _fill_first(page, ["input#email", "input[name=login[username]]", "input[type=email]"], email)
-    _fill_first(page, ["input#pass", "input[name=login[password]]", "input[type=password]"], password)
-    _click_first(page, ["Sign In", "Login", "Log in"])
-    page.wait_for_timeout(2500)
-    return page.url
-
-
-def _login_spinneys_waitrose(page, store: str, email: str, password: str) -> str:
-    page.goto(LOGIN[store], wait_until="domcontentloaded", timeout=45000)
-    _dismiss(page)
-    _click_first(page, ["Sign in", "Log in", "Login", "Account"])
-    page.wait_for_timeout(800)
-    _fill_first(page, ["input[type=email]", "input[name=email]", "input[name=username]"], email)
-    _fill_first(page, ["input[type=password]", "input[name=password]"], password)
-    _click_first(page, ["Sign in", "Log in", "Login"])
-    page.wait_for_timeout(2500)
-    return page.url
-
-
-def _add_items(page, store: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    added = []
-    for it in items:
-        pid = str(it.get("id") or "")
-        qty = int(it.get("qty") or 1)
-        url = it.get("url") or ""
-        if store == "carrefour" and pid:
-            url = url or f"https://www.carrefouruae.com/mafuae/en/p/{pid}"
-        if not url:
-            added.append({**it, "site_add": "skipped_no_url"})
-            continue
-        try:
-            page.goto(url, wait_until="domcontentloaded", timeout=40000)
-            _dismiss(page)
-            for _ in range(max(1, qty)):
-                if not _click_first(page, ["Add to cart", "Add to basket", "Add to bag", "Add"]):
-                    break
-                page.wait_for_timeout(700)
-            added.append({**it, "site_add": "clicked", "page": page.url})
-        except Exception as e:
-            added.append({**it, "site_add": f"error:{e}"})
-    return added
-
-
-def _goto_checkout(page, store: str) -> str:
-    if store == "carrefour":
-        for name in ("Cart", "Basket", "View cart", "Checkout", "Proceed"):
-            _click_first(page, [name])
-            page.wait_for_timeout(800)
-        if "cart" not in page.url and "checkout" not in page.url:
-            page.goto("https://www.carrefouruae.com/mafuae/en", wait_until="domcontentloaded", timeout=40000)
-            _dismiss(page)
-            _click_first(page, ["Cart", "Basket", "Checkout"])
-            page.wait_for_timeout(1500)
-        _click_first(page, ["Checkout", "Proceed to checkout", "Place order"])
-        page.wait_for_timeout(2000)
-        return page.url
-    page.goto(CART[store], wait_until="domcontentloaded", timeout=40000)
-    _dismiss(page)
-    _click_first(page, ["Checkout", "Proceed to checkout", "Place order", "Continue to checkout", "Go to cart"])
-    page.wait_for_timeout(2000)
-    return page.url
-
-
-def official_cart(
-    *,
-    store: str,
-    email: str,
-    password: str,
-    action: str,
-    items: list[dict[str, Any]],
-) -> dict[str, Any]:
-    """Login on the official site and mutate the real cart. Returns official_count."""
-    if not email or not password:
-        return {"ok": False, "official_count": None, "error": "store login missing on dashboard"}
-    pw = browser = context = None
-    try:
-        pw, browser, context = _launch()
-        page = context.new_page()
-        if store == "carrefour":
-            _login_carrefour(page, email, password)
-        elif store == "grandiose":
-            _login_grandiose(page, email, password)
+def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> str:
+    action = (args.get("action") or "list").lower()
+    cart = db.load_cart(user["id"], retailer)
+    items = cart.setdefault("items", [])
+    if action == "clear":
+        db.save_cart(user["id"], retailer, {"items": [], "currency": "AED"})
+    elif action == "remove":
+        pid = str(args.get("product_id") or "")
+        cart["items"] = [i for i in items if str(i.get("id")) != pid]
+        db.save_cart(user["id"], retailer, cart)
+    elif action in ("add", "set"):
+        pid = str(args.get("product_id") or "")
+        if not pid:
+            return json.dumps({"success": False, "error": "product_id required", "store_id": retailer})
+        qty = int(args.get("qty") or 1)
+        found = next((i for i in items if str(i.get("id")) == pid), None)
+        if action == "set" and qty <= 0:
+            cart["items"] = [i for i in items if str(i.get("id")) != pid]
+        elif found:
+            found["qty"] = (int(found.get("qty") or 0) + qty) if action == "add" else qty
+            if args.get("name"):
+                found["name"] = args["name"]
+            if args.get("price") is not None:
+                found["price"] = args["price"]
         else:
-            _login_spinneys_waitrose(page, store, email, password)
-        if "login" in (page.url or "").lower() and store == "carrefour":
-            page.wait_for_timeout(2000)
-        logged = "login" not in (page.url or "").lower()
-        if store == "carrefour":
-            api = page.evaluate(
-                """async ({action, items}) => {
-                  const tries = [];
-                  async function hit(url, method, body) {
-                    const r = await fetch(url, {
-                      method,
-                      credentials: 'include',
-                      headers: {'content-type':'application/json','appid':'Reactweb','storeid':'mafuae','lang':'en'},
-                      body: body ? JSON.stringify(body) : undefined
-                    });
-                    const t = await r.text();
-                    let j = null; try { j = JSON.parse(t); } catch(e) {}
-                    tries.push({url, status:r.status, text:t.slice(0,240)});
-                    return {ok:r.ok, status:r.status, json:j, text:t.slice(0,240)};
-                  }
-                  if (action === 'clear') {
-                    await hit('/v1/basket/mafuae/en/liteCart','GET');
-                    await hit('/v8/carts/mafuae/en/STANDARD/clear','POST', {});
-                    await hit('/v1/basket/mafuae/en/clear','POST', {});
-                  }
-                  for (const it of (items||[])) {
-                    const pid = String(it.id||'');
-                    const qty = Number(it.qty||1);
-                    if (!pid) continue;
-                    if (action === 'remove') {
-                      await hit('/v8/carts/mafuae/en/STANDARD/removeItem','POST',{productId:pid});
-                      continue;
-                    }
-                    const bodies = [
-                      {productId: pid, quantity: qty, sellerId: '0000'},
-                      {productId: pid, qty: qty, quantity: qty, offerId: 'offer_carrefour_'+pid},
-                      {itemId: pid, quantity: qty}
-                    ];
-                    for (const b of bodies) {
-                      const a = await hit('/v8/carts/mafuae/en/STANDARD/addItem','POST', b);
-                      if (a.ok) break;
-                      const c = await hit('/v1/basket/mafuae/en/product','POST', b);
-                      if (c.ok) break;
-                    }
-                  }
-                  const lite = await hit('/v1/basket/mafuae/en/liteCart?nsp=food,nonfood,express,QCOMM,QELEC&lm=false&liteResponse=true','GET');
-                  const v8 = await hit('/v8/carts/mafuae/en/STANDARD','GET');
-                  return {tries, lite: lite.json || lite.text, v8: v8.json || v8.text};
-                }""",
-                {"action": action, "items": items},
+            items.append(
+                {
+                    "id": pid,
+                    "name": args.get("name") or pid,
+                    "qty": max(1, qty),
+                    "price": args.get("price"),
+                    "currency": "AED",
+                }
             )
-        else:
-            api = {"tries": [], "note": "non-carrefour uses click path"}
-            if action in ("add", "set"):
-                _add_items(page, store, items)
-        count = _extract_count(api if store == "carrefour" else None, page)
-        return {
-            "ok": count is not None and (action == "clear" or action == "list" or count > 0 or action == "remove"),
-            "official_count": count,
-            "logged_in": logged,
-            "final_url": page.url,
-            "api": {k: api.get(k) for k in ("tries",) if isinstance(api, dict)},
-            "error": None if count not in (None, 0) or action in ("clear", "remove", "list") else "official cart still 0 after add",
-        }
-    except Exception as e:
-        return {"ok": False, "official_count": None, "error": str(e)}
-    finally:
-        try:
-            if context:
-                context.close()
-            if browser:
-                browser.close()
-            if pw:
-                pw.stop()
-        except Exception:
-            pass
+        db.save_cart(user["id"], retailer, cart)
+    elif action != "list":
+        return json.dumps({"success": False, "error": f"unknown action {action}", "store_id": retailer})
+    ctx = _store_ctx(user, retailer)
+    ctx["action"] = action
+    if action in ("add", "set", "remove", "clear"):
+        creds = db.get_retailer_secret(user["id"], retailer) or {}
+        live = checkout.official_cart(
+            store=retailer,
+            email=creds.get("email") or "",
+            password=creds.get("password") or "",
+            action=action,
+            items=ctx["items"] if action != "remove" else [{"id": args.get("product_id"), "qty": 0}],
+        )
+        ctx["official_count"] = live.get("official_count")
+        ctx["official_ok"] = bool(live.get("ok"))
+        ctx["official_error"] = live.get("error")
+        if action in ("add", "set") and not live.get("official_count"):
+            return json.dumps(
+                {
+                    "success": False,
+                    **ctx,
+                    "what_happens": "NOT on the official Carrefour/app cart. "
+                    + (live.get("error") or "Official add failed (login/Akamai)."),
+                },
+                ensure_ascii=False,
+            )
+        ctx["what_happens"] = f"Official {retailer} cart count: {live.get('official_count')}"
+    return _ok(**ctx)
 
 
-def _extract_count(api, page) -> int | None:
-    if isinstance(api, dict):
-        for blob in (api.get("lite"), api.get("v8")):
-            n = _count_from_obj(blob)
-            if n is not None:
-                return n
-    try:
-        text = page.inner_text("body") or ""
-        import re
-
-        m = re.search(r"(\d+)\s+items? in (?:your )?cart", text, re.I)
-        if m:
-            return int(m.group(1))
-    except Exception:
-        pass
-    return None
-
-
-def _count_from_obj(obj) -> int | None:
-    if obj is None:
-        return None
-    if isinstance(obj, str):
-        try:
-            obj = json.loads(obj)
-        except Exception:
-            return None
-    if not isinstance(obj, dict):
-        return None
-    for key in ("totalQuantity", "quantity", "cartCount", "itemCount", "count"):
-        if isinstance(obj.get(key), (int, float)):
-            return int(obj[key])
-    data = obj.get("data") or obj.get("cart") or obj.get("basket") or {}
-    if isinstance(data, dict):
-        for key in ("totalQuantity", "quantity", "cartCount", "itemCount"):
-            if isinstance(data.get(key), (int, float)):
-                return int(data[key])
-        items = data.get("items") or data.get("products") or data.get("entries")
-        if isinstance(items, list):
-            return sum(int(i.get("qty") or i.get("quantity") or 1) for i in items if isinstance(i, dict))
-    items = obj.get("items") or obj.get("products")
-    if isinstance(items, list):
-        return len(items)
-    return None
+def _normalize_tool(name: str, args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    raw = (name or "").strip()
+    n = raw.lower().replace("-", "_").replace(" ", "_")
+    for prefix in ("bring_fast_", "bringfast_", "fast_bring_", "fastbring_"):
+        if n.startswith(prefix):
+            n = n[len(prefix) :]
+    aliases = {
+        "search": "bf_search",
+        "product_search": "bf_search",
+        "catalog_search": "bf_search",
+        "search_products": "bf_search",
+        "retailers": "bf_stores",
+        "stores": "bf_stores",
+        "whoami": "bf_whoami",
+        "cart": "bf_cart",
+        "add_to_cart": "bf_cart",
+        "checkout": "bf_checkout",
+        "status": "bf_status",
+        "bf_retailers": "bf_stores",
+    }
+    n = aliases.get(n, n)
+    ids = [r["id"] for r in db.RETAILERS]
+    for sid in ids:
+        if sid in n and "search" in n:
+            return f"{sid}_search", args
+        if sid in n and "checkout" in n:
+            return f"{sid}_checkout", args
+        if sid in n and "status" in n:
+            return f"{sid}_status", args
+        if sid in n and "cart" in n:
+            return f"{sid}_cart", args
+    retailer = (args.get("retailer") or args.get("store") or "").lower()
+    if n == "bf_checkout" and retailer in ids:
+        return f"{retailer}_checkout", args
+    if n == "bf_status" and retailer in ids:
+        return f"{retailer}_status", args
+    return n, args
 
 
-def run_checkout(
-    *,
-    store: str,
-    email: str,
-    password: str,
-    address: str,
-    items: list[dict[str, Any]],
-) -> dict[str, Any]:
-    if not email or not password:
-        return {
-            "ok": False,
-            "stage": "credentials",
-            "error": "Store login missing. Save email+password on the Bring Fast dashboard for this store.",
-        }
-    if not items:
-        return {"ok": False, "stage": "cart", "error": "Cart empty"}
+def _search_stores(user: dict[str, Any], query: str, retailer: str, limit: int) -> str:
+    ids = [retailer] if retailer in {r["id"] for r in db.RETAILERS} else [r["id"] for r in db.RETAILERS]
+    out = []
+    for sid in ids:
+        block = catalog.search(sid, query, limit)
+        block["delivery_address"] = _store_ctx(user, sid)["delivery_address"]
+        out.append(block)
+    return json.dumps({"success": True, "query": query, "stores": out}, ensure_ascii=False)
 
-    pw = browser = context = None
-    shots: list[str] = []
-    try:
-        pw, browser, context = _launch()
-        page = context.new_page()
-        if store == "carrefour":
-            login_url = _login_carrefour(page, email, password)
-        elif store == "grandiose":
-            login_url = _login_grandiose(page, email, password)
-        else:
-            login_url = _login_spinneys_waitrose(page, store, email, password)
-        shots.append(_shot(page, f"{store}-login"))
-        added = _add_items(page, store, items)
-        shots.append(_shot(page, f"{store}-added"))
-        checkout_url = _goto_checkout(page, store)
-        shots.append(_shot(page, f"{store}-checkout"))
-        text = ""
-        try:
-            text = page.inner_text("body")[:1500]
-        except Exception:
-            pass
-        paid = any(k in text.lower() for k in ("order confirmed", "thank you", "order number", "placed successfully"))
-        at_pay = any(k in text.lower() for k in ("card number", "payment", "pay now", "place order", "cvv"))
-        return {
-            "ok": True,
-            "stage": "confirmed" if paid else ("payment" if at_pay else "checkout"),
-            "login_url": login_url,
-            "checkout_url": checkout_url,
-            "final_url": page.url,
-            "delivery_address": address,
-            "items_on_site": added,
-            "page_excerpt": text[:500],
-            "screenshots": [s for s in shots if s],
-            "payment_completed": paid,
-            "what_happens": (
-                "Official order confirmed on the supermarket site."
-                if paid
-                else (
-                    f"Logged into {store} on the MCP server, added items, opened checkout at {page.url}. "
-                    "Payment/3DS still on the official page (card is not stored in Bring Fast)."
-                    if at_pay
-                    else f"Logged into {store} and pushed the cart to official checkout: {page.url}."
+
+def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
+    uid = user["id"]
+    name, args = _normalize_tool(name, args or {})
+    if name == "bf_whoami":
+        return _ok(email=user["email"], user_id=uid, note="tools only see this Bring Fast account")
+    if name == "bf_search":
+        return _search_stores(
+            user,
+            args.get("query") or args.get("q") or "",
+            (args.get("retailer") or args.get("store") or "").lower(),
+            int(args.get("limit") or 6),
+        )
+    if name == "bf_cart":
+        retailer = (args.get("retailer") or args.get("store") or "").lower()
+        if retailer not in {r["id"] for r in db.RETAILERS}:
+            return json.dumps({"success": False, "error": "retailer required: carrefour|grandiose|waitrose|spinneys"})
+        return _mutate_cart(user, retailer, args)
+    if name == "bf_stores":
+        stores = []
+        for s in db.list_retailer_accounts(uid):
+            cart = db.load_cart(uid, s["id"])
+            stores.append(
+                {
+                    "store_id": s["id"],
+                    "store": s["name"],
+                    "url": s["url"],
+                    "checkout_url": s.get("checkout_url"),
+                    "linked": s["linked"],
+                    "login_email": s.get("login_email"),
+                    "delivery_address": s.get("delivery_address") or None,
+                    "cart_items": len(cart.get("items") or []),
+                    "tools": [f"{s['id']}_search", f"{s['id']}_cart", f"{s['id']}_checkout", f"{s['id']}_status"],
+                }
+            )
+        return _ok(stores=stores)
+    for r in db.RETAILERS:
+        sid = r["id"]
+        if name == f"{sid}_search":
+            result = catalog.search(sid, args.get("query") or "", int(args.get("limit") or 8))
+            result["delivery_address"] = _store_ctx(user, sid)["delivery_address"]
+            result["store"] = r["name"]
+            return json.dumps(result, ensure_ascii=False)
+        if name == f"{sid}_cart":
+            return _mutate_cart(user, sid, args)
+        if name == f"{sid}_checkout":
+            ctx = _store_ctx(user, sid)
+            if not ctx["items"]:
+                return _ok(**ctx, ready=False, what_happens="Cart is empty. Search and add items first.")
+            creds = db.get_retailer_secret(uid, sid) or {}
+            if not creds.get("password"):
+                return _ok(
+                    **ctx,
+                    ready=False,
+                    what_happens="Save this store's email and password on the Bring Fast dashboard so the server can log in and checkout.",
                 )
-            ),
+            live = checkout.run_checkout(
+                store=sid,
+                email=creds.get("email") or "",
+                password=creds.get("password") or "",
+                address=ctx["delivery_address"] or creds.get("address") or "",
+                items=ctx["items"],
+            )
+            order = db.create_order(
+                uid,
+                sid,
+                ctx["items"],
+                ctx["delivery_address"] or creds.get("address") or "",
+                live.get("final_url") or live.get("checkout_url") or ctx["checkout_url"],
+            )
+            return _ok(
+                **ctx,
+                ready=bool(live.get("ok")),
+                order_id=order["order_id"],
+                status=live.get("stage") or order["status"],
+                payment_completed=bool(live.get("payment_completed")),
+                live_checkout=live,
+                checkout_url=live.get("final_url") or ctx["checkout_url"],
+                what_happens=live.get("what_happens") or live.get("error"),
+            )
+        if name == f"{sid}_status":
+            ctx = _store_ctx(user, sid)
+            ctx["recent_orders"] = db.list_orders(uid, sid, 5)
+            ctx["what_happens"] = (
+                "Search → add to this store cart → checkout (snapshot + official URL) → pay on the store site. "
+                "Bring Fast does not charge the card; it tells you exactly what and where to confirm."
+            )
+            return _ok(**ctx)
+    return json.dumps(
+        {
+            "success": False,
+            "error": f"unknown tool {name}",
+            "use": "bf_search with query=... or carrefour_search / grandiose_search / waitrose_search / spinneys_search",
+            "available": [t["name"] for t in TOOLS],
         }
-    except Exception as e:
-        return {"ok": False, "stage": "browser", "error": str(e), "screenshots": shots}
-    finally:
+    )
+
+
+@app.api_route("/mcp", methods=["GET", "HEAD", "POST"])
+async def mcp_endpoint(request: Request):
+    if request.method in ("GET", "HEAD"):
+        return _oauth_challenge()
+    user = _user_from_request(request)
+    if not user:
+        return _oauth_challenge()
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"jsonrpc": "2.0", "error": {"code": -32700, "message": "parse error"}}, status_code=400)
+    rid = body.get("id")
+    method = body.get("method")
+    if method == "initialize":
+        return JSONResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": rid,
+                "result": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {"tools": {"listChanged": False}},
+                    "serverInfo": {"name": "Bring Fast", "version": "1.0.0"},
+                    "instructions": (
+                        f"Bring Fast for {user['email']} only. "
+                        "Tools are split per store: carrefour_*, grandiose_*, waitrose_*, spinneys_* "
+                        "(search, cart, checkout, status). Always report delivery_address. "
+                        "Checkout prepares the official store URL; payment stays on the supermarket site."
+                    ),
+                },
+            }
+        )
+    if method == "notifications/initialized":
+        return JSONResponse({"jsonrpc": "2.0", "id": rid, "result": {}})
+    if method == "tools/list":
+        return JSONResponse({"jsonrpc": "2.0", "id": rid, "result": {"tools": TOOLS}})
+    if method == "tools/call":
+        params = body.get("params") or {}
+        name = params.get("name")
+        args = params.get("arguments") or {}
+        text = _call_tool(user, name, args)
+        return JSONResponse(
+            {"jsonrpc": "2.0", "id": rid, "result": {"content": [{"type": "text", "text": text}]}}
+        )
+    if method == "ping":
+        return JSONResponse({"jsonrpc": "2.0", "id": rid, "result": {}})
+    return JSONResponse({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": method}})
+
+
+OAUTH_CLIENT_ID = os.environ.get("BRINGFAST_OAUTH_CLIENT_ID", "fast-bring")
+OAUTH_CLIENT_SECRET = os.environ.get("BRINGFAST_OAUTH_CLIENT_SECRET", "fast-bring-grok-secret")
+
+
+def _issuer() -> str:
+    return PUBLIC_URL or f"http://127.0.0.1:{PORT}"
+
+
+def _oauth_challenge():
+    meta = f"{_issuer()}/.well-known/oauth-protected-resource"
+    return JSONResponse(
+        {"jsonrpc": "2.0", "id": None, "error": {"code": -32001, "message": "OAuth required. Sign in with your Bring Fast account."}},
+        status_code=401,
+        headers={
+            "WWW-Authenticate": f'Bearer realm="Bring Fast", resource_metadata="{meta}"',
+            "Access-Control-Expose-Headers": "WWW-Authenticate",
+        },
+    )
+
+
+def _as_metadata() -> dict:
+    base = _issuer()
+    return {
+        "issuer": base,
+        "authorization_endpoint": f"{base}/oauth/authorize",
+        "token_endpoint": f"{base}/oauth/token",
+        "registration_endpoint": f"{base}/oauth/register",
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code"],
+        "token_endpoint_auth_methods_supported": ["none"],
+        "code_challenge_methods_supported": ["S256", "plain"],
+        "scopes_supported": ["mcp"],
+        "service_documentation": base,
+    }
+
+
+def _prm_metadata() -> dict:
+    base = _issuer()
+    return {
+        "resource": f"{base}/mcp",
+        "authorization_servers": [base],
+        "bearer_methods_supported": ["header"],
+        "scopes_supported": ["mcp"],
+        "resource_name": "Bring Fast",
+    }
+
+
+@app.get("/.well-known/oauth-authorization-server")
+@app.get("/.well-known/oauth-authorization-server/mcp")
+@app.get("/.well-known/openid-configuration")
+def oauth_as_metadata():
+    return _as_metadata()
+
+
+@app.get("/.well-known/oauth-protected-resource")
+@app.get("/.well-known/oauth-protected-resource/mcp")
+def oauth_prm_metadata():
+    return _prm_metadata()
+
+
+def _safe_redirect(uri: str) -> bool:
+    if not uri:
+        return False
+    return uri.startswith("https://") or uri.startswith("http://127.0.0.1") or uri.startswith("http://localhost")
+
+
+def _issue_code(user, redirect_uri: str, client_id: str, challenge: str, method: str, state: str):
+    code = db.save_oauth_code(user["id"], redirect_uri, client_id, challenge, method)
+    sep = "&" if "?" in redirect_uri else "?"
+    return RedirectResponse(f"{redirect_uri}{sep}code={code}&state={state}", status_code=302)
+
+
+@app.api_route("/oauth/register", methods=["POST", "OPTIONS"])
+@app.api_route("/register", methods=["POST", "OPTIONS"])
+async def oauth_register(request: Request):
+    if request.method == "OPTIONS":
+        return JSONResponse({}, headers={"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*"})
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    uris = body.get("redirect_uris") or []
+    if isinstance(uris, str):
+        uris = [uris]
+    uris = [u for u in uris if _safe_redirect(str(u))]
+    if not uris:
+        uris = ["https://grok.com/", "https://grok.x.ai/"]
+    rec = db.register_oauth_client(uris, body.get("token_endpoint_auth_method") or "none")
+    rec.update(
+        {
+            "client_name": body.get("client_name") or "Grok",
+            "grant_types": ["authorization_code"],
+            "response_types": ["code"],
+        }
+    )
+    return JSONResponse(rec, status_code=201)
+
+
+@app.get("/oauth/authorize")
+@app.get("/authorize")
+def oauth_authorize_get(
+    request: Request,
+    redirect_uri: str = "",
+    state: str = "",
+    client_id: str = "",
+    code_challenge: str = "",
+    code_challenge_method: str = "S256",
+    response_type: str = "code",
+    scope: str = "",
+):
+    user = current_user(request)
+    if user and redirect_uri and _safe_redirect(redirect_uri):
+        return _issue_code(user, redirect_uri, client_id, code_challenge, code_challenge_method, state)
+    return templates.TemplateResponse(
+        request,
+        "oauth_authorize.html",
+        {
+            "user": user,
+            "title": "Authorize Bring Fast",
+            "redirect_uri": redirect_uri,
+            "state": state,
+            "client_id": client_id,
+            "code_challenge": code_challenge,
+            "code_challenge_method": code_challenge_method,
+            "email": user["email"] if user else "",
+        },
+    )
+
+
+@app.post("/oauth/authorize")
+@app.post("/authorize")
+def oauth_authorize_post(
+    request: Request,
+    email: str = Form(""),
+    password: str = Form(""),
+    redirect_uri: str = Form(""),
+    state: str = Form(""),
+    client_id: str = Form(""),
+    code_challenge: str = Form(""),
+    code_challenge_method: str = Form("S256"),
+):
+    user = current_user(request)
+    if not user:
+        user = db.get_user_by_email(email)
+        if not user or not db.verify_password(user, password):
+            return templates.TemplateResponse(
+                request,
+                "oauth_authorize.html",
+                {
+                    "user": None,
+                    "title": "Authorize Bring Fast",
+                    "redirect_uri": redirect_uri,
+                    "state": state,
+                    "client_id": client_id,
+                    "code_challenge": code_challenge,
+                    "code_challenge_method": code_challenge_method,
+                    "email": email,
+                    "error": "Wrong email or password",
+                },
+                status_code=401,
+            )
+        request.session["uid"] = user["id"]
+    if not redirect_uri or not _safe_redirect(redirect_uri):
+        return RedirectResponse("/", status_code=303)
+    return _issue_code(user, redirect_uri, client_id, code_challenge, code_challenge_method, state)
+
+
+@app.post("/oauth/token")
+@app.post("/token")
+async def oauth_token(request: Request):
+    form = {}
+    ctype = request.headers.get("content-type") or ""
+    if "json" in ctype:
         try:
-            if context:
-                context.close()
-            if browser:
-                browser.close()
-            if pw:
-                pw.stop()
+            form = await request.json()
         except Exception:
-            pass
+            form = {}
+    else:
+        try:
+            form = dict(await request.form())
+        except Exception:
+            form = {}
+    grant = form.get("grant_type") or ""
+    code = form.get("code") or ""
+    redirect_uri = form.get("redirect_uri") or ""
+    verifier = form.get("code_verifier") or ""
+    if grant and grant != "authorization_code":
+        return JSONResponse({"error": "unsupported_grant_type"}, status_code=400)
+    user = db.consume_oauth_code(code, redirect_uri or None)
+    if not user:
+        return JSONResponse({"error": "invalid_grant"}, status_code=400)
+    challenge = user.get("_oauth_code_challenge") or ""
+    method = (user.get("_oauth_code_challenge_method") or "S256").upper()
+    if challenge:
+        import hashlib
+        import base64
+
+        if not verifier:
+            return JSONResponse({"error": "invalid_grant", "error_description": "code_verifier required"}, status_code=400)
+        if method == "S256":
+            digest = hashlib.sha256(verifier.encode()).digest()
+            calc = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+            if calc != challenge:
+                return JSONResponse({"error": "invalid_grant", "error_description": "pkce failed"}, status_code=400)
+        elif verifier != challenge:
+            return JSONResponse({"error": "invalid_grant", "error_description": "pkce failed"}, status_code=400)
+    return {
+        "access_token": user["mcp_token"],
+        "token_type": "bearer",
+        "expires_in": 86400 * 30,
+        "scope": "mcp",
+    }
+
+
+def main() -> None:
+    import uvicorn
+
+    db.connect()
+    uvicorn.run("bring_fast.app:app", host=HOST, port=PORT, factory=False)
+
+
+if __name__ == "__main__":
+    main()
