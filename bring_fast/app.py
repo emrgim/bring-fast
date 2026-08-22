@@ -5,7 +5,7 @@ import json
 import os
 from typing import Any
 
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Form, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -37,8 +37,37 @@ def current_user(request: Request):
     return db.get_user_by_id(uid) if uid else None
 
 
-def mcp_url() -> str:
-    return f"{PUBLIC_URL}/mcp" if PUBLIC_URL else f"http://127.0.0.1:{PORT}/mcp"
+def _is_loopback(host: str) -> bool:
+    name = host.split(":")[0].lower()
+    return name in ("127.0.0.1", "localhost", "0.0.0.0", "::1", "[::1]")
+
+
+def _request_base_url(request: Request) -> str:
+    """Public origin the client actually used, honouring the reverse proxy."""
+    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").split(",")[0].strip()
+    if not host:
+        return ""
+    proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "https").split(",")[0].strip()
+    return f"{proto}://{host}"
+
+
+def base_url(request: Request | None = None) -> str:
+    """Origin to advertise in OAuth metadata and redirect URLs.
+
+    OAuth clients reject metadata whose issuer differs from the host they
+    called, so the incoming request wins over BRINGFAST_PUBLIC_URL whenever it
+    names a real public host. That keeps the connector working even when the
+    env var is missing or stale behind Tailscale Funnel.
+    """
+    if request is not None:
+        origin = _request_base_url(request)
+        if origin and not _is_loopback(origin.split("://", 1)[-1]):
+            return origin
+    return PUBLIC_URL or f"http://127.0.0.1:{PORT}"
+
+
+def mcp_url(request: Request | None = None) -> str:
+    return f"{base_url(request)}/mcp"
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -52,14 +81,13 @@ def home(request: Request):
         {
             "user": user,
             "retailers": db.list_retailer_accounts(user["id"]),
-            "mcp_url": mcp_url(),
+            "mcp_url": mcp_url(request),
             "title": "Bring Fast",
         },
     )
 
 
-@app.post("/register")
-def register(request: Request, email: str = Form(...), password: str = Form(...)):
+def _signup(request: Request, email: str, password: str):
     try:
         user = db.create_user(email, password)
     except ValueError as e:
@@ -124,8 +152,16 @@ def rotate(request: Request):
 
 
 @app.get("/health")
-def health():
-    return {"ok": True, "server": "Bring Fast"}
+def health(request: Request):
+    base = base_url(request)
+    return {
+        "ok": True,
+        "server": "Bring Fast",
+        "public_url": base,
+        "mcp_url": f"{base}/mcp",
+        "public_url_env": PUBLIC_URL or None,
+        "reachable_publicly": not _is_loopback(base.split("://", 1)[-1]),
+    }
 
 
 def _user_from_request(request: Request):
@@ -462,26 +498,59 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
     )
 
 
-@app.api_route("/mcp", methods=["GET", "HEAD", "POST"])
+PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
+
+
+def _rpc(request: Request, payload: dict[str, Any]) -> Response:
+    """Reply as JSON, or as a one-shot SSE stream for event-stream-only clients."""
+    accept = (request.headers.get("accept") or "").lower()
+    if "text/event-stream" in accept and "application/json" not in accept:
+        data = json.dumps(payload, ensure_ascii=False)
+        return Response(
+            f"event: message\ndata: {data}\n\n",
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
+        )
+    return JSONResponse(payload)
+
+
+@app.api_route("/mcp", methods=["GET", "HEAD", "POST", "DELETE"])
+@app.api_route("/mcp/", methods=["GET", "HEAD", "POST", "DELETE"], include_in_schema=False)
 async def mcp_endpoint(request: Request):
-    if request.method in ("GET", "HEAD"):
-        return _oauth_challenge()
     user = _user_from_request(request)
     if not user:
-        return _oauth_challenge()
+        return _oauth_challenge(request)
+    if request.method in ("GET", "HEAD"):
+        # Authenticated, but there is no server-initiated stream to open. The
+        # spec wants 405 here; answering 401 would send the client back into
+        # the OAuth flow forever.
+        return Response(status_code=405, headers={"Allow": "POST, DELETE"})
+    if request.method == "DELETE":
+        return Response(status_code=204)
     try:
         body = await request.json()
     except Exception:
-        return JSONResponse({"jsonrpc": "2.0", "error": {"code": -32700, "message": "parse error"}}, status_code=400)
+        return JSONResponse({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}}, status_code=400)
+    if isinstance(body, list):
+        return JSONResponse(
+            {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "batch requests are not supported"}},
+            status_code=400,
+        )
     rid = body.get("id")
     method = body.get("method")
+    if rid is None:
+        # Notification or response: acknowledge without a JSON-RPC body.
+        return Response(status_code=202)
     if method == "initialize":
-        return JSONResponse(
+        asked = ((body.get("params") or {}).get("protocolVersion") or "").strip()
+        version = asked if asked in PROTOCOL_VERSIONS else PROTOCOL_VERSIONS[0]
+        return _rpc(
+            request,
             {
                 "jsonrpc": "2.0",
                 "id": rid,
                 "result": {
-                    "protocolVersion": "2024-11-05",
+                    "protocolVersion": version,
                     "capabilities": {"tools": {"listChanged": False}},
                     "serverInfo": {"name": "Bring Fast", "version": "1.0.0"},
                     "instructions": (
@@ -491,35 +560,39 @@ async def mcp_endpoint(request: Request):
                         "Checkout prepares the official store URL; payment stays on the supermarket site."
                     ),
                 },
-            }
+            },
         )
-    if method == "notifications/initialized":
-        return JSONResponse({"jsonrpc": "2.0", "id": rid, "result": {}})
     if method == "tools/list":
-        return JSONResponse({"jsonrpc": "2.0", "id": rid, "result": {"tools": TOOLS}})
+        return _rpc(request, {"jsonrpc": "2.0", "id": rid, "result": {"tools": TOOLS}})
+    if method in ("resources/list", "prompts/list"):
+        key = "resources" if method.startswith("resources") else "prompts"
+        return _rpc(request, {"jsonrpc": "2.0", "id": rid, "result": {key: []}})
     if method == "tools/call":
         params = body.get("params") or {}
         name = params.get("name")
         args = params.get("arguments") or {}
         text = await asyncio.to_thread(_call_tool, user, name, args)
-        return JSONResponse(
-            {"jsonrpc": "2.0", "id": rid, "result": {"content": [{"type": "text", "text": text}]}}
+        return _rpc(
+            request, {"jsonrpc": "2.0", "id": rid, "result": {"content": [{"type": "text", "text": text}]}}
         )
     if method == "ping":
-        return JSONResponse({"jsonrpc": "2.0", "id": rid, "result": {}})
-    return JSONResponse({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": method}})
+        return _rpc(request, {"jsonrpc": "2.0", "id": rid, "result": {}})
+    return _rpc(
+        request,
+        {"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": f"method not found: {method}"}},
+    )
 
 
 OAUTH_CLIENT_ID = os.environ.get("BRINGFAST_OAUTH_CLIENT_ID", "fast-bring")
 OAUTH_CLIENT_SECRET = os.environ.get("BRINGFAST_OAUTH_CLIENT_SECRET", "fast-bring-grok-secret")
 
 
-def _issuer() -> str:
-    return PUBLIC_URL or f"http://127.0.0.1:{PORT}"
+def _issuer(request: Request | None = None) -> str:
+    return base_url(request)
 
 
-def _oauth_challenge():
-    meta = f"{_issuer()}/.well-known/oauth-protected-resource"
+def _oauth_challenge(request: Request | None = None):
+    meta = f"{_issuer(request)}/.well-known/oauth-protected-resource"
     return JSONResponse(
         {"jsonrpc": "2.0", "id": None, "error": {"code": -32001, "message": "OAuth required. Sign in with your Bring Fast account."}},
         status_code=401,
@@ -530,8 +603,8 @@ def _oauth_challenge():
     )
 
 
-def _as_metadata() -> dict:
-    base = _issuer()
+def _as_metadata(request: Request | None = None) -> dict:
+    base = _issuer(request)
     return {
         "issuer": base,
         "authorization_endpoint": f"{base}/oauth/authorize",
@@ -546,8 +619,8 @@ def _as_metadata() -> dict:
     }
 
 
-def _prm_metadata() -> dict:
-    base = _issuer()
+def _prm_metadata(request: Request | None = None) -> dict:
+    base = _issuer(request)
     return {
         "resource": f"{base}/mcp",
         "authorization_servers": [base],
@@ -560,14 +633,15 @@ def _prm_metadata() -> dict:
 @app.get("/.well-known/oauth-authorization-server")
 @app.get("/.well-known/oauth-authorization-server/mcp")
 @app.get("/.well-known/openid-configuration")
-def oauth_as_metadata():
-    return _as_metadata()
+@app.get("/.well-known/openid-configuration/mcp")
+def oauth_as_metadata(request: Request):
+    return _as_metadata(request)
 
 
 @app.get("/.well-known/oauth-protected-resource")
 @app.get("/.well-known/oauth-protected-resource/mcp")
-def oauth_prm_metadata():
-    return _prm_metadata()
+def oauth_prm_metadata(request: Request):
+    return _prm_metadata(request)
 
 
 def _safe_redirect(uri: str) -> bool:
@@ -582,8 +656,21 @@ def _issue_code(user, redirect_uri: str, client_id: str, challenge: str, method:
     return RedirectResponse(f"{redirect_uri}{sep}code={code}&state={state}", status_code=302)
 
 
-@app.api_route("/oauth/register", methods=["POST", "OPTIONS"])
 @app.api_route("/register", methods=["POST", "OPTIONS"])
+async def register(request: Request):
+    """Shared path: JSON is OAuth dynamic client registration, a form is a signup."""
+    if request.method == "OPTIONS":
+        return JSONResponse({}, headers={"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*"})
+    if "json" in (request.headers.get("content-type") or "").lower():
+        return await oauth_register(request)
+    try:
+        form = await request.form()
+    except Exception:
+        form = {}
+    return _signup(request, str(form.get("email") or ""), str(form.get("password") or ""))
+
+
+@app.api_route("/oauth/register", methods=["POST", "OPTIONS"])
 async def oauth_register(request: Request):
     if request.method == "OPTIONS":
         return JSONResponse({}, headers={"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*"})
