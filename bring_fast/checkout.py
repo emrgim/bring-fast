@@ -66,13 +66,35 @@ def _shot(page, name: str) -> str:
 
 
 def _dismiss(page) -> None:
+    for sel in (
+        "button:has-text('Select All')",
+        "button:has-text('Save Changes')",
+        "#cmpCloseBtn",
+        "button#cmpCloseBtn",
+        "#onetrust-accept-btn-handler",
+        "button#onetrust-accept-btn-handler",
+        ".onetrust-accept-btn-handler",
+        "button:has-text('Accept All Cookies')",
+        "button:has-text('Accept all cookies')",
+        "button:has-text('Allow all')",
+        "button:has-text('Accept All')",
+        "button:has-text('I Accept')",
+        "#onetrust-pc-btn-handler",
+    ):
+        try:
+            page.locator(sel).first.click(timeout=1200)
+            page.wait_for_timeout(400)
+        except Exception:
+            pass
     for label in (
+        "Accept All Cookies",
+        "Accept all",
         "Accept",
         "ACCEPT",
         "Agree",
         "I agree",
         "Allow all",
-        "Continue",
+        "Confirm My Choices",
         "Got it",
         "OK",
     ):
@@ -80,6 +102,19 @@ def _dismiss(page) -> None:
             page.get_by_role("button", name=label, exact=False).first.click(timeout=800)
         except Exception:
             pass
+    try:
+        page.evaluate(
+            """() => {
+              const b = document.querySelector('#onetrust-accept-btn-handler');
+              if (b) b.click();
+              document.querySelector('#onetrust-banner-sdk')?.remove();
+              document.querySelector('#onetrust-pc-sdk')?.remove();
+              document.querySelector('.onetrust-pc-dark-filter')?.remove();
+              document.body.style.overflow = 'auto';
+            }"""
+        )
+    except Exception:
+        pass
 
 
 def _fill_first(page, selectors: list[str], value: str) -> bool:
@@ -110,13 +145,29 @@ def _click_first(page, names: list[str]) -> bool:
 
 def _login_carrefour(page, email: str, password: str) -> str:
     page.goto(LOGIN["carrefour"], wait_until="domcontentloaded", timeout=45000)
-    _dismiss(page)
-    _fill_first(page, ["input[type=email]", "input[name=email]", "input[autocomplete=username]"], email)
-    _click_first(page, ["Continue", "Next", "Submit"])
     page.wait_for_timeout(1500)
-    _fill_first(page, ["input[type=password]", "input[name=password]"], password)
-    _click_first(page, ["Log in", "Login", "Sign in", "Continue"])
-    page.wait_for_timeout(2500)
+    _dismiss(page)
+    page.wait_for_selector("#email", timeout=10000)
+    loc = page.locator("#email")
+    loc.click(force=True)
+    loc.fill("")
+    loc.type(email, delay=40)
+    page.wait_for_timeout(400)
+    btn = page.locator("button[type=submit]:has-text('Continue')")
+    try:
+        btn.first.wait_for(state="visible", timeout=3000)
+        if btn.first.is_disabled():
+            loc.press("Tab")
+            page.wait_for_timeout(300)
+        btn.first.click(timeout=5000, force=True)
+    except Exception:
+        loc.press("Enter")
+    page.wait_for_selector("input[type=password]", timeout=15000)
+    pwd = page.locator("input[type=password]").first
+    pwd.click(force=True)
+    pwd.type(password, delay=40)
+    pwd.press("Enter")
+    page.wait_for_timeout(3000)
     return page.url
 
 
@@ -184,6 +235,149 @@ def _goto_checkout(page, store: str) -> str:
     _click_first(page, ["Checkout", "Proceed to checkout", "Place order", "Continue to checkout", "Go to cart"])
     page.wait_for_timeout(2000)
     return page.url
+
+
+def official_cart(
+    *,
+    store: str,
+    email: str,
+    password: str,
+    action: str,
+    items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Login on the official site and mutate the real cart. Returns official_count."""
+    if not email or not password:
+        return {"ok": False, "official_count": None, "error": "store login missing on dashboard"}
+    pw = browser = context = None
+    try:
+        pw, browser, context = _launch()
+        page = context.new_page()
+        if store == "carrefour":
+            _login_carrefour(page, email, password)
+        elif store == "grandiose":
+            _login_grandiose(page, email, password)
+        else:
+            _login_spinneys_waitrose(page, store, email, password)
+        if "login" in (page.url or "").lower() and store == "carrefour":
+            page.wait_for_timeout(2000)
+        logged = "login" not in (page.url or "").lower()
+        if store == "carrefour":
+            api = page.evaluate(
+                """async ({action, items}) => {
+                  const tries = [];
+                  async function hit(url, method, body) {
+                    const r = await fetch(url, {
+                      method,
+                      credentials: 'include',
+                      headers: {'content-type':'application/json','appid':'Reactweb','storeid':'mafuae','lang':'en'},
+                      body: body ? JSON.stringify(body) : undefined
+                    });
+                    const t = await r.text();
+                    let j = null; try { j = JSON.parse(t); } catch(e) {}
+                    tries.push({url, status:r.status, text:t.slice(0,240)});
+                    return {ok:r.ok, status:r.status, json:j, text:t.slice(0,240)};
+                  }
+                  if (action === 'clear') {
+                    await hit('/v1/basket/mafuae/en/liteCart','GET');
+                    await hit('/v8/carts/mafuae/en/STANDARD/clear','POST', {});
+                    await hit('/v1/basket/mafuae/en/clear','POST', {});
+                  }
+                  for (const it of (items||[])) {
+                    const pid = String(it.id||'');
+                    const qty = Number(it.qty||1);
+                    if (!pid) continue;
+                    if (action === 'remove') {
+                      await hit('/v8/carts/mafuae/en/STANDARD/removeItem','POST',{productId:pid});
+                      continue;
+                    }
+                    const bodies = [
+                      {productId: pid, quantity: qty, sellerId: '0000'},
+                      {productId: pid, qty: qty, quantity: qty, offerId: 'offer_carrefour_'+pid},
+                      {itemId: pid, quantity: qty}
+                    ];
+                    for (const b of bodies) {
+                      const a = await hit('/v8/carts/mafuae/en/STANDARD/addItem','POST', b);
+                      if (a.ok) break;
+                      const c = await hit('/v1/basket/mafuae/en/product','POST', b);
+                      if (c.ok) break;
+                    }
+                  }
+                  const lite = await hit('/v1/basket/mafuae/en/liteCart?nsp=food,nonfood,express,QCOMM,QELEC&lm=false&liteResponse=true','GET');
+                  const v8 = await hit('/v8/carts/mafuae/en/STANDARD','GET');
+                  return {tries, lite: lite.json || lite.text, v8: v8.json || v8.text};
+                }""",
+                {"action": action, "items": items},
+            )
+        else:
+            api = {"tries": [], "note": "non-carrefour uses click path"}
+            if action in ("add", "set"):
+                _add_items(page, store, items)
+        count = _extract_count(api if store == "carrefour" else None, page)
+        return {
+            "ok": count is not None and (action == "clear" or action == "list" or count > 0 or action == "remove"),
+            "official_count": count,
+            "logged_in": logged,
+            "final_url": page.url,
+            "api": {k: api.get(k) for k in ("tries",) if isinstance(api, dict)},
+            "error": None if count not in (None, 0) or action in ("clear", "remove", "list") else "official cart still 0 after add",
+        }
+    except Exception as e:
+        return {"ok": False, "official_count": None, "error": str(e)}
+    finally:
+        try:
+            if context:
+                context.close()
+            if browser:
+                browser.close()
+            if pw:
+                pw.stop()
+        except Exception:
+            pass
+
+
+def _extract_count(api, page) -> int | None:
+    if isinstance(api, dict):
+        for blob in (api.get("lite"), api.get("v8")):
+            n = _count_from_obj(blob)
+            if n is not None:
+                return n
+    try:
+        text = page.inner_text("body") or ""
+        import re
+
+        m = re.search(r"(\d+)\s+items? in (?:your )?cart", text, re.I)
+        if m:
+            return int(m.group(1))
+    except Exception:
+        pass
+    return None
+
+
+def _count_from_obj(obj) -> int | None:
+    if obj is None:
+        return None
+    if isinstance(obj, str):
+        try:
+            obj = json.loads(obj)
+        except Exception:
+            return None
+    if not isinstance(obj, dict):
+        return None
+    for key in ("totalQuantity", "quantity", "cartCount", "itemCount", "count"):
+        if isinstance(obj.get(key), (int, float)):
+            return int(obj[key])
+    data = obj.get("data") or obj.get("cart") or obj.get("basket") or {}
+    if isinstance(data, dict):
+        for key in ("totalQuantity", "quantity", "cartCount", "itemCount"):
+            if isinstance(data.get(key), (int, float)):
+                return int(data[key])
+        items = data.get("items") or data.get("products") or data.get("entries")
+        if isinstance(items, list):
+            return sum(int(i.get("qty") or i.get("quantity") or 1) for i in items if isinstance(i, dict))
+    items = obj.get("items") or obj.get("products")
+    if isinstance(items, list):
+        return len(items)
+    return None
 
 
 def run_checkout(
