@@ -3,7 +3,7 @@ name = "bring-fast"
 version = "1.1.0"
 description = "Bring Fast — multi-user grocery MCP + dashboard"
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
 requires-python = ">=3.11"
 authors = [{ name = "Emiliano Morgia" }]
 keywords = ["mcp", "grok", "grocery", "uae", "carrefour"]
@@ -36,7 +36,7 @@ bring-fast = "bring_fast.app:main"
 bring-fast-doctor = "bring_fast.doctor:main"
 
 [build-system]
-requires = ["setuptools>=69"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
