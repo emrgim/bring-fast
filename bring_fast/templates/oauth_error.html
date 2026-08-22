@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Connection stopped</h1>
+<p class="lead">Bring Fast non ha completato la connessione, così il tuo account resta protetto.</p>
+<div class="card">
+  <p>{{ error }}</p>
+  <p class="off">Riprova ad aggiungere il connettore MCP dall'app che stai collegando. Se l'errore resta, controlla l'URL del connettore.</p>
+  <p><a class="btn" href="/">Back to Bring Fast</a></p>
+</div>
+{% endblock %}

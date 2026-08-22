@@ -6,6 +6,7 @@ import os
 import secrets
 import sys
 from typing import Any
+from urllib.parse import urlencode, urlsplit
 
 from fastapi import FastAPI, Form, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,6 +20,7 @@ from . import __version__, catalog, checkout, db
 HOST = os.environ.get("BRINGFAST_HOST", "127.0.0.1")
 PORT = int(os.environ.get("BRINGFAST_PORT", "8877"))
 PUBLIC_URL = os.environ.get("BRINGFAST_PUBLIC_URL", "").rstrip("/")
+SESSION_DAYS = int(os.environ.get("BRINGFAST_SESSION_DAYS", "30"))
 
 
 def _session_secret() -> str:
@@ -48,18 +50,86 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["WWW-Authenticate"],
 )
-app.add_middleware(SessionMiddleware, secret_key=SECRET, same_site="lax")
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SECRET,
+    session_cookie="bring_fast_session",
+    same_site="lax",
+    max_age=SESSION_DAYS * 24 * 3600,
+    https_only=PUBLIC_URL.startswith("https://"),
+)
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 
 
 def current_user(request: Request):
     uid = request.session.get("uid")
-    return db.get_user_by_id(uid) if uid else None
+    if not uid:
+        return None
+    user = db.get_user_by_id(uid)
+    if not user:
+        request.session.clear()
+    return user
+
+
+def _sign_in(request: Request, user: dict[str, Any]) -> None:
+    request.session["uid"] = user["id"]
+    request.session["email"] = user["email"]
+
+
+def _safe_next(target: str) -> str:
+    """Only allow redirects back into this app, never to another host."""
+    if not target or not target.startswith("/") or target.startswith("//"):
+        return "/"
+    return target
+
+
+def _sign_in_or_create(email: str, password: str) -> tuple[dict[str, Any] | None, str, bool]:
+    """One entry point for the whole product: sign in, or create the account on first use.
+
+    Returns (user, error, created).
+    """
+    email = (email or "").strip().lower()
+    password = password or ""
+    if not email or "@" not in email:
+        return None, "Enter the email address you want to use for Bring Fast.", False
+    if not password:
+        return None, "Enter your password.", False
+    user = db.get_user_by_email(email)
+    if user:
+        if db.verify_password(user, password):
+            return user, "", False
+        return None, "That password does not match this Bring Fast account.", False
+    if len(password) < 6:
+        return None, f"No account yet for {email}. Pick a password of at least 6 characters to create it.", False
+    try:
+        return db.create_user(email, password), "", True
+    except ValueError as e:
+        return None, str(e), False
+
+
+def _login_page(
+    request: Request,
+    *,
+    error: str = "",
+    email: str = "",
+    next_url: str = "/",
+    status_code: int = 200,
+):
+    return templates.TemplateResponse(
+        request,
+        "login.html",
+        {
+            "user": None,
+            "title": "Bring Fast",
+            "error": error,
+            "email": email,
+            "next": _safe_next(next_url),
+        },
+        status_code=status_code,
+    )
 
 
 def _is_loopback(url_or_host: str) -> bool:
-    from urllib.parse import urlsplit
-
     raw = (url_or_host or "").strip()
     if not raw:
         return True
@@ -102,10 +172,10 @@ def mcp_url(request: Request | None = None) -> str:
 
 
 @app.get("/", response_class=HTMLResponse)
-def home(request: Request):
+def home(request: Request, next: str = "/", welcome: int = 0, notice: str = ""):
     user = current_user(request)
     if not user:
-        return templates.TemplateResponse(request, "login.html", {"user": None, "title": "Bring Fast"})
+        return _login_page(request, next_url=next)
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -114,50 +184,77 @@ def home(request: Request):
             "retailers": db.list_retailer_accounts(user["id"]),
             "mcp_url": mcp_url(request),
             "title": "Bring Fast",
+            "notice": (
+                f"Welcome to Bring Fast, {user['email']}. Link a store below and you are done."
+                if welcome
+                else notice
+            ),
         },
     )
 
 
-def _register_user(request: Request, email: str, password: str):
-    try:
-        user = db.create_user(email, password)
-    except ValueError as e:
-        return templates.TemplateResponse(
-            request, "login.html", {"user": None, "error": str(e), "title": "Bring Fast"}, status_code=400
+@app.get("/login", response_class=HTMLResponse)
+def login_page(request: Request, next: str = "/"):
+    """A signed-in user never sees a login form again; they land where they were going."""
+    if current_user(request):
+        return RedirectResponse(_safe_next(next), status_code=303)
+    return _login_page(request, next_url=next)
+
+
+def _sign_in_response(request: Request, email: str, password: str, next_url: str):
+    user, error, created = _sign_in_or_create(email, password)
+    if not user:
+        return _login_page(
+            request,
+            error=error,
+            email=(email or "").strip(),
+            next_url=next_url,
+            status_code=401,
         )
-    request.session["uid"] = user["id"]
+    _sign_in(request, user)
+    target = _safe_next(next_url)
+    if created and target == "/":
+        target = "/?welcome=1"
+    return RedirectResponse(target, status_code=303)
+
+
+@app.post("/login")
+def login(
+    request: Request,
+    email: str = Form(""),
+    password: str = Form(""),
+    next: str = Form("/"),
+):
+    return _sign_in_response(request, email, password, next)
+
+
+@app.api_route("/logout", methods=["GET", "POST"])
+def logout(request: Request):
+    request.session.clear()
     return RedirectResponse("/", status_code=303)
 
 
 @app.api_route("/register", methods=["POST", "OPTIONS"])
 async def register(request: Request):
-    """Two callers share this path: the dashboard signup form and OAuth client registration."""
+    """Humans post a form here; OAuth clients post dynamic-registration JSON here.
+
+    Both used to be mounted on this path, so whichever route FastAPI matched first
+    rejected the other caller.
+    """
     if request.method == "OPTIONS":
         return _cors_preflight()
     if "json" in (request.headers.get("content-type") or "").lower():
-        return await _register_oauth_client(request)
-    form = await request.form()
-    return _register_user(request, str(form.get("email") or ""), str(form.get("password") or ""))
-
-
-@app.post("/login")
-def login(request: Request, email: str = Form(...), password: str = Form(...)):
-    user = db.get_user_by_email(email)
-    if not user or not db.verify_password(user, password):
-        return templates.TemplateResponse(
-            request,
-            "login.html",
-            {"user": None, "error": "Wrong email or password", "title": "Bring Fast"},
-            status_code=401,
-        )
-    request.session["uid"] = user["id"]
-    return RedirectResponse("/", status_code=303)
-
-
-@app.get("/logout")
-def logout(request: Request):
-    request.session.clear()
-    return RedirectResponse("/", status_code=303)
+        return await oauth_register(request)
+    try:
+        form = await request.form()
+    except Exception:
+        form = {}
+    return _sign_in_response(
+        request,
+        str(form.get("email") or ""),
+        str(form.get("password") or ""),
+        str(form.get("next") or "/"),
+    )
 
 
 @app.post("/retailers/{retailer}")
@@ -183,6 +280,26 @@ def clear_retailer(request: Request, retailer: str):
     if user:
         db.clear_retailer_account(user["id"], retailer)
     return RedirectResponse("/", status_code=303)
+
+
+@app.post("/retailers/{retailer}/check")
+def check_retailer(request: Request, retailer: str):
+    """Try the saved store login now, instead of finding out during a checkout."""
+    user = current_user(request)
+    store = db.store_meta(retailer)
+    if not user or not store:
+        return RedirectResponse("/", status_code=303)
+    creds = db.get_retailer_secret(user["id"], retailer) or {}
+    result = checkout.verify_login(
+        store=retailer,
+        email=creds.get("email") or "",
+        password=creds.get("password") or "",
+    )
+    if result.get("ok"):
+        note = f"{store['name']}: login works" + (" (session reused)" if result.get("reused") else "")
+    else:
+        note = f"{store['name']}: {result.get('error') or 'login failed'}"
+    return RedirectResponse("/?" + urlencode({"notice": note}), status_code=303)
 
 
 @app.post("/rotate-token")
@@ -380,6 +497,8 @@ def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> s
     ctx["action"] = action
     ctx["official_count"] = live.get("official_count")
     ctx["official_ok"] = bool(live.get("ok"))
+    ctx["store_login_ok"] = bool(live.get("logged_in"))
+    ctx["store_session_reused"] = bool(live.get("session_reused"))
     if not live.get("ok"):
         return json.dumps(
             {
@@ -702,8 +821,8 @@ def _as_metadata(request: Request | None = None) -> dict:
         "token_endpoint": f"{base}/oauth/token",
         "registration_endpoint": f"{base}/oauth/register",
         "response_types_supported": ["code"],
-        "grant_types_supported": ["authorization_code"],
-        "token_endpoint_auth_methods_supported": ["none"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "token_endpoint_auth_methods_supported": ["none", "client_secret_post"],
         "code_challenge_methods_supported": ["S256", "plain"],
         "scopes_supported": ["mcp"],
         "service_documentation": base,
@@ -740,16 +859,66 @@ def _safe_redirect(uri: str) -> bool:
     return uri.startswith("https://") or uri.startswith("http://127.0.0.1") or uri.startswith("http://localhost")
 
 
+def _client_redirect_uris(client: dict[str, Any] | None) -> list[str]:
+    if not client:
+        return []
+    uris = client.get("redirect_uris")
+    if isinstance(uris, str):
+        try:
+            uris = json.loads(uris)
+        except Exception:
+            uris = [uris]
+    return [str(u) for u in uris] if isinstance(uris, list) else []
+
+
+def _registered_uri(redirect_uri: str, registered: list[str]) -> bool:
+    given = redirect_uri.rstrip("/")
+    for uri in registered:
+        known = uri.rstrip("/")
+        if given == known or given.startswith(known + "?") or given.startswith(known + "/"):
+            return True
+    return False
+
+
+def _check_redirect(client_id: str, redirect_uri: str) -> str:
+    """Empty string means the redirect is usable, otherwise the reason it is not."""
+    if not redirect_uri:
+        return "This app did not send a redirect_uri, so there is nowhere to send you back to."
+    if not _safe_redirect(redirect_uri):
+        return "The redirect_uri must be https, or http on localhost."
+    registered = _client_redirect_uris(db.get_oauth_client(client_id))
+    if registered and not _registered_uri(redirect_uri, registered):
+        return "That redirect_uri is not registered for this client."
+    return ""
+
+
 def _issue_code(user, redirect_uri: str, client_id: str, challenge: str, method: str, state: str):
     code = db.save_oauth_code(user["id"], redirect_uri, client_id, challenge, method)
+    params = {"code": code}
+    if state:
+        params["state"] = state
     sep = "&" if "?" in redirect_uri else "?"
-    return RedirectResponse(f"{redirect_uri}{sep}code={code}&state={state}", status_code=302)
+    return RedirectResponse(f"{redirect_uri}{sep}{urlencode(params)}", status_code=302)
 
 
-async def _register_oauth_client(request: Request):
+def _authorize_error(request: Request, reason: str):
+    return templates.TemplateResponse(
+        request,
+        "oauth_error.html",
+        {"user": current_user(request), "title": "Bring Fast", "error": reason},
+        status_code=400,
+    )
+
+
+@app.api_route("/oauth/register", methods=["POST", "OPTIONS"])
+async def oauth_register(request: Request):
+    if request.method == "OPTIONS":
+        return _cors_preflight()
     try:
         body = await request.json()
     except Exception:
+        body = {}
+    if not isinstance(body, dict):
         body = {}
     uris = body.get("redirect_uris") or []
     if isinstance(uris, str):
@@ -762,18 +931,41 @@ async def _register_oauth_client(request: Request):
         {
             "client_name": body.get("client_name") or "Grok",
             "grant_types": ["authorization_code"],
-            "response_types": ["code"],
             "client_secret_expires_at": 0,
         }
     )
     return JSONResponse(rec, status_code=201)
 
 
-@app.api_route("/oauth/register", methods=["POST", "OPTIONS"])
-async def oauth_register(request: Request):
-    if request.method == "OPTIONS":
-        return _cors_preflight()
-    return await _register_oauth_client(request)
+def _authorize_page(
+    request: Request,
+    *,
+    user,
+    redirect_uri: str,
+    state: str,
+    client_id: str,
+    code_challenge: str,
+    code_challenge_method: str,
+    email: str = "",
+    error: str = "",
+    status_code: int = 200,
+):
+    return templates.TemplateResponse(
+        request,
+        "oauth_authorize.html",
+        {
+            "user": user,
+            "title": "Authorize Bring Fast",
+            "redirect_uri": redirect_uri,
+            "state": state,
+            "client_id": client_id,
+            "code_challenge": code_challenge,
+            "code_challenge_method": code_challenge_method,
+            "email": email or (user["email"] if user else ""),
+            "error": error,
+        },
+        status_code=status_code,
+    )
 
 
 @app.get("/oauth/authorize")
@@ -787,23 +979,22 @@ def oauth_authorize_get(
     code_challenge_method: str = "S256",
     response_type: str = "code",
     scope: str = "",
+    resource: str = "",
 ):
+    problem = _check_redirect(client_id, redirect_uri)
+    if problem:
+        return _authorize_error(request, problem)
     user = current_user(request)
-    if user and redirect_uri and _safe_redirect(redirect_uri):
+    if user:
         return _issue_code(user, redirect_uri, client_id, code_challenge, code_challenge_method, state)
-    return templates.TemplateResponse(
+    return _authorize_page(
         request,
-        "oauth_authorize.html",
-        {
-            "user": user,
-            "title": "Authorize Bring Fast",
-            "redirect_uri": redirect_uri,
-            "state": state,
-            "client_id": client_id,
-            "code_challenge": code_challenge,
-            "code_challenge_method": code_challenge_method,
-            "email": user["email"] if user else "",
-        },
+        user=None,
+        redirect_uri=redirect_uri,
+        state=state,
+        client_id=client_id,
+        code_challenge=code_challenge,
+        code_challenge_method=code_challenge_method,
     )
 
 
@@ -819,30 +1010,37 @@ def oauth_authorize_post(
     code_challenge: str = Form(""),
     code_challenge_method: str = Form("S256"),
 ):
+    problem = _check_redirect(client_id, redirect_uri)
+    if problem:
+        return _authorize_error(request, problem)
     user = current_user(request)
     if not user:
-        user = db.get_user_by_email(email)
-        if not user or not db.verify_password(user, password):
-            return templates.TemplateResponse(
+        user, error, _created = _sign_in_or_create(email, password)
+        if not user:
+            return _authorize_page(
                 request,
-                "oauth_authorize.html",
-                {
-                    "user": None,
-                    "title": "Authorize Bring Fast",
-                    "redirect_uri": redirect_uri,
-                    "state": state,
-                    "client_id": client_id,
-                    "code_challenge": code_challenge,
-                    "code_challenge_method": code_challenge_method,
-                    "email": email,
-                    "error": "Wrong email or password",
-                },
+                user=None,
+                redirect_uri=redirect_uri,
+                state=state,
+                client_id=client_id,
+                code_challenge=code_challenge,
+                code_challenge_method=code_challenge_method,
+                email=(email or "").strip(),
+                error=error,
                 status_code=401,
             )
-        request.session["uid"] = user["id"]
-    if not redirect_uri or not _safe_redirect(redirect_uri):
-        return RedirectResponse("/", status_code=303)
+        _sign_in(request, user)
     return _issue_code(user, redirect_uri, client_id, code_challenge, code_challenge_method, state)
+
+
+def _token_response(user: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "access_token": user["mcp_token"],
+        "refresh_token": user["mcp_token"],
+        "token_type": "bearer",
+        "expires_in": 86400 * 30,
+        "scope": "mcp",
+    }
 
 
 @app.post("/oauth/token")
@@ -864,6 +1062,13 @@ async def oauth_token(request: Request):
     code = form.get("code") or ""
     redirect_uri = form.get("redirect_uri") or ""
     verifier = form.get("code_verifier") or ""
+    if grant == "refresh_token":
+        # The MCP token is long lived, so a refresh just re-issues the same one
+        # instead of dropping the connector back to a login screen.
+        refreshed = db.get_user_by_token(str(form.get("refresh_token") or ""))
+        if not refreshed:
+            return JSONResponse({"error": "invalid_grant"}, status_code=400)
+        return _token_response(refreshed)
     if grant and grant != "authorization_code":
         return JSONResponse({"error": "unsupported_grant_type"}, status_code=400)
     user = db.consume_oauth_code(code, redirect_uri or None)
@@ -884,12 +1089,7 @@ async def oauth_token(request: Request):
                 return JSONResponse({"error": "invalid_grant", "error_description": "pkce failed"}, status_code=400)
         elif verifier != challenge:
             return JSONResponse({"error": "invalid_grant", "error_description": "pkce failed"}, status_code=400)
-    return {
-        "access_token": user["mcp_token"],
-        "token_type": "bearer",
-        "expires_in": 86400 * 30,
-        "scope": "mcp",
-    }
+    return _token_response(user)
 
 
 def main() -> None:
