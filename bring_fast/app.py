@@ -224,6 +224,26 @@ def clear_retailer(request: Request, retailer: str):
     return RedirectResponse("/", status_code=303)
 
 
+@app.post("/retailers/{retailer}/check")
+def check_retailer(request: Request, retailer: str):
+    """Try the saved store login now, instead of finding out during a checkout."""
+    user = current_user(request)
+    store = db.store_meta(retailer)
+    if not user or not store:
+        return RedirectResponse("/", status_code=303)
+    creds = db.get_retailer_secret(user["id"], retailer) or {}
+    result = checkout.verify_login(
+        store=retailer,
+        email=creds.get("email") or "",
+        password=creds.get("password") or "",
+    )
+    if result.get("ok"):
+        note = f"{store['name']}: login works" + (" (session reused)" if result.get("reused") else "")
+    else:
+        note = f"{store['name']}: {result.get('error') or 'login failed'}"
+    return RedirectResponse("/?" + urlencode({"notice": note}), status_code=303)
+
+
 @app.post("/rotate-token")
 def rotate(request: Request):
     user = current_user(request)
@@ -411,6 +431,8 @@ def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> s
     ctx["action"] = action
     ctx["official_count"] = live.get("official_count")
     ctx["official_ok"] = bool(live.get("ok"))
+    ctx["store_login_ok"] = bool(live.get("logged_in"))
+    ctx["store_session_reused"] = bool(live.get("session_reused"))
     if not live.get("ok"):
         return json.dumps(
             {
