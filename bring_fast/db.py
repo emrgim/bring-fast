@@ -220,12 +220,21 @@ def set_retailer_account(
         "SELECT secret, address FROM retailer_accounts WHERE user_id=? AND retailer=?",
         (user_id, retailer),
     ).fetchone()
+    prev = {}
+    if existing and existing["secret"]:
+        try:
+            prev = json.loads(f.decrypt(existing["secret"]).decode())
+        except Exception:
+            prev = {}
     if password:
-        blob = f.encrypt(json.dumps({"email": email, "password": password}).encode())
-    elif existing:
-        blob = existing["secret"]
-    else:
-        blob = f.encrypt(json.dumps({"email": email, "password": ""}).encode())
+        prev["email"] = email
+        prev["password"] = password
+    elif email:
+        prev["email"] = email
+        prev.setdefault("password", "")
+    blob = f.encrypt(json.dumps(prev).encode()) if prev else (
+        existing["secret"] if existing else f.encrypt(json.dumps({"email": email, "password": ""}).encode())
+    )
     addr = (address or "").strip() or (existing["address"] if existing else "")
     con.execute(
         """INSERT INTO retailer_accounts(user_id, retailer, email, secret, address)
@@ -247,15 +256,49 @@ def get_retailer_secret(user_id: int, retailer: str) -> dict[str, Any] | None:
     con.close()
     if not row:
         return None
-    data = {"email": row["email"], "password": "", "address": row["address"] or ""}
+    data = {"email": row["email"], "password": "", "address": row["address"] or "", "auth_token": "", "store_user_id": ""}
     if row["secret"]:
         try:
             payload = json.loads(_fernet().decrypt(row["secret"]).decode())
             data["email"] = payload.get("email") or data["email"]
             data["password"] = payload.get("password") or ""
+            data["auth_token"] = payload.get("auth_token") or ""
+            data["store_user_id"] = payload.get("store_user_id") or ""
         except Exception:
             pass
     return data
+
+
+def save_store_session(user_id: int, retailer: str, *, token: str, store_user_id: str) -> None:
+    """Keep the official-store API token next to the encrypted password."""
+    current = get_retailer_secret(user_id, retailer) or {}
+    email = current.get("email") or ""
+    password = current.get("password") or ""
+    f = _fernet()
+    blob = f.encrypt(
+        json.dumps(
+            {
+                "email": email,
+                "password": password,
+                "auth_token": token,
+                "store_user_id": store_user_id,
+            }
+        ).encode()
+    )
+    con = connect()
+    existing = con.execute(
+        "SELECT address FROM retailer_accounts WHERE user_id=? AND retailer=?",
+        (user_id, retailer),
+    ).fetchone()
+    addr = existing["address"] if existing else ""
+    con.execute(
+        """INSERT INTO retailer_accounts(user_id, retailer, email, secret, address)
+           VALUES (?,?,?,?,?)
+           ON CONFLICT(user_id, retailer) DO UPDATE SET secret=excluded.secret""",
+        (user_id, retailer, email, blob, addr),
+    )
+    con.commit()
+    con.close()
 
 
 def clear_retailer_account(user_id: int, retailer: str) -> None:
@@ -362,6 +405,15 @@ def save_cart(user_id: int, retailer: str, cart: dict[str, Any]) -> None:
            ON CONFLICT(user_id, retailer) DO UPDATE SET items_json=excluded.items_json""",
         (user_id, retailer, json.dumps(cart)),
     )
+    con.commit()
+    con.close()
+
+
+def purge_local_copies() -> None:
+    """Drop cached carts/orders. Only account links remain."""
+    con = connect()
+    con.execute("DELETE FROM carts")
+    con.execute("DELETE FROM orders")
     con.commit()
     con.close()
 

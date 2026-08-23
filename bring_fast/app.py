@@ -386,7 +386,14 @@ def _store_tools() -> list[dict[str, Any]]:
             [
                 {
                     "name": f"{sid}_search",
-                    "description": f"Search products at {name} only.",
+                    "description": (
+                        f"Search products at {name} only."
+                        + (
+                            " Returns sku, price, available from the official product page for the delivery area."
+                            if sid == "grandiose"
+                            else ""
+                        )
+                    ),
                     "inputSchema": {
                         "type": "object",
                         "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}},
@@ -396,8 +403,13 @@ def _store_tools() -> list[dict[str, Any]]:
                 {
                     "name": f"{sid}_cart",
                     "description": (
-                        f"{name} cart for THIS user only. action=list|add|set|remove|clear. "
-                        "Always returns the delivery address for this store."
+                        f"{name} official account cart. action=list|add|set|remove|clear. "
+                        + (
+                            "Magento official cart. Add only if the product page is in stock for IMPZ/Meaisam. "
+                            if sid == "grandiose"
+                            else ""
+                        )
+                        + "The only cart is the supermarket account. No local copy."
                     ),
                     "inputSchema": {
                         "type": "object",
@@ -440,22 +452,10 @@ def _ok(**kw):
     return json.dumps({"success": True, **kw}, ensure_ascii=False)
 
 
-def _last_order_address(orders: list[dict[str, Any]]) -> str | None:
-    for order in orders:
-        addr = (order.get("delivery_address") or "").strip()
-        if addr:
-            return addr
-    return None
-
-
 def _store_snapshot(user: dict[str, Any], retailer: str) -> dict[str, Any]:
     """Saved Bring Fast state. Does not invent or write a dashboard delivery address."""
     stores = {s["id"]: s for s in db.list_retailer_accounts(user["id"])}
     s = stores[retailer]
-    orders = db.list_orders(user["id"], retailer, 5)
-    last_cart = db.load_cart(user["id"], retailer)
-    last_items = last_cart.get("items") or []
-    last_addr = _last_order_address(orders)
     return {
         "store": s["name"],
         "store_id": retailer,
@@ -464,18 +464,14 @@ def _store_snapshot(user: dict[str, Any], retailer: str) -> dict[str, Any]:
         "linked": bool(s.get("linked")),
         "login_saved": bool(s.get("linked")),
         "login_email": s.get("login_email"),
-        "last_delivery_address": last_addr,
-        "address_source": "supermarket_order" if last_addr else "supermarket_account",
+        "delivery_address": s.get("delivery_address") or "",
         "address_note": (
-            "Delivery address is the one already saved on the supermarket account. "
-            "Do not change it on Bring Fast."
+            "The only cart is the official supermarket account cart. "
+            "Bring Fast does not keep a local or virtual cart."
         ),
         "delivery_instruction": "Leave with security. Do not ring, call, or leave at the door.",
         "cart_url": s.get("cart_url"),
         "checkout_url": s.get("checkout_url"),
-        "last_seen_cart": last_items,
-        "last_seen_count": sum(int(i.get("qty") or 1) for i in last_items),
-        "recent_orders": orders,
         "tools": [f"{retailer}_search", f"{retailer}_cart", f"{retailer}_checkout", f"{retailer}_status"],
     }
 
@@ -491,7 +487,8 @@ def _account_snapshot(user: dict[str, Any]) -> dict[str, Any]:
         "note": (
             "linked=true / login_saved=true means the supermarket login is saved. "
             "Do not say a store has no login when it is in linked_stores. "
-            "Delivery address lives on the supermarket account, not on Bring Fast."
+            "The only cart is the official store account cart. "
+            "Never invent or report a Bring Fast local cart or awaiting_official_payment order."
         ),
         "stores": stores,
     }
@@ -515,9 +512,8 @@ def _store_ctx(user: dict[str, Any], retailer: str, items: list | None = None, t
         "login_linked": snap["login_saved"],
         "login_saved": snap["login_saved"],
         "login_email": snap["login_email"],
-        "delivery_address": snap["last_delivery_address"],
-        "last_delivery_address": snap["last_delivery_address"],
         "delivery_note": snap["address_note"],
+        "delivery_address": snap.get("delivery_address") or "",
         "delivery_instruction": snap["delivery_instruction"],
         "cart_url": snap["cart_url"],
         "checkout_url": snap["checkout_url"],
@@ -525,8 +521,7 @@ def _store_ctx(user: dict[str, Any], retailer: str, items: list | None = None, t
         "item_count": sum(int(i.get("qty") or 1) for i in items),
         "currency": "AED",
         "estimated_total": round(total, 2) if total else None,
-        "cart_source": "store",
-        "recent_orders": snap["recent_orders"],
+        "cart_source": "official_account",
     }
 
 
@@ -550,22 +545,48 @@ def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> s
         ]
     elif action == "remove":
         payload = [{"id": str(args.get("product_id") or ""), "qty": 0}]
-    live = checkout.official_cart(
-        store=retailer,
-        email=creds.get("email") or "",
-        password=creds.get("password") or "",
-        action=action,
-        items=payload,
-    )
+    try:
+        live = checkout.official_cart(
+            store=retailer,
+            email=creds.get("email") or "",
+            password=creds.get("password") or "",
+            action=action,
+            items=payload,
+            timeout=25 if action == "list" else 40,
+            session_token=creds.get("auth_token") or "",
+            session_user=creds.get("store_user_id") or "",
+        )
+    except checkout.LiveCartTimeout as e:
+        ctx = _store_ctx(user, retailer, items=[])
+        ctx["action"] = action
+        ctx["official_count"] = None
+        ctx["official_ok"] = False
+        ctx["live_cart_ok"] = False
+        ctx["store_login_ok"] = None
+        return json.dumps(
+            {
+                "success": False,
+                **ctx,
+                "items": [],
+                "item_count": 0,
+                "what_happens": str(e),
+                "note": (
+                    "Official cart was not read. Bring Fast does not keep a local copy. "
+                    f"login_saved={ctx['login_saved']}."
+                ),
+            },
+            ensure_ascii=False,
+        )
     items = live.get("items") or []
-    if live.get("ok") and items:
-        db.save_cart(user["id"], retailer, {"items": items, "currency": "AED"})
+    if live.get("token") and live.get("user_id"):
+        db.save_store_session(user["id"], retailer, token=live["token"], store_user_id=str(live["user_id"]))
     ctx = _store_ctx(user, retailer, items=items)
     ctx["action"] = action
     ctx["official_count"] = live.get("official_count")
     ctx["official_ok"] = bool(live.get("ok"))
     ctx["store_login_ok"] = bool(live.get("logged_in"))
     ctx["store_session_reused"] = bool(live.get("session_reused"))
+    ctx["driver"] = live.get("driver") or "http"
     if not live.get("ok"):
         return json.dumps(
             {
@@ -599,21 +620,12 @@ def _checkout_store(user: dict[str, Any], sid: str) -> str:
         store=sid,
         email=creds.get("email") or "",
         password=creds.get("password") or "",
-        address=listed.get("delivery_address") or creds.get("address") or "",
+        address=creds.get("address") or "",
         items=listed.get("items") or [],
-    )
-    order = db.create_order(
-        user["id"],
-        sid,
-        listed.get("items") or [],
-        listed.get("delivery_address") or "",
-        live.get("final_url") or listed.get("checkout_url") or "",
     )
     listed.update(
         {
             "ready": bool(live.get("ok")),
-            "order_id": order["order_id"],
-            "status": live.get("stage") or order["status"],
             "payment_completed": bool(live.get("payment_completed")),
             "live_checkout": live,
             "checkout_url": live.get("final_url") or listed.get("checkout_url"),
@@ -701,7 +713,6 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
         sid = r["id"]
         if name == f"{sid}_search":
             result = catalog.search(sid, args.get("query") or "", int(args.get("limit") or 8))
-            result["delivery_address"] = _store_ctx(user, sid)["delivery_address"]
             result["store"] = r["name"]
             return json.dumps(result, ensure_ascii=False)
         if name == f"{sid}_cart":
@@ -716,20 +727,17 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
                     "linked": snap["login_saved"],
                     "login_saved": snap["login_saved"],
                     "login_email": snap["login_email"],
-                    "last_delivery_address": snap["last_delivery_address"],
                     "address_note": snap["address_note"],
-                    "recent_orders": snap["recent_orders"],
-                    "last_seen_cart": snap["last_seen_cart"],
                 }
             )
             if not listed.get("success"):
                 listed["success"] = True
                 listed["live_cart_ok"] = False
-                listed["items"] = listed.get("items") or snap["last_seen_cart"]
-                listed["item_count"] = listed.get("item_count") or snap["last_seen_count"]
+                listed["items"] = []
+                listed["item_count"] = 0
                 listed["what_happens"] = (
                     f"{snap['store']}: login_saved={snap['login_saved']}. "
-                    f"{listed.get('what_happens') or 'Live cart not read.'}"
+                    "Official cart was not read. No local copy exists."
                 )
             return json.dumps(listed, ensure_ascii=False)
     return json.dumps(
@@ -790,14 +798,14 @@ async def _dispatch(user: dict[str, Any], message: Any) -> dict[str, Any] | None
                 "serverInfo": {"name": "Bring Fast", "version": __version__},
                 "instructions": (
                     f"Bring Fast for {user['email']} only. "
-                    "Call bf_whoami first: it already lists linked supermarket logins, last official orders, "
-                    "and last seen carts. linked=true / login_saved=true means that store login is saved — "
+                    "Call bf_whoami first for linked supermarket logins only. "
+                    "linked=true / login_saved=true means that store login is saved — "
                     "never say the login is missing for a store in linked_stores. "
-                    "The delivery address is the one already on the supermarket account; do not change it on Bring Fast. "
+                    "The only cart is the official supermarket account cart. "
+                    "Never invent a local/virtual cart or report awaiting_official_payment. "
+                    "If the official cart cannot be read, say unread — do not use old local items. "
                     "Tools are split per store: carrefour_*, grandiose_*, waitrose_*, spinneys_* "
-                    "(search, cart, checkout, status). "
-                    "A live cart/status failure is not proof the login is missing. "
-                    "Checkout opens the official store; payment stays on the supermarket site."
+                    "(search, cart, checkout, status). Payment stays on the supermarket site."
                 ),
             },
         )

@@ -49,37 +49,9 @@ def search_carrefour(query: str, limit: int = 8) -> dict[str, Any]:
 
 
 def search_grandiose(query: str, limit: int = 8) -> dict[str, Any]:
-    # Magento catalog search page scrape-lite via search suggest if available
-    s = _session()
-    r = s.get(
-        "https://www.grandiose.ae/catalogsearch/result/",
-        params={"q": query},
-        timeout=25,
-    )
-    text = r.text
-    items = []
-    # crude product card extraction
-    import re
+    from bring_fast.stores import grandiose as api
 
-    for m in re.finditer(
-        r'href="(https://www\.grandiose\.ae/[^"]+)"[^>]*>\s*<[^>]+alt="([^"]+)"',
-        text,
-    ):
-        name = m.group(2)
-        if name.lower() in ("add to wish list",):
-            continue
-        items.append({"id": m.group(1).rstrip("/").split("/")[-1], "name": name, "price": None, "currency": "AED", "url": m.group(1)})
-        if len(items) >= limit:
-            break
-    # prices nearby
-    prices = re.findall(r"AED\s*([0-9]+(?:\.[0-9]+)?)", text)
-    for i, it in enumerate(items):
-        if i < len(prices):
-            try:
-                it["price"] = float(prices[i])
-            except ValueError:
-                pass
-    return {"retailer": "grandiose", "query": query, "results": items[:limit]}
+    return api.search(query, limit)
 
 
 def search_waitrose(query: str, limit: int = 8) -> dict[str, Any]:
