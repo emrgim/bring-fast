@@ -1,10 +1,12 @@
 {% extends "base.html" %}
 {% block body %}
-<h1>Connection stopped</h1>
-<p class="lead">Bring Fast non ha completato la connessione, così il tuo account resta protetto.</p>
-<div class="card">
-  <p>{{ error }}</p>
-  <p class="off">Riprova ad aggiungere il connettore MCP dall'app che stai collegando. Se l'errore resta, controlla l'URL del connettore.</p>
-  <p><a class="btn" href="/">Back to Bring Fast</a></p>
+<div class="auth-shell">
+  <h1>Connection <em>stopped</em></h1>
+  <p class="lead">Bring Fast did not complete the connection, so your account stays protected.</p>
+  <div class="card">
+    <p>{{ error }}</p>
+    <p class="off">Try adding the MCP connector again from the app you are connecting. If it still fails, check the connector URL.</p>
+    <p><a class="btn" href="/">Back to Bring Fast</a></p>
+  </div>
 </div>
 {% endblock %}

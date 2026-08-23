@@ -5,17 +5,18 @@ import json
 import os
 import secrets
 import sys
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlsplit
 
 from fastapi import FastAPI, Form, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import __version__, catalog, checkout, db
+from . import __version__, catalog, checkout, compare, db, purchases
 
 HOST = os.environ.get("BRINGFAST_HOST", "127.0.0.1")
 PORT = int(os.environ.get("BRINGFAST_PORT", "8877"))
@@ -79,28 +80,55 @@ def _sign_in(request: Request, user: dict[str, Any]) -> None:
 def _safe_next(target: str) -> str:
     """Only allow redirects back into this app, never to another host."""
     if not target or not target.startswith("/") or target.startswith("//"):
-        return "/"
+        return "/dashboard"
     return target
 
 
-def _sign_in_or_create(email: str, password: str) -> tuple[dict[str, Any] | None, str, bool]:
-    """One entry point for the whole product: sign in, or create the account on first use.
+_REMEMBER = ("/dashboard", "/purchases", "/stores")
 
-    Returns (user, error, created).
-    """
+
+def _remember(request: Request, user: dict[str, Any] | None) -> None:
+    if not user:
+        return
+    path = request.url.path
+    if not any(path == p or path.startswith(p + "/") for p in _REMEMBER):
+        return
+    db.set_last_view(user["id"], path, str(request.url.query or ""))
+
+
+def _last_url(user: dict[str, Any]) -> str:
+    rec = db.get_last_view(user["id"])
+    if not rec or not rec.get("path"):
+        return "/dashboard"
+    path = rec["path"]
+    if not any(path == p or path.startswith(p + "/") for p in _REMEMBER):
+        return "/dashboard"
+    q = rec.get("query") or ""
+    return path + (("?" + q) if q else "")
+
+
+def _authenticate(email: str, password: str, intent: str) -> tuple[dict[str, Any] | None, str, bool]:
+    """intent=signup creates only; intent=signin signs in only. Returns (user, error, created)."""
     email = (email or "").strip().lower()
     password = password or ""
+    intent = (intent or "signup").strip().lower()
+    if intent not in ("signup", "signin"):
+        intent = "signup"
     if not email or "@" not in email:
-        return None, "Enter the email address you want to use for Bring Fast.", False
+        return None, "Enter the email you want to use for Bring Fast.", False
     if not password:
         return None, "Enter your password.", False
     user = db.get_user_by_email(email)
-    if user:
+    if intent == "signin":
+        if not user:
+            return None, "No Bring Fast account for this email. Create one.", False
         if db.verify_password(user, password):
             return user, "", False
         return None, "That password does not match this Bring Fast account.", False
+    if user:
+        return None, "This email already has a Bring Fast account. Sign in.", False
     if len(password) < 6:
-        return None, f"No account yet for {email}. Pick a password of at least 6 characters to create it.", False
+        return None, "Password must be at least 6 characters.", False
     try:
         return db.create_user(email, password), "", True
     except ValueError as e:
@@ -114,16 +142,21 @@ def _login_page(
     email: str = "",
     next_url: str = "/",
     status_code: int = 200,
+    intent: str = "signup",
+    notice: str = "",
 ):
+    intent = "signin" if (intent or "").lower() == "signin" else "signup"
     return templates.TemplateResponse(
         request,
         "login.html",
         {
             "user": None,
-            "title": "Bring Fast",
+            "title": "Sign in · Bring Fast" if intent == "signin" else "Create account · Bring Fast",
             "error": error,
             "email": email,
             "next": _safe_next(next_url),
+            "intent": intent,
+            "notice": notice,
         },
         status_code=status_code,
     )
@@ -172,10 +205,54 @@ def mcp_url(request: Request | None = None) -> str:
 
 
 @app.get("/", response_class=HTMLResponse)
-def home(request: Request, next: str = "/", welcome: int = 0, notice: str = ""):
+def home(request: Request, next: str = "/", welcome: int = 0, notice: str = "", mode: str = ""):
     user = current_user(request)
     if not user:
-        return _login_page(request, next_url=next)
+        return _login_page(request, next_url=next, intent="signin" if mode == "signin" else "signup")
+    if welcome:
+        return RedirectResponse("/stores?welcome=1", status_code=303)
+    return RedirectResponse(_last_url(user), status_code=303)
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def spend_home(request: Request, range: str = "all", grain: str = "monthly"):
+    user = current_user(request)
+    if not user:
+        return RedirectResponse("/login?mode=signin&next=/dashboard", status_code=303)
+    grain = grain if grain in purchases.GRAINS else "monthly"
+    range_key = range if range in purchases.RANGES else "all"
+    since, until, range_key = purchases.resolve_window(user["id"], range_key)
+    raw_days = purchases.daily_spend(user["id"], since=since, until=until)
+    days = purchases.bucket_series(raw_days, grain)
+    top = purchases.list_products(user["id"], sort="spend", direction="desc", since=since, until=until)[:8]
+    trend = purchases.price_trend(user["id"], since=since, until=until, grain=grain)
+    _remember(request, user)
+    return templates.TemplateResponse(
+        request,
+        "home.html",
+        {
+            "user": user,
+            "title": "Dashboard · Bring Fast",
+            "tab": "dashboard",
+            "days": days,
+            "days_json": json.dumps(days),
+            "dash_spend": sum(d["spend"] for d in raw_days),
+            "dash_receipts": sum(d["count"] for d in raw_days),
+            "dash_days": len(raw_days),
+            "products": top,
+            "trend": trend,
+            "grain": grain,
+            "range": range_key,
+        },
+    )
+
+
+@app.get("/stores", response_class=HTMLResponse)
+def stores_page(request: Request, welcome: int = 0, notice: str = ""):
+    user = current_user(request)
+    if not user:
+        return RedirectResponse("/login?mode=signin&next=/stores", status_code=303)
+    _remember(request, user)
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -183,26 +260,27 @@ def home(request: Request, next: str = "/", welcome: int = 0, notice: str = ""):
             "user": user,
             "retailers": db.list_retailer_accounts(user["id"]),
             "mcp_url": mcp_url(request),
-            "title": "Bring Fast",
+            "title": "Stores · Bring Fast",
             "notice": (
-                f"Welcome to Bring Fast, {user['email']}. Link a store below and you are done."
+                f"Welcome to Bring Fast, {user['email']}. Link Grandiose below to start."
                 if welcome
                 else notice
             ),
+            "tab": "stores",
         },
     )
 
 
 @app.get("/login", response_class=HTMLResponse)
-def login_page(request: Request, next: str = "/"):
+def login_page(request: Request, next: str = "/", mode: str = ""):
     """A signed-in user never sees a login form again; they land where they were going."""
     if current_user(request):
         return RedirectResponse(_safe_next(next), status_code=303)
-    return _login_page(request, next_url=next)
+    return _login_page(request, next_url=next, intent="signin" if mode == "signin" else "signup")
 
 
-def _sign_in_response(request: Request, email: str, password: str, next_url: str):
-    user, error, created = _sign_in_or_create(email, password)
+def _sign_in_response(request: Request, email: str, password: str, next_url: str, intent: str = "signup"):
+    user, error, created = _authenticate(email, password, intent)
     if not user:
         return _login_page(
             request,
@@ -210,11 +288,12 @@ def _sign_in_response(request: Request, email: str, password: str, next_url: str
             email=(email or "").strip(),
             next_url=next_url,
             status_code=401,
+            intent=intent,
         )
     _sign_in(request, user)
     target = _safe_next(next_url)
-    if created and target == "/":
-        target = "/?welcome=1"
+    if created and target in ("/", "/dashboard"):
+        target = "/stores?welcome=1"
     return RedirectResponse(target, status_code=303)
 
 
@@ -224,14 +303,104 @@ def login(
     email: str = Form(""),
     password: str = Form(""),
     next: str = Form("/"),
+    intent: str = Form("signup"),
 ):
-    return _sign_in_response(request, email, password, next)
+    return _sign_in_response(request, email, password, next, intent)
 
 
 @app.api_route("/logout", methods=["GET", "POST"])
 def logout(request: Request):
     request.session.clear()
     return RedirectResponse("/", status_code=303)
+
+
+def _auth_page(request: Request, template: str, *, title: str, error: str = "", notice: str = "", token: str = "", status_code: int = 200):
+    return templates.TemplateResponse(
+        request,
+        template,
+        {"user": None, "title": title, "error": error, "notice": notice, "token": token},
+        status_code=status_code,
+    )
+
+
+@app.get("/forgot", response_class=HTMLResponse)
+def forgot_page(request: Request):
+    if current_user(request):
+        return RedirectResponse("/", status_code=303)
+    return _auth_page(request, "forgot.html", title="Forgot password · Bring Fast")
+
+
+@app.post("/forgot")
+def forgot_submit(request: Request, email: str = Form("")):
+    token = db.create_reset_token(email)
+    if token:
+        link = f"{_issuer(request)}/reset?token={token}"
+        try:
+            _send_reset_email((email or "").strip().lower(), link)
+        except Exception:
+            pass
+    return _auth_page(
+        request,
+        "forgot.html",
+        title="Forgot password · Bring Fast",
+        notice="If that email has a Bring Fast account, we sent a reset link. It expires in one hour.",
+    )
+
+
+@app.get("/reset", response_class=HTMLResponse)
+def reset_page(request: Request, token: str = ""):
+    if current_user(request):
+        return RedirectResponse("/", status_code=303)
+    if not token:
+        return _auth_page(request, "forgot.html", title="Forgot password · Bring Fast", error="Missing reset token.")
+    return _auth_page(request, "reset.html", title="Reset password · Bring Fast", token=token)
+
+
+@app.post("/reset")
+def reset_submit(request: Request, token: str = Form(""), password: str = Form("")):
+    user = db.consume_reset_token(token)
+    if not user:
+        return _auth_page(
+            request,
+            "forgot.html",
+            title="Forgot password · Bring Fast",
+            error="This reset link is invalid or expired. Request a new one.",
+            status_code=400,
+        )
+    try:
+        db.set_password(user["id"], password)
+    except ValueError as e:
+        return _auth_page(
+            request, "reset.html", title="Reset password · Bring Fast", token=token, error=str(e), status_code=400
+        )
+    return _login_page(request, notice="Password updated. Sign in.", intent="signin")
+
+
+def _send_reset_email(to_email: str, link: str) -> None:
+    helper = (
+        Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
+        / "skills/productivity/google-workspace/scripts/google_api.py"
+    )
+    if not helper.exists():
+        return
+    import subprocess
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(helper),
+            "gmail",
+            "send",
+            "--to",
+            to_email,
+            "--subject",
+            "Reset your Bring Fast password",
+            "--body",
+            f"Reset your Bring Fast password:\n\n{link}\n\nThis link expires in one hour.",
+        ],
+        check=False,
+        timeout=30,
+    )
 
 
 @app.api_route("/register", methods=["POST", "OPTIONS"])
@@ -254,6 +423,7 @@ async def register(request: Request):
         str(form.get("email") or ""),
         str(form.get("password") or ""),
         str(form.get("next") or "/"),
+        str(form.get("intent") or "signup"),
     )
 
 
@@ -299,7 +469,19 @@ def check_retailer(request: Request, retailer: str):
         note = f"{store['name']}: login works" + (" (session reused)" if result.get("reused") else "")
     else:
         note = f"{store['name']}: {result.get('error') or 'login failed'}"
-    return RedirectResponse("/?" + urlencode({"notice": note}), status_code=303)
+    return RedirectResponse("/stores?" + urlencode({"notice": note}), status_code=303)
+
+
+@app.post("/retailers/{retailer}/toggle")
+def toggle_retailer(request: Request, retailer: str):
+    user = current_user(request)
+    store = db.store_meta(retailer)
+    if not user or not store:
+        return RedirectResponse("/", status_code=303)
+    db.set_store_enabled(retailer, not db.is_store_enabled(retailer))
+    on = db.is_store_enabled(retailer)
+    note = f"{store['name']}: {'enabled' if on else 'disabled'}"
+    return RedirectResponse("/stores?" + urlencode({"notice": note}), status_code=303)
 
 
 @app.post("/rotate-token")
@@ -307,7 +489,171 @@ def rotate(request: Request):
     user = current_user(request)
     if user:
         db.rotate_token(user["id"])
-    return RedirectResponse("/", status_code=303)
+    return RedirectResponse("/stores", status_code=303)
+
+
+@app.get("/purchases", response_class=HTMLResponse)
+def purchases_page(
+    request: Request,
+    sort: str = "spend",
+    dir: str = "desc",
+    range: str = "all",
+    start: str = "",
+    end: str = "",
+    grain: str = "daily",
+    dept: str = "",
+):
+    user = current_user(request)
+    if not user:
+        return RedirectResponse("/login?mode=signin&next=/purchases", status_code=303)
+    if not request.query_params:
+        rec = db.get_last_view(user["id"])
+        if rec and rec.get("path") == "/purchases" and rec.get("query"):
+            return RedirectResponse("/purchases?" + rec["query"], status_code=303)
+    sort = sort if sort in purchases.SORTS else "spend"
+    direction = "asc" if dir == "asc" else "desc"
+    grain = grain if grain in purchases.GRAINS else "daily"
+    dept = purchases.normalize_dept(dept)
+    since, until, range_key = purchases.resolve_window(user["id"], range, start, end)
+    raw_days = purchases.daily_spend(user["id"], since=since, until=until, dept=dept)
+    days = purchases.bucket_series(raw_days, grain)
+    _remember(request, user)
+    return templates.TemplateResponse(
+        request,
+        "purchases.html",
+        {
+            "user": user,
+            "title": "Purchases · Bring Fast",
+            "tab": "purchases",
+            "products": purchases.list_products(
+                user["id"], sort=sort, direction=direction, since=since, until=until, dept=dept
+            ),
+            "days": days,
+            "days_json": json.dumps(days),
+            "dash_spend": sum(d["spend"] for d in raw_days),
+            "dash_receipts": sum(d["count"] for d in raw_days),
+            "dash_days": len(raw_days),
+            "stats": purchases.purchase_stats(user["id"]),
+            "sort": sort,
+            "dir": direction,
+            "range": range_key,
+            "grain": grain,
+            "dept": dept,
+            "start": start,
+            "end": end or until.isoformat(),
+        },
+    )
+
+
+@app.get("/purchases/{key:path}", response_class=HTMLResponse)
+def purchase_detail(request: Request, key: str, range: str = "all", start: str = "", end: str = ""):
+    user = current_user(request)
+    if not user:
+        return RedirectResponse("/login?mode=signin&next=/purchases", status_code=303)
+    since, until, range_key = purchases.resolve_window(user["id"], range, start, end)
+    product = purchases.product_purchases(user["id"], key, since=since, until=until)
+    if not product:
+        return RedirectResponse("/purchases", status_code=303)
+    _remember(request, user)
+    return templates.TemplateResponse(
+        request,
+        "purchase_detail.html",
+        {
+            "user": user,
+            "title": f"{product['name']} · Bring Fast",
+            "tab": "purchases",
+            "product": product,
+            "compare": compare.compare_board(user["id"], key, product.get("last_price")),
+            "range": range_key,
+            "start": start,
+            "end": end or until.isoformat(),
+        },
+    )
+
+
+@app.post("/purchases/{key:path}/compare/{retailer}")
+def refresh_compare(request: Request, key: str, retailer: str, range: str = "all", start: str = "", end: str = ""):
+    user = current_user(request)
+    if not user:
+        return RedirectResponse("/login?mode=signin&next=/purchases", status_code=303)
+    if not db.store_meta(retailer):
+        return RedirectResponse(f"/purchases/{key}", status_code=303)
+    product = purchases.product_purchases(user["id"], key)
+    if not product:
+        return RedirectResponse("/purchases", status_code=303)
+    names = [product.get("official_name") or "", product.get("receipt_name") or "", product.get("name") or ""]
+    compare.refresh_store(
+        user["id"],
+        key,
+        retailer,
+        product.get("barcodes") or ([product.get("barcode")] if product.get("barcode") else []),
+        names,
+        source="manual",
+    )
+    tail = f"?range={range}"
+    if range == "custom":
+        tail += f"&start={start}&end={end}"
+    return RedirectResponse(f"/purchases/{key}{tail}", status_code=303)
+
+
+@app.get("/receipts/{retailer}/{invoice_no}", response_class=HTMLResponse)
+def receipt_view(request: Request, retailer: str, invoice_no: str):
+    user = current_user(request)
+    if not user:
+        return RedirectResponse("/login?mode=signin", status_code=303)
+    path = purchases.receipt_path(retailer, invoice_no)
+    pages: list[int] = []
+    built = None
+    if path and path.suffix.lower() == ".pdf":
+        pages = list(range(1, len(purchases.receipt_page_pngs(path)) + 1))
+    elif path and path.suffix.lower() == ".html":
+        return FileResponse(path, media_type="text/html")
+    else:
+        built = purchases.invoice_receipt(user["id"], retailer, invoice_no)
+        if not built:
+            return Response("Receipt not found", status_code=404)
+    return templates.TemplateResponse(
+        request,
+        "receipt.html",
+        {
+            "title": f"Receipt {invoice_no}",
+            "user": user,
+            "retailer": retailer,
+            "invoice_no": invoice_no,
+            "pages": pages,
+            "built": built,
+        },
+    )
+
+
+@app.get("/receipts/{retailer}/{invoice_no}/file.pdf")
+def receipt_pdf(request: Request, retailer: str, invoice_no: str):
+    user = current_user(request)
+    if not user:
+        return RedirectResponse("/login?mode=signin", status_code=303)
+    path = purchases.receipt_path(retailer, invoice_no)
+    if not path:
+        return Response("Receipt not found", status_code=404)
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename=f"{invoice_no}.pdf",
+        content_disposition_type="inline",
+    )
+
+
+@app.get("/receipts/{retailer}/{invoice_no}/p/{n}")
+def receipt_page(request: Request, retailer: str, invoice_no: str, n: int):
+    user = current_user(request)
+    if not user:
+        return RedirectResponse("/login?mode=signin", status_code=303)
+    path = purchases.receipt_path(retailer, invoice_no)
+    if not path:
+        return Response("Receipt not found", status_code=404)
+    pngs = purchases.receipt_page_pngs(path)
+    if n < 1 or n > len(pngs):
+        return Response("Page not found", status_code=404)
+    return FileResponse(pngs[n - 1], media_type="image/png")
 
 
 @app.get("/health")
@@ -352,7 +698,10 @@ def _store_tools() -> list[dict[str, Any]]:
         },
         {
             "name": "bf_search",
-            "description": "Search one or all stores. retailer=carrefour|grandiose|waitrose|spinneys or omit to search all.",
+            "description": (
+                "Search ALL supermarkets for price comparison. "
+                "Orders (cart/checkout) only on Magento: Grandiose and Union Coop."
+            ),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -365,7 +714,10 @@ def _store_tools() -> list[dict[str, Any]]:
         },
         {
             "name": "bf_cart",
-            "description": "Cart alias. retailer=carrefour|grandiose|waitrose|spinneys. action=list|add|set|remove|clear.",
+            "description": (
+                "Official cart. retailer must be an enabled Magento store (grandiose or unioncoop). "
+                "Carrefour, Waitrose and Spinneys are search-only."
+            ),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -379,37 +731,53 @@ def _store_tools() -> list[dict[str, Any]]:
                 "required": ["retailer", "action"],
             },
         },
+        {
+            "name": "bf_compare",
+            "description": (
+                "Compare a cart or named items across stores. "
+                "source=grandiose reads the official Magento cart, then searches the other catalogs. "
+                "Search only — does not add anything. Orders stay on Grandiose/Union Coop."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string"},
+                    "against": {"type": "string", "description": "Comma-separated store ids, or omit for all"},
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer"},
+                },
+            },
+        },
     ]
     for r in db.RETAILERS:
         sid, name = r["id"], r["name"]
+        tools.append(
+            {
+                "name": f"{sid}_search",
+                "description": (
+                    f"Search products at {name}."
+                    + (
+                        " Magento: cart/checkout available if the store is enabled."
+                        if r.get("shop")
+                        else " Search only — not used for orders."
+                    )
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}},
+                    "required": ["query"],
+                },
+            }
+        )
+        if not (r.get("shop") and db.is_store_enabled(sid)):
+            continue
         tools.extend(
             [
                 {
-                    "name": f"{sid}_search",
-                    "description": (
-                        f"Search products at {name} only."
-                        + (
-                            " Returns sku, price, available from the official product page for the delivery area."
-                            if sid == "grandiose"
-                            else ""
-                        )
-                    ),
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}},
-                        "required": ["query"],
-                    },
-                },
-                {
                     "name": f"{sid}_cart",
                     "description": (
-                        f"{name} official account cart. action=list|add|set|remove|clear. "
-                        + (
-                            "Magento official cart. Add only if the product page is in stock for IMPZ/Meaisam. "
-                            if sid == "grandiose"
-                            else ""
-                        )
-                        + "The only cart is the supermarket account. No local copy."
+                        f"{name} official Magento cart. action=list|add|set|remove|clear. "
+                        "Orders only on Grandiose and Union Coop."
                     ),
                     "inputSchema": {
                         "type": "object",
@@ -426,18 +794,14 @@ def _store_tools() -> list[dict[str, Any]]:
                 {
                     "name": f"{sid}_checkout",
                     "description": (
-                        f"Run the official {name} checkout inside the Bring Fast server: "
-                        "login with this user's store account, add the cart on the live site, open checkout. "
-                        "Returns delivery address, live URL, and what happened."
+                        f"Prepare official {name} checkout on the Magento customer cart. "
+                        "Does not place the order until asked."
                     ),
                     "inputSchema": {"type": "object", "properties": {}},
                 },
                 {
                     "name": f"{sid}_status",
-                    "description": (
-                        f"Saved {name} state for THIS user: login saved?, last official orders, last seen cart. "
-                        "Then tries the live store cart. A live-cart failure does not mean the login is missing."
-                    ),
+                    "description": f"Saved {name} login and live official cart for THIS user.",
                     "inputSchema": {"type": "object", "properties": {}},
                 },
             ]
@@ -445,7 +809,8 @@ def _store_tools() -> list[dict[str, Any]]:
     return tools
 
 
-TOOLS = _store_tools()
+def tools_catalog() -> list[dict[str, Any]]:
+    return _store_tools()
 
 
 def _ok(**kw):
@@ -472,7 +837,17 @@ def _store_snapshot(user: dict[str, Any], retailer: str) -> dict[str, Any]:
         "delivery_instruction": "Leave with security. Do not ring, call, or leave at the door.",
         "cart_url": s.get("cart_url"),
         "checkout_url": s.get("checkout_url"),
-        "tools": [f"{retailer}_search", f"{retailer}_cart", f"{retailer}_checkout", f"{retailer}_status"],
+        "enabled": bool(s.get("enabled")),
+        "shop": bool(s.get("shop")),
+        "capabilities": ["search", "cart", "checkout"] if s.get("shop") else ["search"],
+        "tools": (
+            [f"{retailer}_search"]
+            + (
+                [f"{retailer}_cart", f"{retailer}_checkout", f"{retailer}_status"]
+                if s.get("shop") and s.get("enabled")
+                else []
+            )
+        ),
     }
 
 
@@ -488,6 +863,8 @@ def _account_snapshot(user: dict[str, Any]) -> dict[str, Any]:
             "linked=true / login_saved=true means the supermarket login is saved. "
             "Do not say a store has no login when it is in linked_stores. "
             "The only cart is the official store account cart. "
+            "Orders (add to cart / checkout) only on Magento: Grandiose and Union Coop. "
+            "Carrefour, Waitrose and Spinneys are search-only — not tested for orders. "
             "Never invent or report a Bring Fast local cart or awaiting_official_payment order."
         ),
         "stores": stores,
@@ -651,6 +1028,9 @@ def _normalize_tool(name: str, args: dict[str, Any]) -> tuple[str, dict[str, Any
         "whoami": "bf_whoami",
         "cart": "bf_cart",
         "add_to_cart": "bf_cart",
+        "compare": "bf_compare",
+        "compare_cart": "bf_compare",
+        "compare_prices": "bf_compare",
         "checkout": "bf_checkout",
         "status": "bf_status",
         "bf_retailers": "bf_stores",
@@ -675,13 +1055,45 @@ def _normalize_tool(name: str, args: dict[str, Any]) -> tuple[str, dict[str, Any
 
 
 def _search_stores(user: dict[str, Any], query: str, retailer: str, limit: int) -> str:
-    ids = [retailer] if retailer in {r["id"] for r in db.RETAILERS} else [r["id"] for r in db.RETAILERS]
+    all_ids = [r["id"] for r in db.RETAILERS]
+    if retailer and retailer not in all_ids:
+        return json.dumps({"success": False, "error": f"unknown retailer {retailer}", "stores": []}, ensure_ascii=False)
+    ids = [retailer] if retailer in all_ids else all_ids
     out = []
     for sid in ids:
         block = catalog.search(sid, query, limit)
         block["delivery_address"] = _store_ctx(user, sid)["delivery_address"]
+        block["shop"] = db.store_can_shop(sid)
         out.append(block)
     return json.dumps({"success": True, "query": query, "stores": out}, ensure_ascii=False)
+
+
+def _compare(user: dict[str, Any], args: dict[str, Any]) -> str:
+    source = (args.get("source") or args.get("retailer") or "").lower()
+    against_raw = args.get("against") or args.get("stores") or ""
+    targets = [p.strip() for p in str(against_raw).split(",") if p.strip()] if against_raw else None
+    items = args.get("items") if isinstance(args.get("items"), list) else []
+    q = (args.get("query") or args.get("q") or "").strip()
+    if source:
+        listed = json.loads(_mutate_cart(user, source, {"action": "list"}))
+        if not listed.get("success") and not listed.get("items"):
+            return json.dumps(
+                {"success": False, "error": listed.get("error") or f"Could not read {source} cart.", "items": []},
+                ensure_ascii=False,
+            )
+        items = listed.get("items") or []
+        source_total = listed.get("estimated_total")
+    elif q:
+        items = [{"name": q, "qty": 1}]
+        source_total = None
+    else:
+        return json.dumps({"success": False, "error": "Pass source=<store> (official cart) or query=...", "items": []})
+    if source and targets is None:
+        targets = [r["id"] for r in db.RETAILERS if r["id"] != source]
+    out = catalog.compare_items(items, targets=targets, limit=int(args.get("limit") or 3))
+    out["source"] = source or None
+    out["source_total"] = source_total
+    return json.dumps(out, ensure_ascii=False)
 
 
 def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
@@ -696,10 +1108,17 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
             (args.get("retailer") or args.get("store") or "").lower(),
             int(args.get("limit") or 6),
         )
+    if name == "bf_compare":
+        return _compare(user, args)
     if name == "bf_cart":
         retailer = (args.get("retailer") or args.get("store") or "").lower()
-        if retailer not in {r["id"] for r in db.RETAILERS}:
-            return json.dumps({"success": False, "error": "retailer required: carrefour|grandiose|waitrose|spinneys"})
+        if retailer not in {r["id"] for r in db.enabled_retailers()} or not db.store_can_shop(retailer):
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": "Cart only on Magento stores: grandiose or unioncoop. Others are search-only.",
+                }
+            )
         return _mutate_cart(user, retailer, args)
     if name == "bf_stores":
         snap = _account_snapshot(user)
@@ -714,12 +1133,34 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
         if name == f"{sid}_search":
             result = catalog.search(sid, args.get("query") or "", int(args.get("limit") or 8))
             result["store"] = r["name"]
+            result["shop"] = bool(r.get("shop"))
             return json.dumps(result, ensure_ascii=False)
         if name == f"{sid}_cart":
+            if not r.get("shop"):
+                return json.dumps(
+                    {
+                        "success": False,
+                        "error": f"{name} is search-only. Cart/checkout only on Grandiose and Union Coop.",
+                    }
+                )
             return _mutate_cart(user, sid, args)
         if name == f"{sid}_checkout":
+            if not r.get("shop"):
+                return json.dumps(
+                    {
+                        "success": False,
+                        "error": f"{name} is search-only. Cart/checkout only on Grandiose and Union Coop.",
+                    }
+                )
             return _checkout_store(user, sid)
         if name == f"{sid}_status":
+            if not r.get("shop"):
+                return json.dumps(
+                    {
+                        "success": False,
+                        "error": f"{name} is search-only. Cart/checkout only on Grandiose and Union Coop.",
+                    }
+                )
             snap = _store_snapshot(user, sid)
             listed = json.loads(_mutate_cart(user, sid, {"action": "list"}))
             listed.update(
@@ -744,8 +1185,8 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
         {
             "success": False,
             "error": f"unknown tool {name}",
-            "use": "bf_search with query=... or carrefour_search / grandiose_search / waitrose_search / spinneys_search",
-            "available": [t["name"] for t in TOOLS],
+            "use": "bf_search with query=... or grandiose_search / grandiose_cart",
+            "available": [t["name"] for t in tools_catalog()],
         }
     )
 
@@ -804,13 +1245,15 @@ async def _dispatch(user: dict[str, Any], message: Any) -> dict[str, Any] | None
                     "The only cart is the official supermarket account cart. "
                     "Never invent a local/virtual cart or report awaiting_official_payment. "
                     "If the official cart cannot be read, say unread — do not use old local items. "
-                    "Tools are split per store: carrefour_*, grandiose_*, waitrose_*, spinneys_* "
-                    "(search, cart, checkout, status). Payment stays on the supermarket site."
+                    "Search is available on every supermarket for price comparison. "
+                    "Orders (cart/checkout) only on Magento: Grandiose and Union Coop. "
+                    "Use bf_compare with source=grandiose to price the official cart elsewhere. "
+                    "Payment stays on the supermarket site."
                 ),
             },
         )
     if method == "tools/list":
-        return _rpc_result(rid, {"tools": TOOLS})
+        return _rpc_result(rid, {"tools": tools_catalog()})
     if method in ("resources/list", "prompts/list"):
         key = "resources" if method.startswith("resources") else "prompts"
         return _rpc_result(rid, {key: []})
@@ -1045,7 +1488,9 @@ def _authorize_page(
     email: str = "",
     error: str = "",
     status_code: int = 200,
+    intent: str = "signup",
 ):
+    intent = "signin" if (intent or "").lower() == "signin" else "signup"
     return templates.TemplateResponse(
         request,
         "oauth_authorize.html",
@@ -1059,6 +1504,7 @@ def _authorize_page(
             "code_challenge_method": code_challenge_method,
             "email": email or (user["email"] if user else ""),
             "error": error,
+            "intent": intent,
         },
         status_code=status_code,
     )
@@ -1100,6 +1546,7 @@ def oauth_authorize_post(
     request: Request,
     email: str = Form(""),
     password: str = Form(""),
+    intent: str = Form("signup"),
     redirect_uri: str = Form(""),
     state: str = Form(""),
     client_id: str = Form(""),
@@ -1111,7 +1558,7 @@ def oauth_authorize_post(
         return _authorize_error(request, problem)
     user = current_user(request)
     if not user:
-        user, error, _created = _sign_in_or_create(email, password)
+        user, error, _created = _authenticate(email, password, intent)
         if not user:
             return _authorize_page(
                 request,
@@ -1124,6 +1571,7 @@ def oauth_authorize_post(
                 email=(email or "").strip(),
                 error=error,
                 status_code=401,
+                intent=intent,
             )
         _sign_in(request, user)
     return _issue_code(user, redirect_uri, client_id, code_challenge, code_challenge_method, state)

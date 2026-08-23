@@ -1,20 +1,33 @@
 {% extends "base.html" %}
 {% block body %}
-<h1>Connect Bring Fast</h1>
-<p class="lead">Grok vuole usare il tuo account Bring Fast. Email e password: se l'account non esiste ancora lo creiamo e la connessione continua senza altri passaggi.</p>
-<div class="card">
-  <form method="post" action="/oauth/authorize">
-    <input type="hidden" name="redirect_uri" value="{{ redirect_uri }}"/>
-    <input type="hidden" name="state" value="{{ state }}"/>
-    <input type="hidden" name="client_id" value="{{ client_id }}"/>
-    <input type="hidden" name="code_challenge" value="{{ code_challenge }}"/>
-    <input type="hidden" name="code_challenge_method" value="{{ code_challenge_method }}"/>
-    <label>Email Bring Fast</label>
-    <input name="email" type="email" required value="{{ email or '' }}" autocomplete="username" autofocus/>
-    <label>Password Bring Fast (min 6)</label>
-    <input name="password" type="password" required minlength="6" autocomplete="current-password"/>
-    <p><button type="submit">Authorize Grok</button></p>
-    <p class="off">Grok vede solo i tuoi negozi. Il login del supermercato resta sulla dashboard.</p>
-  </form>
+<div class="auth-shell">
+  {% if intent == "signin" %}
+  <h1>Sign <em>in</em></h1>
+  <p class="lead">Grok wants to use your Bring Fast account.</p>
+  {% else %}
+  <h1>Create <em>account</em></h1>
+  <p class="lead">First time connecting Grok. Create Bring Fast, then the connector continues.</p>
+  {% endif %}
+  <div class="card">
+    <form method="post" action="/oauth/authorize">
+      <input type="hidden" name="redirect_uri" value="{{ redirect_uri }}"/>
+      <input type="hidden" name="state" value="{{ state }}"/>
+      <input type="hidden" name="client_id" value="{{ client_id }}"/>
+      <input type="hidden" name="code_challenge" value="{{ code_challenge }}"/>
+      <input type="hidden" name="code_challenge_method" value="{{ code_challenge_method }}"/>
+      <input type="hidden" name="intent" value="{{ intent }}"/>
+      <label>Email</label>
+      <input name="email" type="email" required value="{{ email or '' }}" autocomplete="username" autofocus/>
+      <label>Password</label>
+      <input name="password" type="password" required minlength="6" autocomplete="{{ 'current-password' if intent == 'signin' else 'new-password' }}"/>
+      <p><button type="submit">{% if intent == "signin" %}Sign in and authorize{% else %}Create account and authorize{% endif %}</button></p>
+    </form>
+    {% if intent == "signin" %}
+    <p class="switch">New here? Use create account on the main site first, then come back.</p>
+    {% else %}
+    <p class="switch">Already have an account? Submit again after changing nothing if this is a new email — or open Bring Fast and sign in first.</p>
+    {% endif %}
+    <p class="off">Grok only sees your enabled stores. Payment stays on the supermarket site.</p>
+  </div>
 </div>
 {% endblock %}

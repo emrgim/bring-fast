@@ -116,7 +116,7 @@ def test_failing_tool_stays_json_rpc(client, token):
     """A tool blowing up must not surface as an unparseable HTTP 500."""
     r = client.post("/mcp", headers=auth(token),
                     json={"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                          "params": {"name": "carrefour_cart",
+                          "params": {"name": "grandiose_cart",
                                      "arguments": {"action": "add", "product_id": "x", "qty": "two"}}})
     assert r.status_code == 200
     result = r.json()["result"]
@@ -149,7 +149,9 @@ def test_tools_list_is_reachable_after_the_handshake(client, token):
     tools = client.post("/mcp", headers=auth(token),
                         json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).json()["result"]["tools"]
     names = {t["name"] for t in tools}
-    assert {"bf_search", "bf_stores", "carrefour_cart", "spinneys_checkout"} <= names
+    assert {"bf_search", "bf_stores", "bf_compare", "grandiose_cart", "carrefour_search"} <= names
+    assert "carrefour_cart" not in names
+    assert "spinneys_checkout" not in names
     assert all(t["inputSchema"]["type"] == "object" for t in tools)
 
 

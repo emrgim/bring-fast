@@ -64,3 +64,14 @@ def test_official_cart_list_after_login(monkeypatch):
     assert out["items"][0]["name"] == "La Molisana Spaghetti No.15"
     assert out["items"][0]["available"] is True
     assert out["official_count"] == 1
+
+
+def test_official_checkout_empty_cart(monkeypatch):
+    from bring_fast.stores import grandiose as api
+
+    monkeypatch.setattr(api, "login", lambda e, p: {"ok": True, "token": "t", "user_id": "u", "error": None})
+    monkeypatch.setattr(api, "ensure_delivery_area", lambda: {"area_name": "IMPZ"})
+    monkeypatch.setattr(api, "customer_cart", lambda token: {"id": "c1", "items": []})
+    out = api.official_checkout(email="a@b.c", password="x")
+    assert out["ok"] is False
+    assert "empty" in (out.get("error") or "").lower()

@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="purchases-board">
+<div class="dash">
+  <div class="dash-top">
+    <div>
+      <h1>Purchases</h1>
+      <div class="dash-kpis">
+        <span><b>AED {{ '%.0f'|format(dash_spend) }}</b> spent</span>
+        <span><b>{{ dash_days }}</b> days</span>
+        <span><b>{{ dash_receipts }}</b> receipts</span>
+      </div>
+    </div>
+    <div class="grain">
+      {% for key, label in [('daily','Daily'),('weekly','Weekly'),('monthly','Monthly'),('yearly','Yearly')] %}
+      <a class="{% if grain==key %}on{% endif %}" href="/purchases?sort={{ sort }}&dir={{ dir }}&range={{ range }}&grain={{ key }}&dept={{ dept }}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}">{{ label }}</a>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="bars-scroller">
+  <div class="bars" id="spend-bars">
+    {% for d in days %}
+    <button type="button" class="bar {% if grain!='daily' %}wide{% endif %}" data-i="{{ loop.index0 }}" title="{{ d.label }} · AED {{ '%.2f'|format(d.spend) }}">
+      <i style="height:{{ d.pct }}%"></i>
+    </button>
+    {% endfor %}
+  </div>
+  </div>
+  <div class="pop" id="day-pop"></div>
+</div>
+
+<div class="filters">
+  {% for key, label in [('','All'),('Edible','Edible'),('Drinks','Drinks')] %}
+  <a class="{% if dept==key %}on{% endif %}" href="/purchases?sort={{ sort }}&dir={{ dir }}&range={{ range }}&grain={{ grain }}&dept={{ key }}">{{ label }}</a>
+  {% endfor %}
+  {% for key, label in [('1w','1 week'),('2w','2 weeks'),('1m','1 month'),('3m','3 months'),('1y','1 year'),('2y','2 years'),('3y','3 years'),('all','All')] %}
+  <a class="{% if range==key %}on{% endif %}" href="/purchases?sort={{ sort }}&dir={{ dir }}&range={{ key }}&grain={{ grain }}&dept={{ dept }}">{{ label }}</a>
+  {% endfor %}
+  <form method="get" action="/purchases">
+    <input type="hidden" name="sort" value="{{ sort }}"/>
+    <input type="hidden" name="dir" value="{{ dir }}"/>
+    <input type="hidden" name="range" value="custom"/>
+    <input type="hidden" name="grain" value="{{ grain }}"/>
+    <input type="hidden" name="dept" value="{{ dept }}"/>
+    <input type="date" name="start" value="{{ start }}"/>
+    <input type="date" name="end" value="{{ end }}"/>
+    <button type="submit">Apply</button>
+  </form>
+</div>
+
+<div class="table-wrap">
+  <table class="data">
+    <colgroup>
+      <col class="pic"/>
+      <col class="prod"/>
+      <col class="num"/>
+      <col class="num"/>
+      <col class="freq"/>
+      <col class="spent"/>
+    </colgroup>
+    <thead>
+      <tr>
+        <th></th>
+        <th class="{% if sort=='name' %}sort {{ dir }}{% endif %}">
+          <a href="/purchases?sort=name&dir={{ 'asc' if sort=='name' and dir=='desc' else 'desc' }}&range={{ range }}">Product</a>
+        </th>
+        <th class="{% if sort=='times' %}sort {{ dir }}{% endif %}">
+          <a href="/purchases?sort=times&dir={{ 'asc' if sort=='times' and dir=='desc' else 'desc' }}&range={{ range }}">Times</a>
+        </th>
+        <th class="{% if sort=='qty' %}sort {{ dir }}{% endif %}">
+          <a href="/purchases?sort=qty&dir={{ 'asc' if sort=='qty' and dir=='desc' else 'desc' }}&range={{ range }}">Units</a>
+        </th>
+        <th class="{% if sort=='frequency' %}sort {{ dir }}{% endif %}">
+          <a href="/purchases?sort=frequency&dir={{ 'asc' if sort=='frequency' and dir=='desc' else 'desc' }}&range={{ range }}">Frequency</a>
+        </th>
+        <th class="{% if sort=='spend' %}sort {{ dir }}{% endif %}">
+          <a href="/purchases?sort=spend&dir={{ 'asc' if sort=='spend' and dir=='desc' else 'desc' }}&range={{ range }}">Spent</a>
+        </th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for p in products %}
+      <tr class="rowlink" onclick="location.href='/purchases/{{ p.key }}?range={{ range }}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}'">
+        <td>
+          {% if p.image_url %}
+          <img class="thumb" src="{{ p.image_url }}" alt=""/>
+          {% else %}
+          <div class="thumb empty">{{ p.name[:1] }}</div>
+          {% endif %}
+        </td>
+        <td>
+          {{ p.name }}
+          {% if p.receipt_name and p.receipt_name != p.name %}
+          <div class="off">Receipt {{ p.receipt_name }}</div>
+          {% endif %}
+        </td>
+        <td>{{ p.times_bought }}</td>
+        <td>{{ '%.2f'|format(p.qty_total) }}</td>
+        <td>{{ p.frequency }}{% if p.per_year %} · {{ p.per_year }}/yr{% endif %}</td>
+        <td>AED {{ '%.2f'|format(p.spend_total) }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="off">No invoices in this range.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+</div>
+<script>
+(function(){
+  var days = {{ days_json|safe }};
+  var pop = document.getElementById("day-pop");
+  var bars = document.querySelectorAll("#spend-bars .bar");
+  bars.forEach(function(btn){
+    btn.addEventListener("click", function(){
+      var i = +btn.getAttribute("data-i");
+      var d = days[i];
+      if(!d) return;
+      bars.forEach(function(b){ b.classList.remove("on"); });
+      btn.classList.add("on");
+      var html = "<b>"+(d.label||d.date)+"</b> · AED "+d.spend.toFixed(2)+" · "+d.count+" receipt"+(d.count===1?"":"s");
+      d.invoices.forEach(function(inv){
+        var no = String(inv.invoice_no||"");
+        var label = "#"+no.slice(-10);
+        var link = '<a href="/receipts/'+inv.retailer+'/'+encodeURIComponent(no)+'" data-receipt="/receipts/'+inv.retailer+'/'+encodeURIComponent(no)+'">'+label+"</a>";
+        html += '<div class="row"><span>'+link+" · "+(inv.store||inv.retailer)+'</span><span>AED '+inv.spend.toFixed(2)+"</span></div>";
+      });
+      pop.innerHTML = html;
+      pop.classList.add("open");
+      pop.querySelectorAll("[data-receipt]").forEach(function(a){
+        a.addEventListener("click", function(e){
+          e.preventDefault();
+          var sheet=document.getElementById("receipt-sheet");
+          var frame=document.getElementById("receipt-frame");
+          if(!sheet||!frame){ location.href=a.getAttribute("data-receipt"); return; }
+          frame.src=a.getAttribute("data-receipt");
+          sheet.classList.add("open");
+        });
+      });
+    });
+  });
+})();
+</script>
+<div class="sheet" id="receipt-sheet">
+  <div class="sheet-panel">
+    <header>
+      <strong>Receipt</strong>
+      <button class="ghost" type="button" id="receipt-close">Close</button>
+    </header>
+    <iframe id="receipt-frame" title="Receipt"></iframe>
+  </div>
+</div>
+<script>
+(function(){
+  var sheet=document.getElementById("receipt-sheet");
+  var frame=document.getElementById("receipt-frame");
+  var close=document.getElementById("receipt-close");
+  if(!sheet||!close) return;
+  close.addEventListener("click", function(){ sheet.classList.remove("open"); frame.src=""; });
+  sheet.addEventListener("click", function(e){ if(e.target===sheet){ sheet.classList.remove("open"); frame.src=""; } });
+})();
+</script>
+{% endblock %}

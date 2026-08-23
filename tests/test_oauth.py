@@ -51,7 +51,7 @@ def test_new_user_completes_the_whole_flow_from_the_authorize_page(bf, client):
     client_id = register_client(client)
     page = client.get("/oauth/authorize", params=authorize_params(client_id))
     assert page.status_code == 200
-    assert "Authorize Grok" in page.text
+    assert "Create account and authorize" in page.text
 
     r = client.post(
         "/oauth/authorize",

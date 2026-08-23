@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Receipt {{ invoice_no }}</title>
+  <style>
+    html,body { margin:0; background:#1a1d27; color:#111; font-family:Outfit,sans-serif; }
+    img { display:block; width:100%; background:#fff; }
+    .miss { padding:24px; color:#eef3ff; }
+    .slip { background:#fff; margin:0; padding:18px 16px 28px; min-height:100vh; }
+    .slip h2 { margin:0 0 4px; font-size:18px; }
+    .slip .meta { color:#555; font-size:13px; margin:0 0 14px; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th { text-align:left; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:#666; padding:6px 0; border-bottom:1px solid #ddd; }
+    td { padding:8px 0; border-bottom:1px solid #eee; }
+    td.r, th.r { text-align:right; }
+    .tot { font-weight:800; font-size:16px; padding-top:12px; display:flex; justify-content:space-between; }
+  </style>
+</head>
+<body>
+{% if pages %}
+  {% for n in pages %}
+  <img src="/receipts/{{ retailer }}/{{ invoice_no }}/p/{{ n }}" alt="Receipt page {{ n }}"/>
+  {% endfor %}
+{% elif built %}
+  <div class="slip">
+    <h2>{{ built.store }}</h2>
+    <p class="meta">{{ built.invoice_date }} · #{{ built.order_no or built.invoice_no }}</p>
+    <table>
+      <thead><tr><th>Item</th><th class="r">Qty</th><th class="r">AED</th></tr></thead>
+      <tbody>
+      {% for it in built.items %}
+        <tr>
+          <td>{{ it.name }}</td>
+          <td class="r">{{ '%.2g'|format(it.qty) }}</td>
+          <td class="r">{{ '%.2f'|format(it.line_total) }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <div class="tot"><span>Total</span><span>AED {{ '%.2f'|format(built.total) }}</span></div>
+  </div>
+{% else %}
+  <object data="/receipts/{{ retailer }}/{{ invoice_no }}/file.pdf" type="application/pdf" style="width:100%;height:100vh">
+    <p class="miss"><a href="/receipts/{{ retailer }}/{{ invoice_no }}/file.pdf">Open PDF</a></p>
+  </object>
+{% endif %}
+</body>
+</html>

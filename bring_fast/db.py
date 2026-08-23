@@ -19,15 +19,6 @@ KEY_FILE = DATA / "master.key"
 
 RETAILERS = [
     {
-        "id": "carrefour",
-        "name": "Carrefour UAE",
-        "url": "https://www.carrefouruae.com/mafuae/en",
-        "logo": "/static/logos/carrefour.svg",
-        "color": "#004e9f",
-        "cart_url": "https://www.carrefouruae.com/mafuae/en",
-        "checkout_url": "https://www.carrefouruae.com/mafuae/en/cart",
-    },
-    {
         "id": "grandiose",
         "name": "Grandiose",
         "url": "https://www.grandiose.ae/",
@@ -35,6 +26,30 @@ RETAILERS = [
         "color": "#c9a227",
         "cart_url": "https://www.grandiose.ae/checkout/cart/",
         "checkout_url": "https://www.grandiose.ae/checkout/",
+        "enabled": True,
+        "shop": True,
+    },
+    {
+        "id": "unioncoop",
+        "name": "Union Coop",
+        "url": "https://www.unioncoop.ae/",
+        "logo": "/static/logos/unioncoop.svg",
+        "color": "#0b7a3e",
+        "cart_url": "https://www.unioncoop.ae/checkout/cart/",
+        "checkout_url": "https://www.unioncoop.ae/checkout/",
+        "enabled": False,
+        "shop": True,
+    },
+    {
+        "id": "carrefour",
+        "name": "Carrefour UAE",
+        "url": "https://www.carrefouruae.com/mafuae/en",
+        "logo": "/static/logos/carrefour.svg",
+        "color": "#004e9f",
+        "cart_url": "https://www.carrefouruae.com/mafuae/en",
+        "checkout_url": "https://www.carrefouruae.com/mafuae/en/cart",
+        "enabled": False,
+        "shop": False,
     },
     {
         "id": "waitrose",
@@ -44,6 +59,8 @@ RETAILERS = [
         "color": "#007a33",
         "cart_url": "https://www.waitrose.ae/en/",
         "checkout_url": "https://www.waitrose.ae/en/checkout/",
+        "enabled": False,
+        "shop": False,
     },
     {
         "id": "spinneys",
@@ -53,21 +70,30 @@ RETAILERS = [
         "color": "#8b1e3f",
         "cart_url": "https://www.spinneys.com/en-ae/",
         "checkout_url": "https://www.spinneys.com/en-ae/checkout/",
+        "enabled": False,
+        "shop": False,
     },
 ]
 
 
+def data_dir() -> Path:
+    return Path(os.environ.get("BRINGFAST_DATA", Path.home() / ".bring-fast"))
+
+
 def _fernet() -> Fernet:
-    DATA.mkdir(parents=True, exist_ok=True)
-    if not KEY_FILE.exists():
-        KEY_FILE.write_bytes(Fernet.generate_key())
-        KEY_FILE.chmod(0o600)
-    return Fernet(KEY_FILE.read_bytes())
+    root = data_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    key_file = root / "master.key"
+    if not key_file.exists():
+        key_file.write_bytes(Fernet.generate_key())
+        key_file.chmod(0o600)
+    return Fernet(key_file.read_bytes())
 
 
 def connect() -> sqlite3.Connection:
-    DATA.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(DB)
+    root = data_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(root / "bringfast.db")
     con.row_factory = sqlite3.Row
     con.execute(
         """CREATE TABLE IF NOT EXISTS users (
@@ -139,6 +165,87 @@ def connect() -> sqlite3.Connection:
     ):
         if col not in cols:
             con.execute(f"ALTER TABLE oauth_codes ADD COLUMN {col} {typ}")
+    con.execute(
+        """CREATE TABLE IF NOT EXISTS store_flags (
+            retailer TEXT PRIMARY KEY,
+            enabled INTEGER NOT NULL
+        )"""
+    )
+    existing = {r[0] for r in con.execute("SELECT retailer FROM store_flags").fetchall()}
+    for r in RETAILERS:
+        if r["id"] not in existing:
+            con.execute(
+                "INSERT INTO store_flags(retailer, enabled) VALUES (?,?)",
+                (r["id"], 1 if r.get("enabled") else 0),
+            )
+    con.execute(
+        """CREATE TABLE IF NOT EXISTS password_resets (
+            token TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            created_at INTEGER NOT NULL
+        )"""
+    )
+    con.execute(
+        """CREATE TABLE IF NOT EXISTS invoices (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            retailer TEXT NOT NULL,
+            invoice_no TEXT NOT NULL,
+            order_no TEXT,
+            invoice_date TEXT,
+            store_name TEXT,
+            gmail_id TEXT,
+            source_file TEXT,
+            UNIQUE(user_id, retailer, invoice_no)
+        )"""
+    )
+    con.execute(
+        """CREATE TABLE IF NOT EXISTS invoice_items (
+            id INTEGER PRIMARY KEY,
+            invoice_id INTEGER NOT NULL,
+            barcode TEXT,
+            name TEXT NOT NULL,
+            qty REAL NOT NULL,
+            unit_price REAL,
+            line_total REAL NOT NULL,
+            image_url TEXT,
+            product_key TEXT NOT NULL
+        )"""
+    )
+    con.execute(
+        """CREATE TABLE IF NOT EXISTS product_meta (
+            product_key TEXT PRIMARY KEY,
+            sku TEXT,
+            category TEXT,
+            official_name TEXT,
+            image_url TEXT,
+            source TEXT
+        )"""
+    )
+    con.execute(
+        """CREATE TABLE IF NOT EXISTS user_prefs (
+            user_id INTEGER PRIMARY KEY,
+            last_path TEXT,
+            last_query TEXT
+        )"""
+    )
+    con.execute(
+        """CREATE TABLE IF NOT EXISTS catalog_prices (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            product_key TEXT NOT NULL,
+            retailer TEXT NOT NULL,
+            price REAL,
+            found_name TEXT,
+            sku TEXT,
+            source TEXT,
+            error TEXT,
+            fetched_at TEXT NOT NULL
+        )"""
+    )
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_catalog_prices_lookup ON catalog_prices(user_id, product_key, retailer, fetched_at)"
+    )
     con.commit()
     return con
 
@@ -209,6 +316,64 @@ def rotate_token(user_id: int) -> str:
     con.commit()
     con.close()
     return token
+
+
+def set_password(user_id: int, password: str) -> None:
+    if len(password or "") < 6:
+        raise ValueError("password must be at least 6 characters")
+    con = connect()
+    con.execute("UPDATE users SET password_hash=? WHERE id=?", (hash_password(password), user_id))
+    con.commit()
+    con.close()
+
+
+def create_reset_token(email: str) -> str | None:
+    user = get_user_by_email(email)
+    if not user:
+        return None
+    token = secrets.token_urlsafe(32)
+    con = connect()
+    con.execute(
+        """CREATE TABLE IF NOT EXISTS password_resets (
+            token TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            created_at INTEGER NOT NULL
+        )"""
+    )
+    con.execute("DELETE FROM password_resets WHERE user_id=?", (user["id"],))
+    con.execute(
+        "INSERT INTO password_resets(token, user_id, created_at) VALUES (?,?,?)",
+        (token, user["id"], int(time.time())),
+    )
+    con.commit()
+    con.close()
+    return token
+
+
+def consume_reset_token(token: str, max_age: int = 3600) -> dict[str, Any] | None:
+    if not token:
+        return None
+    con = connect()
+    con.execute(
+        """CREATE TABLE IF NOT EXISTS password_resets (
+            token TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            created_at INTEGER NOT NULL
+        )"""
+    )
+    row = con.execute("SELECT user_id, created_at FROM password_resets WHERE token=?", (token.strip(),)).fetchone()
+    if not row:
+        con.close()
+        return None
+    if int(time.time()) - int(row["created_at"]) > max_age:
+        con.execute("DELETE FROM password_resets WHERE token=?", (token.strip(),))
+        con.commit()
+        con.close()
+        return None
+    con.execute("DELETE FROM password_resets WHERE token=?", (token.strip(),))
+    con.commit()
+    con.close()
+    return get_user_by_id(row["user_id"])
 
 
 def set_retailer_account(
@@ -321,6 +486,7 @@ def list_retailer_accounts(user_id: int) -> list[dict[str, Any]]:
         out.append(
             {
                 **r,
+                "enabled": is_store_enabled(r["id"]),
                 "linked": row is not None,
                 "login_email": row["email"] if row else None,
                 "delivery_address": (row["address"] if row else None) or "",
@@ -332,8 +498,40 @@ def list_retailer_accounts(user_id: int) -> list[dict[str, Any]]:
 def store_meta(retailer: str) -> dict[str, Any] | None:
     for r in RETAILERS:
         if r["id"] == retailer:
-            return r
+            return {**r, "enabled": is_store_enabled(retailer)}
     return None
+
+
+def is_store_enabled(retailer: str) -> bool:
+    default = next((bool(r.get("enabled")) for r in RETAILERS if r["id"] == retailer), False)
+    con = connect()
+    row = con.execute("SELECT enabled FROM store_flags WHERE retailer=?", (retailer,)).fetchone()
+    con.close()
+    if row is None:
+        return default
+    return bool(row["enabled"])
+
+
+def set_store_enabled(retailer: str, enabled: bool) -> None:
+    if retailer not in {r["id"] for r in RETAILERS}:
+        raise ValueError(f"unknown retailer {retailer}")
+    con = connect()
+    con.execute(
+        """INSERT INTO store_flags(retailer, enabled) VALUES (?,?)
+           ON CONFLICT(retailer) DO UPDATE SET enabled=excluded.enabled""",
+        (retailer, 1 if enabled else 0),
+    )
+    con.commit()
+    con.close()
+
+
+def enabled_retailers() -> list[dict[str, Any]]:
+    return [r for r in RETAILERS if is_store_enabled(r["id"])]
+
+
+def store_can_shop(retailer: str) -> bool:
+    """Cart/checkout only for Magento stores we tested: Grandiose and Union Coop."""
+    return bool(next((r.get("shop") for r in RETAILERS if r["id"] == retailer), False))
 
 
 def create_order(user_id: int, retailer: str, items: list, address: str, checkout_url: str) -> dict[str, Any]:
@@ -496,3 +694,21 @@ def get_oauth_client(client_id: str) -> dict[str, Any] | None:
     row = con.execute("SELECT * FROM oauth_clients WHERE client_id=?", (client_id,)).fetchone()
     con.close()
     return dict(row) if row else None
+
+
+def set_last_view(user_id: int, path: str, query: str = "") -> None:
+    con = connect()
+    con.execute(
+        """INSERT INTO user_prefs(user_id, last_path, last_query) VALUES (?,?,?)
+           ON CONFLICT(user_id) DO UPDATE SET last_path=excluded.last_path, last_query=excluded.last_query""",
+        (user_id, path, query or ""),
+    )
+    con.commit()
+    con.close()
+
+
+def get_last_view(user_id: int) -> dict[str, str] | None:
+    con = connect()
+    row = con.execute("SELECT last_path, last_query FROM user_prefs WHERE user_id=?", (user_id,)).fetchone()
+    con.close()
+    return {"path": row["last_path"] or "", "query": row["last_query"] or ""} if row else None

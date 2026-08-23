@@ -1,28 +1,39 @@
 {% extends "base.html" %}
 {% block body %}
-<h1>Store logins</h1>
-<p class="lead">Collega l’account di ogni supermercato. Restano solo sul tuo utente Bring Fast.</p>
+<h1>Your <em>stores</em></h1>
+<p class="lead">Search every store for comparisons. Orders only on Magento: Grandiose and Union Coop.</p>
 
 <div class="card mcp">
   <h2>Grok connector</h2>
-  <p class="off">URL MCP</p>
+  <p class="off">MCP URL</p>
   <p><code>{{ mcp_url }}</code></p>
-  <p class="off">Token personale (Authorization: Bearer) — non condividerlo</p>
+  <p class="off">Personal token — keep it private</p>
   <p class="token">{{ user.mcp_token }}</p>
   <form method="post" action="/rotate-token"><button class="ghost" type="submit">Generate new token</button></form>
 </div>
 
 <div class="grid">
 {% for r in retailers %}
-  <div class="card store" style="--store: {{ r.color }}">
+  <div class="card store{% if not r.enabled %} is-off{% endif %}" style="--store: {{ r.color }}">
     <div class="head">
       <img class="logo" src="{{ r.logo }}" alt="{{ r.name }} logo"/>
       <div>
-        <h2>{{ r.name }}</h2>
+        <h2>{{ r.name }}
+          {% if r.enabled %}<span class="pill on">On</span>{% else %}<span class="pill off">Off</span>{% endif %}
+          {% if r.shop %}<span class="pill on">Shop</span>{% else %}<span class="pill off">Search only</span>{% endif %}
+        </h2>
         <div class="site"><a href="{{ r.url }}" target="_blank" rel="noopener">{{ r.url }}</a></div>
         {% if r.linked %}<div class="ok">Linked · {{ r.login_email }}</div>{% else %}<div class="off">Not linked</div>{% endif %}
       </div>
     </div>
+    <form method="post" action="/retailers/{{ r.id }}/toggle">
+      <p class="split">
+        <button class="{% if r.enabled %}ghost danger{% endif %}" type="submit">
+          {% if r.enabled %}Disable {{ r.name }}{% else %}Enable {{ r.name }}{% endif %}
+        </button>
+      </p>
+    </form>
+    {% if r.enabled and r.shop %}
     <form method="post" action="/retailers/{{ r.id }}">
       <label>Username / email on {{ r.name }}</label>
       <input name="email" type="email" value="{{ r.login_email or '' }}" required placeholder="your store login"/>
@@ -39,6 +50,11 @@
       <form method="post" action="/retailers/{{ r.id }}/check"><button class="ghost" type="submit">Check login</button></form>
       <form method="post" action="/retailers/{{ r.id }}/clear"><button class="ghost" type="submit">Remove login</button></form>
     </div>
+    {% endif %}
+    {% elif r.enabled %}
+    <p class="off">Search only. Not Magento — no cart and no orders until we test it.</p>
+    {% else %}
+    <p class="off">Off. Hidden from MCP tools until you enable it.{% if not r.shop %} Search only when enabled.{% endif %}</p>
     {% endif %}
   </div>
 {% endfor %}

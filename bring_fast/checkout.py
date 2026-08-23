@@ -867,39 +867,8 @@ def run_checkout(
     if store == "grandiose":
         from bring_fast.stores import grandiose as grandiose_api
 
-        live = grandiose_api.official_cart(
-            email=email, password=password, action="list", items=[]
-        )
-        if not live.get("ok"):
-            return {
-                "ok": False,
-                "stage": "cart",
-                "driver": "magento",
-                "error": live.get("error") or "Grandiose official cart unread.",
-                "checkout_url": "https://www.grandiose.ae/checkout/",
-            }
-        if not live.get("items"):
-            return {
-                "ok": False,
-                "stage": "cart",
-                "driver": "magento",
-                "error": "Official Grandiose cart is empty.",
-                "checkout_url": "https://www.grandiose.ae/checkout/",
-            }
-        return {
-            "ok": True,
-            "stage": "checkout",
-            "driver": "magento",
-            "checkout_url": "https://www.grandiose.ae/checkout/",
-            "final_url": "https://www.grandiose.ae/checkout/",
-            "delivery_address": address,
-            "items_on_site": live.get("items") or [],
-            "payment_completed": False,
-            "what_happens": (
-                "Official Grandiose checkout is https://www.grandiose.ae/checkout/ "
-                "on the supermarket account. Payment stays on grandiose.ae."
-            ),
-        }
+        live = grandiose_api.official_checkout(email=email, password=password)
+        return live
     return _in_thread(
         _run_checkout_sync,
         store=store,

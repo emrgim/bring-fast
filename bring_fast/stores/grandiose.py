@@ -16,7 +16,9 @@ SITE = "https://www.grandiose.ae"
 GRAPHQL = f"{SITE}/graphql"
 TOKEN_URL = f"{SITE}/rest/V1/integration/customer/token"
 CONFIRM_URL = f"{SITE}/gagstore/deliverymode/confirm/"
+CHECKOUT_URL = f"{SITE}/checkout/"
 PACKAGE = "net.grandiose.retail"
+DELIVERY_NOTE = "Leave with security. Do not ring, call, or leave at the door."
 # Element Meaisam / Dubai Production City — same point as Carrefour.
 LAT = 25.0321285
 LNG = 55.1912732
@@ -531,4 +533,178 @@ def official_cart(
             "user_id": user_id,
             "area": (_AREA or {}).get("area_name"),
             "inventory_source": (_AREA or {}).get("inventory_source"),
+        }
+
+
+def customer_addresses(token: str) -> list[dict[str, Any]]:
+    data = graphql(
+        token,
+        """
+        query {
+          customer {
+            firstname lastname email
+            addresses {
+              id firstname lastname street city postcode country_code telephone
+              default_shipping default_billing
+              region { region region_code }
+            }
+          }
+        }
+        """,
+    )
+    cust = ((data.get("data") or {}).get("customer") or {})
+    rows = cust.get("addresses") or []
+    return [r for r in rows if isinstance(r, dict)]
+
+
+def prepare_checkout(*, token: str, address_id: int | None = None) -> dict[str, Any]:
+    """Bind official customer address + Home Delivery. Does not place the order."""
+    ensure_delivery_area()
+    cart = customer_cart(token)
+    cid = str(cart["id"])
+    items = parse_items(cart)
+    if not items:
+        raise StoreAPIError("Official Grandiose cart is empty.", status=409)
+    addrs = customer_addresses(token)
+    chosen = None
+    if address_id is not None:
+        chosen = next((a for a in addrs if int(a.get("id") or 0) == int(address_id)), None)
+    if chosen is None:
+        chosen = next((a for a in addrs if a.get("default_shipping")), addrs[0] if addrs else None)
+    if not chosen:
+        raise StoreAPIError("No saved Grandiose address on the customer account.", status=409)
+    aid = int(chosen["id"])
+    graphql(
+        token,
+        """
+        mutation($c: String!, $a: Int!) {
+          setShippingAddressesOnCart(input: { cart_id: $c, shipping_addresses: [{ customer_address_id: $a }] }) {
+            cart { id }
+          }
+        }
+        """,
+        {"c": cid, "a": aid},
+    )
+    graphql(
+        token,
+        """
+        mutation($c: String!, $a: Int!) {
+          setBillingAddressOnCart(input: { cart_id: $c, billing_address: { customer_address_id: $a } }) {
+            cart { id }
+          }
+        }
+        """,
+        {"c": cid, "a": aid},
+    )
+    graphql(
+        token,
+        """
+        mutation($c: String!) {
+          setShippingMethodsOnCart(
+            input: { cart_id: $c, shipping_methods: [{ carrier_code: "tablerate", method_code: "bestway" }] }
+          ) { cart { id } }
+        }
+        """,
+        {"c": cid},
+    )
+    try:
+        graphql(
+            token,
+            """
+            mutation($n: String!) {
+              setDeliveryInstructions(input: { instructions: $n })
+            }
+            """,
+            {"n": DELIVERY_NOTE},
+        )
+    except StoreAPIError:
+        pass
+    ready = graphql(
+        token,
+        """
+        query($c: String!) {
+          cart(cart_id: $c) {
+            id
+            email
+            total_quantity
+            available_payment_methods { code title }
+            selected_payment_method { code title }
+            prices { grand_total { value currency } }
+            shipping_addresses {
+              firstname lastname street city
+              selected_shipping_method { carrier_code method_code method_title amount { value currency } }
+              available_shipping_methods { carrier_code method_code method_title amount { value currency } }
+            }
+            billing_address { firstname lastname street city }
+            items {
+              id quantity
+              prices { price { value currency } row_total { value currency } }
+              product { sku name url_key }
+            }
+          }
+        }
+        """,
+        {"c": cid},
+    )
+    live = ((ready.get("data") or {}).get("cart") or {})
+    payments = live.get("available_payment_methods") or []
+    ship = (live.get("shipping_addresses") or [{}])[0]
+    total = ((live.get("prices") or {}).get("grand_total") or {})
+    pay_txt = ", ".join(f"{p.get('title')} ({p.get('code')})" for p in payments)
+    return {
+        "ok": True,
+        "stage": "payment",
+        "driver": "magento",
+        "checkout_url": CHECKOUT_URL,
+        "final_url": CHECKOUT_URL,
+        "payment_completed": False,
+        "placed": False,
+        "items": parse_items(live),
+        "delivery_address": " ".join(
+            str(x)
+            for x in (
+                chosen.get("firstname"),
+                chosen.get("lastname"),
+                " ".join(chosen.get("street") or []),
+                chosen.get("city"),
+            )
+            if x
+        ),
+        "delivery_instruction": DELIVERY_NOTE,
+        "shipping_method": (ship.get("selected_shipping_method") or {}),
+        "shipping_methods": ship.get("available_shipping_methods") or [],
+        "payment_methods": payments,
+        "grand_total": total.get("value"),
+        "currency": total.get("currency") or "AED",
+        "area": (_AREA or {}).get("area_name"),
+        "what_happens": (
+            "Official Grandiose cart is ready to pay. Methods on the account: "
+            + pay_txt
+            + ". Payment stays on grandiose.ae — no order is placed until you say so."
+        ),
+    }
+
+
+def official_checkout(*, email: str, password: str, session_token: str = "") -> dict[str, Any]:
+    token = session_token
+    if not token:
+        auth = login(email, password)
+        if not auth["ok"]:
+            return {
+                "ok": False,
+                "stage": "login",
+                "driver": "magento",
+                "error": auth.get("error") or "Grandiose login failed.",
+                "checkout_url": CHECKOUT_URL,
+            }
+        token = auth["token"]
+    try:
+        return prepare_checkout(token=token)
+    except StoreAPIError as e:
+        return {
+            "ok": False,
+            "stage": "checkout",
+            "driver": "magento",
+            "error": str(e),
+            "checkout_url": CHECKOUT_URL,
         }
