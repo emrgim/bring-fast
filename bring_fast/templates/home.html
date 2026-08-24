@@ -27,7 +27,15 @@
   </div>
 </div>
 
-<div class="trend {{ trend.direction }}">
+<div class="widgets">
+  <div class="trend daily-avg">
+    <div>
+      <div class="who">Daily average</div>
+      <div class="delta">AED {{ '%.2f'|format(daily_avg) }}</div>
+    </div>
+    <div class="who">per calendar day · {{ calendar_days }} days in this range</div>
+  </div>
+  <div class="trend {{ trend.direction }}">
   <div>
     <div class="who">Price trend</div>
     <div class="delta">{% if trend.direction == 'none' %}—{% else %}{{ '%+.1f'|format(trend.avg_pct) }}%{% endif %}</div>
@@ -36,6 +44,7 @@
     {% if trend.direction == 'up' %}Prices are rising{% elif trend.direction == 'down' %}Prices are falling{% elif trend.direction == 'flat' %}Prices are stable{% else %}Need two buys on a product{% endif %}<br/>
     <b>{{ trend.products }}</b> products · typical {{ '%+.1f'|format(trend.median_pct) }}% · {{ trend.up }} up · {{ trend.down }} down · {{ trend.flat }} flat
   </div>
+</div>
 </div>
 {% if trend.chart_svg %}
 <div class="card" style="margin:14px 0 0;padding:12px 10px 4px">{{ trend.chart_svg|safe }}</div>
@@ -47,7 +56,24 @@
   {% endfor %}
 </div>
 
-<div class="card table-wrap">
+<div class="mlist">
+  {% for p in products %}
+  <a class="mcard" href="/purchases/{{ p.key }}">
+    {% if p.image_url %}<img class="thumb" src="{{ p.image_url }}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer"/>{% else %}<div class="thumb empty">{{ p.name[:1] }}</div>{% endif %}
+    <div class="copy">
+      <b>{{ p.name }}</b>
+      <div class="pair">
+        <span>Frequency<b>{{ p.frequency }}</b></span>
+        <span>Likely<b>{{ p.likely or 0 }}</b></span>
+      </div>
+    </div>
+    <div class="amt">AED {{ '%.0f'|format(p.spend_total) }}<small>{{ p.times_bought }} buys</small></div>
+  </a>
+  {% else %}
+  <p class="off">No invoices yet.</p>
+  {% endfor %}
+</div>
+<div class="card table-wrap desk-table">
   <table class="data">
     <thead>
       <tr><th></th><th>Product</th><th>Times</th><th>Spent</th></tr>
@@ -56,7 +82,7 @@
     {% for p in products %}
       <tr class="rowlink" onclick="location.href='/purchases/{{ p.key }}'">
         <td>
-          {% if p.image_url %}<img class="thumb" src="{{ p.image_url }}" alt=""/>{% else %}<div class="thumb empty">{{ p.name[:1] }}</div>{% endif %}
+          {% if p.image_url %}<img class="thumb" src="{{ p.image_url }}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer"/>{% else %}<div class="thumb empty">{{ p.name[:1] }}</div>{% endif %}
         </td>
         <td>{{ p.name }}</td>
         <td>{{ p.times_bought }}</td>

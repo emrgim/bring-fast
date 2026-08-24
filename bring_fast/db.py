@@ -73,6 +73,28 @@ RETAILERS = [
         "enabled": False,
         "shop": False,
     },
+    {
+        "id": "mmi",
+        "name": "MMI",
+        "url": "https://www.mmihomedelivery.ae/",
+        "logo": "/static/logos/mmi.svg",
+        "color": "#1a1a1a",
+        "cart_url": "https://www.mmihomedelivery.ae/",
+        "checkout_url": "https://www.mmihomedelivery.ae/",
+        "enabled": False,
+        "shop": False,
+    },
+    {
+        "id": "africaneastern",
+        "name": "African + Eastern",
+        "url": "https://www.africaneasternonline.com/",
+        "logo": "/static/logos/africaneastern.svg",
+        "color": "#b11226",
+        "cart_url": "https://www.africaneasternonline.com/",
+        "checkout_url": "https://www.africaneasternonline.com/",
+        "enabled": False,
+        "shop": False,
+    },
 ]
 
 
@@ -240,7 +262,20 @@ def connect() -> sqlite3.Connection:
             sku TEXT,
             source TEXT,
             error TEXT,
-            fetched_at TEXT NOT NULL
+            fetched_at TEXT NOT NULL,
+            url TEXT
+        )"""
+    )
+    cols = {r[1] for r in con.execute("PRAGMA table_info(catalog_prices)").fetchall()}
+    if "url" not in cols:
+        con.execute("ALTER TABLE catalog_prices ADD COLUMN url TEXT")
+    meta_cols = {r[1] for r in con.execute("PRAGMA table_info(product_meta)").fetchall()}
+    if "official_ean" not in meta_cols:
+        con.execute("ALTER TABLE product_meta ADD COLUMN official_ean TEXT")
+    con.execute(
+        """CREATE TABLE IF NOT EXISTS product_aliases (
+            alias_key TEXT PRIMARY KEY,
+            canonical_key TEXT NOT NULL
         )"""
     )
     con.execute(

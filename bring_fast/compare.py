@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Callable
+from urllib.parse import urljoin, urlparse
 
 from . import catalog, db
 from .catalog import gtin_variants
@@ -13,6 +14,24 @@ SearchFn = Callable[[str, str, int], dict[str, Any]]
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _product_page(retailer: str, raw: str) -> str:
+    href = (raw or "").strip()
+    if not href:
+        return ""
+    if href.startswith("//"):
+        href = "https:" + href
+    if href.startswith("/"):
+        meta = db.store_meta(retailer) or {}
+        base = str(meta.get("url") or "").strip()
+        if not base:
+            return ""
+        href = urljoin(base if base.endswith("/") else base + "/", href.lstrip("/"))
+    parsed = urlparse(href)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return ""
+    return href
 
 
 def _money(raw: Any) -> float | None:
@@ -48,7 +67,15 @@ def _pick(results: list[dict[str, Any]], barcodes: list[str]) -> dict[str, Any] 
         score = 1
         if ean and any(ean == d or ean.startswith(d) or d.startswith(ean[:12] if len(ean) >= 12 else ean) for d in digits if d):
             score = 0
-        ranked.append({"price": price, "name": (hit.get("name") or "").strip(), "sku": str(hit.get("sku") or hit.get("ean") or hit.get("id") or ""), "score": score})
+        ranked.append(
+            {
+                "price": price,
+                "name": (hit.get("name") or "").strip(),
+                "sku": str(hit.get("sku") or hit.get("ean") or hit.get("id") or ""),
+                "url": str(hit.get("url") or "").strip(),
+                "score": score,
+            }
+        )
     ranked.sort(key=lambda r: r["score"])
     return ranked[0] if ranked else None
 
@@ -68,8 +95,15 @@ def quote_store(
             last_err = str(found["error"])
         hit = _pick(found.get("results") or [], barcodes)
         if hit:
-            return {"ok": True, "price": hit["price"], "found_name": hit["name"], "sku": hit["sku"], "error": ""}
-    return {"ok": False, "price": None, "found_name": "", "sku": "", "error": last_err or "not found"}
+            return {
+                "ok": True,
+                "price": hit["price"],
+                "found_name": hit["name"],
+                "sku": hit["sku"],
+                "url": _product_page(retailer, hit.get("url") or ""),
+                "error": "",
+            }
+    return {"ok": False, "price": None, "found_name": "", "sku": "", "url": "", "error": last_err or "not found"}
 
 
 def record_quote(
@@ -81,8 +115,8 @@ def record_quote(
 ) -> None:
     con = db.connect()
     con.execute(
-        """INSERT INTO catalog_prices(user_id, product_key, retailer, price, found_name, sku, source, error, fetched_at)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
+        """INSERT INTO catalog_prices(user_id, product_key, retailer, price, found_name, sku, source, error, fetched_at, url)
+           VALUES (?,?,?,?,?,?,?,?,?,?)""",
         (
             user_id,
             product_key,
@@ -93,6 +127,7 @@ def record_quote(
             source,
             quote.get("error") or "",
             _now(),
+            quote.get("url") or "",
         ),
     )
     con.commit()
@@ -118,7 +153,7 @@ def latest_quotes(user_id: int, product_key: str) -> dict[str, dict[str, Any]]:
     con = db.connect()
     rows = con.execute(
         """
-        SELECT retailer, price, found_name, sku, source, error, fetched_at
+        SELECT retailer, price, found_name, sku, source, error, fetched_at, url
         FROM catalog_prices
         WHERE user_id=? AND product_key=?
         ORDER BY fetched_at DESC, id DESC
@@ -155,6 +190,7 @@ def compare_board(user_id: int, product_key: str, paid: float | None) -> list[di
                 "found_name": rec.get("found_name") or "",
                 "fetched_at": rec.get("fetched_at") or "",
                 "error": rec.get("error") or "",
+                "url": _product_page(store["id"], rec.get("url") or "") if price else "",
                 "vs_paid": vs,
                 "cheapest": bool(price and lo is not None and float(price) == lo),
                 "dearest": bool(price and hi is not None and lo != hi and float(price) == hi),
@@ -170,7 +206,8 @@ def product_keys_for_user(user_id: int) -> list[dict[str, Any]]:
         SELECT it.product_key,
                MAX(it.name) AS receipt_name,
                MAX(it.barcode) AS barcode,
-               MAX(NULLIF(pm.official_name,'')) AS official_name
+               MAX(NULLIF(pm.official_name,'')) AS official_name,
+               MAX(NULLIF(pm.official_ean,'')) AS official_ean
         FROM invoice_items it
         JOIN invoices i ON i.id = it.invoice_id
         LEFT JOIN product_meta pm ON pm.product_key = it.product_key

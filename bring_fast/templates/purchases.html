@@ -48,7 +48,35 @@
   </form>
 </div>
 
-<div class="table-wrap">
+<div class="msort">
+  <a class="{% if sort=='spend' %}on{% endif %}" href="/purchases?sort=spend&dir=desc&range={{ range }}&grain={{ grain }}&dept={{ dept }}">Spent</a>
+  <a class="{% if sort=='frequency' %}on{% endif %}" href="/purchases?sort=frequency&dir=desc&range={{ range }}&grain={{ grain }}&dept={{ dept }}">Frequency</a>
+  <a class="{% if sort=='likely' %}on{% endif %}" href="/purchases?sort=likely&dir=desc&range={{ range }}&grain={{ grain }}&dept={{ dept }}">Likely</a>
+  <a class="{% if sort=='times' %}on{% endif %}" href="/purchases?sort=times&dir=desc&range={{ range }}&grain={{ grain }}&dept={{ dept }}">Times</a>
+  <a class="{% if sort=='name' %}on{% endif %}" href="/purchases?sort=name&dir=asc&range={{ range }}&grain={{ grain }}&dept={{ dept }}">Name</a>
+</div>
+<div class="mlist">
+  {% for p in products %}
+  <a class="mcard" href="/purchases/{{ p.key }}?range={{ range }}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}">
+    {% if p.image_url %}
+    <img class="thumb" src="{{ p.image_url }}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer"/>
+    {% else %}
+    <div class="thumb empty">{{ p.name[:1] }}</div>
+    {% endif %}
+    <div class="copy">
+      <b>{{ p.name }}</b>
+      <div class="pair">
+        <span>Frequency<b>{{ p.frequency }}{% if p.per_year %} · {{ p.per_year }}/yr{% endif %}</b></span>
+        <span>Likely<b>{{ p.likely or 0 }}</b></span>
+      </div>
+    </div>
+    <div class="amt">AED {{ '%.0f'|format(p.spend_total) }}<small>{{ p.times_bought }} buys</small></div>
+  </a>
+  {% else %}
+  <p class="off">No invoices in this range.</p>
+  {% endfor %}
+</div>
+<div class="table-wrap desk-table">
   <table class="data">
     <colgroup>
       <col class="pic"/>
@@ -56,6 +84,7 @@
       <col class="num"/>
       <col class="num"/>
       <col class="freq"/>
+      <col class="num"/>
       <col class="spent"/>
     </colgroup>
     <thead>
@@ -73,6 +102,9 @@
         <th class="{% if sort=='frequency' %}sort {{ dir }}{% endif %}">
           <a href="/purchases?sort=frequency&dir={{ 'asc' if sort=='frequency' and dir=='desc' else 'desc' }}&range={{ range }}">Frequency</a>
         </th>
+        <th class="{% if sort=='likely' %}sort {{ dir }}{% endif %}">
+          <a href="/purchases?sort=likely&dir={{ 'asc' if sort=='likely' and dir=='desc' else 'desc' }}&range={{ range }}">Likely</a>
+        </th>
         <th class="{% if sort=='spend' %}sort {{ dir }}{% endif %}">
           <a href="/purchases?sort=spend&dir={{ 'asc' if sort=='spend' and dir=='desc' else 'desc' }}&range={{ range }}">Spent</a>
         </th>
@@ -83,7 +115,7 @@
       <tr class="rowlink" onclick="location.href='/purchases/{{ p.key }}?range={{ range }}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}'">
         <td>
           {% if p.image_url %}
-          <img class="thumb" src="{{ p.image_url }}" alt=""/>
+          <img class="thumb" src="{{ p.image_url }}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer"/>
           {% else %}
           <div class="thumb empty">{{ p.name[:1] }}</div>
           {% endif %}
@@ -97,10 +129,11 @@
         <td>{{ p.times_bought }}</td>
         <td>{{ '%.2f'|format(p.qty_total) }}</td>
         <td>{{ p.frequency }}{% if p.per_year %} · {{ p.per_year }}/yr{% endif %}</td>
+        <td>{% if p.likely %}<b>{{ p.likely }}</b>{% else %}0{% endif %}</td>
         <td>AED {{ '%.2f'|format(p.spend_total) }}</td>
       </tr>
     {% else %}
-      <tr><td colspan="6" class="off">No invoices in this range.</td></tr>
+      <tr><td colspan="7" class="off">No invoices in this range.</td></tr>
     {% endfor %}
     </tbody>
   </table>

@@ -2,7 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+  <meta name="theme-color" content="#05060c"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
   <title>{{ title or "Bring Fast" }}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Outfit:wght@400;500;600;700&family=Syne:wght@600;700;800&display=swap" rel="stylesheet"/>
@@ -129,8 +132,7 @@
     table.data th a { color:inherit; display:block; padding:6px 0; min-height:36px; }
     .purchases-board {
       display:flex; flex-direction:column;
-      height:calc(100dvh - var(--sticky-top, 56px) - 12px);
-      min-height:280px; margin:0 -2px;
+      margin:0 -2px;
     }
     .purchases-board .filters { flex:0 0 auto; background:rgba(5,6,12,.92); padding:8px 0 12px; }
     .purchases-board .table-wrap {
@@ -162,6 +164,11 @@
     .compare-row .amt .vs.up { color:var(--bad); }
     .compare-row .amt .vs.down { color:#4ade80; }
     .compare-row button { padding:4px 8px; font-size:11px; }
+    .compare-row a.open {
+      padding:4px 8px; font-size:11px; color:var(--acc); text-decoration:none;
+      border:1px solid var(--line); border-radius:8px; white-space:nowrap;
+    }
+    .compare-row a.open:hover { border-color:var(--acc); }
     .prod-head .hero {
       width:120px; height:120px; border-radius:16px; object-fit:contain;
       background:#fff; flex:0 0 120px;
@@ -199,6 +206,9 @@
     .trend.flat .delta, .trend.none .delta { color:var(--muted); }
     .trend .who { color:var(--muted); font-size:12px; }
     .trend b { color:var(--ink); }
+    .widgets { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:14px; }
+    .widgets .trend { margin:0; }
+    .daily-avg .delta { color:var(--acc); font-size:28px; }
     .bars-scroller {
       overflow-x:auto; overflow-y:hidden;
       scrollbar-gutter: stable;
@@ -250,22 +260,108 @@
     .sheet-panel header { display:flex; justify-content:space-between; align-items:center; padding:12px 14px; }
     .sheet-panel iframe { flex:1; border:0; background:#fff; }
     @media (max-width:720px) {
-      h1 { font-size:28px; }
-      .lead { font-size:14px; margin-bottom:16px; }
-      .nav-right { gap:8px; }
-      .user { display:none; }
-      .tabs a { padding:6px 8px; font-size:11px; }
-      .card { padding:14px; border-radius:16px; }
+      html { -webkit-text-size-adjust:100%; }
+      body { padding-bottom: calc(72px + env(safe-area-inset-bottom)); }
+      .wrap { padding:10px 12px calc(88px + env(safe-area-inset-bottom)); }
+      nav.topnav {
+        margin:0 -12px 12px; padding:8px 12px calc(8px + env(safe-area-inset-top));
+        padding-top: max(8px, env(safe-area-inset-top));
+      }
+      nav.topnav .tabs, nav.topnav .user { display:none !important; }
+      nav.topnav .brand span { display:none; }
+      nav.topnav .brand b { font-size:18px; }
+      nav.topnav .mark { width:34px; height:34px; font-size:12px; border-radius:10px; }
+      h1 { font-size:26px; margin-bottom:8px; }
+      .purchases-board h1 { font-size:22px; }
+      .lead { font-size:14px; margin-bottom:14px; }
+      .card { padding:14px; border-radius:18px; }
       .logo { width:48px; height:48px; }
-      .grid { grid-template-columns:1fr; }
-      table.data { font-size:12px; }
-      .purchases-board table.data { min-width:640px; }
-      .purchases-board col.num { width:72px; }
-      .purchases-board col.freq { width:110px; }
-      .purchases-board col.spent { width:96px; }
-      table.data th, table.data td { padding:8px 6px; }
-      .thumb { width:36px; height:36px; }
-      .mcp .token { font-size:11px; }
+      .grid { grid-template-columns:1fr; gap:12px; }
+      .split > * { min-width:0; flex:1 1 100%; }
+      button.btn, a.btn, .card button, .filters button { min-height:44px; width:100%; text-align:center; }
+      .ghost { width:auto; }
+      .compare-row button, .compare-row a.open { width:auto; min-height:36px; }
+      button.bar, .bar {
+        width:auto !important; min-width:7px !important; min-height:0 !important;
+        flex:0 0 8px; height:72px;
+      }
+      .bars { height:72px; }
+      .purchases-board, .purchases-board .dash { height:auto !important; min-height:0 !important; display:block !important; overflow:visible !important; }
+      .filters {
+        flex-wrap:nowrap; overflow-x:auto; -webkit-overflow-scrolling:touch;
+        gap:6px; margin:0 -12px 12px; padding:0 12px 10px;
+        scrollbar-width:none;
+      }
+      .filters::-webkit-scrollbar { display:none; }
+      .filters a { flex:0 0 auto; padding:10px 14px; font-size:13px; }
+      .filters form { display:none; }
+      .grain { flex-wrap:nowrap; overflow-x:auto; }
+      .dash-kpis { gap:10px; font-size:12px; }
+      .dash-kpis b { font-size:16px; display:block; }
+      .dash-kpis span { flex:1 1 30%; }
+      .trend { flex-direction:column; align-items:flex-start; gap:8px; padding:12px; }
+      .widgets { grid-template-columns:1fr; }
+      .trend .delta { font-size:28px; }
+      .purchases-board {
+        height:auto; min-height:0; display:block;
+      }
+      .purchases-board .table-wrap, .desk-table { display:none !important; }
+      .mlist { display:flex; flex-direction:column; gap:8px; }
+      .mcard {
+        display:flex; gap:12px; align-items:center;
+        padding:12px; border:1px solid var(--line); border-radius:16px;
+        background:var(--card); color:inherit; min-height:72px;
+      }
+      .mcard .thumb { width:56px; height:56px; flex:0 0 56px; }
+      .mcard .copy { flex:1; min-width:0; }
+      .mcard .copy b { display:block; font-size:15px; line-height:1.25; font-weight:650; }
+      .mcard .copy .off { margin-top:2px; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .pair { display:flex; gap:6px; margin-top:6px; }
+      .pair span {
+        flex:1; min-width:0; border:1px solid var(--line); border-radius:8px;
+        padding:4px 6px; font-size:11px; line-height:1.2; color:var(--muted);
+      }
+      .pair b { display:block; color:var(--ink); font-size:12px; font-weight:800; }
+      .mcard .amt { text-align:right; font-weight:800; font-size:14px; white-space:nowrap; }
+      .mcard .amt small { display:block; font-weight:600; color:var(--muted); font-size:11px; }
+      .msort {
+        display:flex; gap:6px; overflow-x:auto; margin:0 0 10px; padding-bottom:4px;
+      }
+      .msort a {
+        flex:0 0 auto; color:var(--muted); border:1px solid var(--line);
+        border-radius:999px; padding:8px 12px; font-size:12px; font-weight:700;
+      }
+      .msort a.on { color:#061018; background:var(--acc); border-color:transparent; }
+      .prod-head { flex-direction:column; }
+      .prod-head .hero { width:96px; height:96px; flex-basis:96px; }
+      .prod-head h1 { font-size:22px; }
+      .compare { max-width:none; width:100%; }
+      .sheet-panel {
+        top:auto; right:0; left:0; height:88%; width:100%;
+        border-left:0; border-top:1px solid var(--line); border-radius:18px 18px 0 0;
+      }
+      .bars-scroller { display:none; }
+      .dock {
+        display:flex; position:fixed; left:0; right:0;
+        top:auto !important; bottom:0; height:auto;
+        z-index:200; margin:0 !important;
+        padding:6px 8px calc(8px + env(safe-area-inset-bottom));
+        background:rgba(5,6,12,.94); backdrop-filter:blur(18px);
+        border:0; border-top:1px solid var(--line);
+        align-items:stretch; justify-content:space-around;
+      }
+      .dock a {
+        flex:1; text-align:center; color:var(--muted); font-size:10px; font-weight:800;
+        letter-spacing:.08em; text-transform:uppercase; padding:8px 4px; border-radius:12px;
+      }
+      .dock a.on { color:var(--acc); background:rgba(103,232,249,.1); }
+    }
+    @media (min-width:721px) {
+      .mlist, .msort, .dock { display:none !important; }
+      .purchases-board {
+        height:calc(100dvh - var(--sticky-top, 56px) - 12px);
+        min-height:280px;
+      }
     }
     table.data th a { color:inherit; }
     table.data th.sort a { color:var(--acc); }
@@ -282,7 +378,7 @@
 </head>
 <body>
   <div class="wrap">
-    <nav>
+    <nav class="topnav">
       <a class="brand" href="/">
         <div class="mark">BF</div>
         <div><b>Bring Fast</b><span>Agent grocery</span></div>
@@ -302,9 +398,16 @@
     {% if notice %}<p class="notice">{{ notice }}</p>{% endif %}
     {% block body %}{% endblock %}
   </div>
+  {% if user %}
+  <footer class="dock" aria-label="Primary">
+    <a href="/dashboard" class="{% if tab == 'dashboard' %}on{% endif %}">Home</a>
+    <a href="/purchases" class="{% if tab == 'purchases' %}on{% endif %}">Buys</a>
+    <a href="/stores" class="{% if tab == 'stores' %}on{% endif %}">Stores</a>
+  </footer>
+  {% endif %}
   <script>
     (function(){
-      var nav=document.querySelector("nav");
+      var nav=document.querySelector("nav.topnav");
       if(!nav) return;
       function sync(){
         nav.classList.toggle("is-compact", window.scrollY>24);

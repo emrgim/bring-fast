@@ -110,6 +110,18 @@ def search_grandiose(query: str, limit: int = 8) -> dict[str, Any]:
     return api.search(query, limit)
 
 
+def search_mmi(query: str, limit: int = 8) -> dict[str, Any]:
+    from bring_fast.stores import mmi as api
+
+    return api.search(query, limit)
+
+
+def search_africaneastern(query: str, limit: int = 8) -> dict[str, Any]:
+    from bring_fast.stores import africaneastern as api
+
+    return api.search(query, limit)
+
+
 def _money(raw: Any) -> float | None:
     try:
         if raw is None or raw == "":
@@ -348,6 +360,8 @@ SEARCHERS = {
     "unioncoop": search_unioncoop,
     "waitrose": search_waitrose,
     "spinneys": search_spinneys,
+    "mmi": search_mmi,
+    "africaneastern": search_africaneastern,
 }
 
 

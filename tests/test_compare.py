@@ -3,7 +3,16 @@ from bring_fast import compare
 
 def _search(_retailer, query, _limit):
     if "5000112668209" in query or "Coca" in query:
-        return {"results": [{"name": "Coca-Cola Zero 2L", "price": 6.5, "ean": "5000112668209"}]}
+        return {
+            "results": [
+                {
+                    "name": "Coca-Cola Zero 2L",
+                    "price": 6.5,
+                    "ean": "5000112668209",
+                    "url": "https://www.carrefouruae.com/mafuae/en/p/123",
+                }
+            ]
+        }
     return {"results": []}
 
 
@@ -45,3 +54,8 @@ def test_reload_uses_live_search_stub(bf, client):
     assert "Grandiose" in html
     assert "Carrefour" in html
     assert "6.50" in html or "6.5" in html
+    assert 'href="https://www.carrefouruae.com/mafuae/en/p/123"' in html
+    assert html.count(">Page<") == 1
+    waitrose = [r for r in compare.compare_board(user["id"], "ean:5000112668209", 5.99) if r["id"] == "waitrose"][0]
+    assert waitrose["price"] is None
+    assert waitrose["url"] == ""

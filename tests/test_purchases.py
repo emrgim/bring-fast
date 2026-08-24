@@ -32,6 +32,8 @@ def test_purchases_tab_lists_parsed_invoice(bf, client):
     assert page.status_code == 200
     assert "Coca-Cola Zero Sugar" in page.text
     assert "AED 11.98" in page.text
+    assert "Likely" in page.text
+    assert "Frequency" in page.text
     detail = client.get("/purchases/ean:5000112668209")
     assert detail.status_code == 200
     assert "Carrefour City Center Meaisem" in detail.text
@@ -78,6 +80,119 @@ def test_official_title_does_not_replace_receipt_name(bf, client):
     stored = con.execute("SELECT name FROM invoice_items WHERE barcode=?", ("322802023202",)).fetchone()
     con.close()
     assert stored["name"] == "PRESIDENT BRI 200G"
+
+
+def test_official_ean_merges_till_codes_without_changing_receipts(bf):
+    user = bf.db.create_user("igor@example.com", "secret1")
+    bf.purchases.upsert_invoice(
+        user["id"],
+        {
+            "retailer": "carrefour",
+            "store_name": "Carrefour Meaisem",
+            "invoice_no": "c1",
+            "invoice_date": "2026-07-09",
+            "items": [
+                {
+                    "name": "IGOR GORG 150G",
+                    "qty": 1,
+                    "unit_price": 17.79,
+                    "line_total": 17.79,
+                    "barcode": "802139844388",
+                }
+            ],
+        },
+    )
+    bf.purchases.upsert_invoice(
+        user["id"],
+        {
+            "retailer": "grandiose",
+            "store_name": "Grandiose",
+            "invoice_no": "g1",
+            "invoice_date": "2025-08-31",
+            "items": [
+                {
+                    "name": "Igor Gorgonzola Dolce Cheese",
+                    "qty": 1,
+                    "unit_price": 21.5,
+                    "line_total": 21.5,
+                    "barcode": "8021398443882",
+                }
+            ],
+        },
+    )
+    key = bf.purchases.set_official_identity(
+        official_ean_code="8021398443882",
+        official_name="Igor Gorgonzola Dolce Cheese",
+        aliases=["802139844388"],
+        source="grandiose",
+    )
+    assert key == "ean:8021398443882"
+    listed = bf.purchases.list_products(user["id"])
+    igor = [p for p in listed if "igor" in p["name"].lower()]
+    assert len(igor) == 1
+    assert igor[0]["name"] == "Igor Gorgonzola Dolce Cheese"
+    assert igor[0]["times_bought"] == 2
+    detail = bf.purchases.product_purchases(user["id"], "ean:802139844388")
+    assert detail["key"] == "ean:8021398443882"
+    assert detail["name"] == "Igor Gorgonzola Dolce Cheese"
+    assert "802139844388" in detail["barcodes"]
+    assert "8021398443882" in detail["barcodes"]
+    assert detail["skus"] == ["8021398443882"]
+    con = bf.db.connect()
+    rows = con.execute("SELECT barcode, name FROM invoice_items ORDER BY barcode").fetchall()
+    con.close()
+    assert {(r["barcode"], r["name"]) for r in rows} == {
+        ("802139844388", "IGOR GORG 150G"),
+        ("8021398443882", "Igor Gorgonzola Dolce Cheese"),
+    }
+    assert bf.purchases.product_key("802139844388", "IGOR GORG 150G") == "ean:8021398443882"
+
+
+def test_backfill_merges_only_valid_ean_check_digit(bf):
+    user = bf.db.create_user("ean@example.com", "secret1")
+    bf.purchases.upsert_invoice(
+        user["id"],
+        {
+            "retailer": "carrefour",
+            "invoice_no": "a",
+            "invoice_date": "2026-01-01",
+            "items": [{"name": "COLA ZERO 2.26L", "qty": 1, "unit_price": 1, "line_total": 1, "barcode": "500011266820"}],
+        },
+    )
+    bf.purchases.upsert_invoice(
+        user["id"],
+        {
+            "retailer": "carrefour",
+            "invoice_no": "b",
+            "invoice_date": "2026-01-02",
+            "items": [{"name": "Rustic Coca-Cola Zero", "qty": 1, "unit_price": 1, "line_total": 1, "barcode": "5000112668209"}],
+        },
+    )
+    bf.purchases.upsert_invoice(
+        user["id"],
+        {
+            "retailer": "carrefour",
+            "invoice_no": "c",
+            "invoice_date": "2026-01-03",
+            "items": [{"name": "Shampoo Based Hair Color", "qty": 1, "unit_price": 1, "line_total": 1, "barcode": "3000000004615"}],
+        },
+    )
+    bf.purchases.upsert_invoice(
+        user["id"],
+        {
+            "retailer": "carrefour",
+            "invoice_no": "d",
+            "invoice_date": "2026-01-04",
+            "items": [{"name": "Country Bread Whole Wheat", "qty": 1, "unit_price": 1, "line_total": 1, "barcode": "3000000004617"}],
+        },
+    )
+    out = bf.purchases.backfill_official_identities(user_id=user["id"], lookup=False)
+    assert out["merged"] >= 1
+    cola = [p for p in bf.purchases.list_products(user["id"]) if "cola" in p["name"].lower() or "cola" in (p["receipt_name"] or "").lower()]
+    assert len(cola) == 1
+    assert cola[0]["times_bought"] == 2
+    bread = [p for p in bf.purchases.list_products(user["id"]) if "bread" in p["name"].lower() or "shampoo" in p["name"].lower()]
+    assert len(bread) == 2
 
 
 def test_receipt_pdf_requires_login_and_serves_file(bf, client, tmp_path):
@@ -443,6 +558,7 @@ def test_price_trend_is_mean_of_product_changes(bf, client):
     client.post("/login", data={"email": "trend@example.com", "password": "secret1", "intent": "signin"})
     html = client.get("/dashboard").text
     assert "Price trend" in html
+    assert "Daily average" in html
     assert "<svg" in html
 
 

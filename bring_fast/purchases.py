@@ -11,41 +11,237 @@ from . import db
 from .depts import classify_dept, normalize_dept
 
 
+def ean13_check_digit(body: str) -> str:
+    total = 0
+    for i, ch in enumerate(body):
+        total += int(ch) if i % 2 == 0 else int(ch) * 3
+    return str((10 - total % 10) % 10)
+
+
+def official_ean(raw: str) -> str:
+    digits = re.sub(r"\D+", "", raw or "")
+    if len(digits) == 13:
+        return digits
+    if len(digits) == 12:
+        return digits + ean13_check_digit(digits)
+    return digits
+
+
+def canonical_key(key: str) -> str:
+    key = (key or "").strip()
+    if not key:
+        return key
+    con = db.connect()
+    row = con.execute("SELECT canonical_key FROM product_aliases WHERE alias_key=?", (key,)).fetchone()
+    if row:
+        con.close()
+        return row["canonical_key"]
+    ean = key[4:] if key.startswith("ean:") else ""
+    full = official_ean(ean) if ean else ""
+    if full and full != ean:
+        cand = f"ean:{full}"
+        hit = con.execute("SELECT product_key FROM product_meta WHERE product_key=? OR official_ean=?", (cand, full)).fetchone()
+        alias = con.execute("SELECT canonical_key FROM product_aliases WHERE alias_key=?", (cand,)).fetchone()
+        con.close()
+        if alias:
+            return alias["canonical_key"]
+        if hit:
+            return hit["product_key"]
+        return key
+    if full:
+        hit = con.execute("SELECT product_key FROM product_meta WHERE official_ean=?", (full,)).fetchone()
+        con.close()
+        if hit:
+            return hit["product_key"]
+        return key
+    con.close()
+    return key
+
+
 def product_key(barcode: str, name: str) -> str:
     code = (barcode or "").strip()
     if code:
-        return f"ean:{code}"
+        return canonical_key(f"ean:{code}")
     slug = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")
-    return f"name:{slug}"
+    return canonical_key(f"name:{slug}")
 
 
 def upsert_product_meta(product_key: str, meta: dict[str, Any]) -> None:
+    key = canonical_key(product_key)
     con = db.connect()
     con.execute(
-        """INSERT INTO product_meta(product_key, sku, category, official_name, image_url, source)
-           VALUES (?,?,?,?,?,?)
+        """INSERT INTO product_meta(product_key, sku, category, official_name, image_url, source, official_ean)
+           VALUES (?,?,?,?,?,?,?)
            ON CONFLICT(product_key) DO UPDATE SET
              sku=excluded.sku,
              category=excluded.category,
              official_name=excluded.official_name,
              image_url=excluded.image_url,
-             source=excluded.source""",
+             source=excluded.source,
+             official_ean=excluded.official_ean""",
         (
-            product_key,
-            meta.get("sku") or "",
+            key,
+            meta.get("sku") or meta.get("official_ean") or "",
             meta.get("category") or "",
             meta.get("name") or "",
             meta.get("image_url") or "",
             meta.get("source") or "",
+            meta.get("official_ean") or meta.get("sku") or "",
         ),
     )
     con.commit()
     con.close()
 
 
-def get_product_meta(product_key: str) -> dict[str, Any] | None:
+def merge_product_keys(old_key: str, new_key: str) -> None:
+    if not old_key or not new_key or old_key == new_key:
+        return
     con = db.connect()
-    row = con.execute("SELECT * FROM product_meta WHERE product_key=?", (product_key,)).fetchone()
+    con.execute("UPDATE invoice_items SET product_key=? WHERE product_key=?", (new_key, old_key))
+    con.execute("UPDATE catalog_prices SET product_key=? WHERE product_key=?", (new_key, old_key))
+    con.execute(
+        "INSERT INTO product_aliases(alias_key, canonical_key) VALUES (?,?) "
+        "ON CONFLICT(alias_key) DO UPDATE SET canonical_key=excluded.canonical_key",
+        (old_key, new_key),
+    )
+    con.execute("DELETE FROM product_meta WHERE product_key=?", (old_key,))
+    con.commit()
+    con.close()
+
+
+def set_official_identity(
+    *,
+    official_ean_code: str,
+    official_name: str,
+    aliases: list[str] | None = None,
+    image_url: str = "",
+    source: str = "",
+) -> str:
+    ean = official_ean(official_ean_code)
+    key = f"ean:{ean}"
+    upsert_product_meta(
+        key,
+        {
+            "name": official_name,
+            "sku": ean,
+            "official_ean": ean,
+            "image_url": image_url,
+            "source": source or "official",
+        },
+    )
+    seen = {ean}
+    for raw in aliases or []:
+        extra = re.sub(r"\D+", "", raw or "")
+        if extra and extra not in seen:
+            merge_product_keys(f"ean:{extra}", key)
+            seen.add(extra)
+    return key
+
+
+def lookup_official_product(code: str) -> dict[str, Any] | None:
+    from bring_fast import catalog
+
+    hit = catalog.lookup_carrefour_gtin(code)
+    if hit and hit.get("name"):
+        ean = official_ean(str(hit.get("sku") or code))
+        hit["sku"] = ean or str(hit.get("sku") or "")
+        return hit
+    variants = catalog.gtin_variants(code) or [re.sub(r"\D+", "", code or "")]
+    want = {official_ean(code), *variants}
+    want.discard("")
+    for sid in ("grandiose", "carrefour"):
+        for q in variants:
+            try:
+                out = catalog.search(sid, q, 3)
+            except Exception:
+                continue
+            for h in out.get("results") or []:
+                name = (h.get("name") or "").strip()
+                ean = re.sub(r"\D+", "", str(h.get("ean") or h.get("sku") or ""))
+                if not name or not ean:
+                    continue
+                if ean in want or official_ean(ean) in want:
+                    return {
+                        "name": name,
+                        "sku": official_ean(ean) or ean,
+                        "image_url": h.get("image_url") or "",
+                        "source": sid,
+                    }
+    return None
+
+
+def backfill_official_identities(*, user_id: int | None = None, lookup: bool = True, sleep: float = 0.12) -> dict[str, int]:
+    import time
+
+    con = db.connect()
+    where = "WHERE ifnull(it.barcode,'')!=''"
+    args: list[Any] = []
+    if user_id:
+        where += " AND i.user_id=?"
+        args.append(user_id)
+    rows = con.execute(
+        f"""
+        SELECT DISTINCT it.product_key, it.barcode
+        FROM invoice_items it
+        JOIN invoices i ON i.id = it.invoice_id
+        {where}
+        """,
+        args,
+    ).fetchall()
+    con.close()
+    by_body: dict[str, set[str]] = {}
+    codes: set[str] = set()
+    for r in rows:
+        digits = re.sub(r"\D+", "", r["barcode"] or "")
+        if not digits:
+            continue
+        codes.add(digits)
+        if len(digits) >= 12:
+            by_body.setdefault(digits[:12], set()).add(digits)
+    merged = named = skipped = 0
+    for body, group in by_body.items():
+        if len(body) != 12:
+            continue
+        full = official_ean(body)
+        if full not in group:
+            continue
+        for short in group:
+            if short != full:
+                merge_product_keys(f"ean:{short}", f"ean:{full}")
+                merged += 1
+    if not lookup:
+        return {"merged": merged, "named": named, "skipped": skipped, "codes": len(codes)}
+    seen_full: set[str] = set()
+    for digits in sorted(codes):
+        full = official_ean(digits) if len(digits) in (12, 13) else digits
+        if not full or full in seen_full:
+            continue
+        seen_full.add(full)
+        meta = get_product_meta(f"ean:{full}") or get_product_meta(f"ean:{digits}") or {}
+        if (meta.get("official_name") or "").strip() and (meta.get("official_ean") or meta.get("sku") or "").strip():
+            skipped += 1
+            continue
+        hit = lookup_official_product(digits)
+        if not hit:
+            skipped += 1
+            time.sleep(sleep)
+            continue
+        set_official_identity(
+            official_ean_code=str(hit.get("sku") or full),
+            official_name=hit["name"],
+            aliases=[digits, full],
+            image_url=hit.get("image_url") or "",
+            source=hit.get("source") or "",
+        )
+        named += 1
+        time.sleep(sleep)
+    return {"merged": merged, "named": named, "skipped": skipped, "codes": len(codes)}
+
+
+def get_product_meta(product_key: str) -> dict[str, Any] | None:
+    key = canonical_key(product_key)
+    con = db.connect()
+    row = con.execute("SELECT * FROM product_meta WHERE product_key=?", (key,)).fetchone()
     con.close()
     return dict(row) if row else None
 
@@ -223,6 +419,7 @@ SORTS = {
     "times": lambda p: p["times_bought"],
     "qty": lambda p: p["qty_total"],
     "frequency": _freq_score,
+    "likely": lambda p: int(p.get("likely") or 0),
     "spend": lambda p: p["spend_total"],
 }
 
@@ -248,16 +445,39 @@ RANGES = {
     "3y": 1095,
     "all": None,
     "custom": None,
+    "this_month": None,
+    "last_month": None,
 }
+
+RANGE_ALIASES = {
+    "lastmonth": "last_month",
+    "prev_month": "last_month",
+    "previous_month": "last_month",
+    "mese_scorso": "last_month",
+    "last_calendar_month": "last_month",
+    "thismonth": "this_month",
+    "current_month": "this_month",
+    "mese": "this_month",
+}
+
+
+def normalize_range(range_key: str) -> str:
+    raw = (range_key or "").strip().lower().replace(" ", "_").replace("-", "_")
+    return RANGE_ALIASES.get(raw, raw if raw in RANGES else "all")
 
 
 def window(range_key: str, start: str = "", end: str = "") -> tuple[str | None, date, str]:
     until = _parse_day(end) or date.today()
-    key = range_key if range_key in RANGES else "all"
     if start:
         since = _parse_day(start)
         if since:
             return since.isoformat(), until, "custom"
+    key = normalize_range(range_key)
+    if key == "last_month":
+        last_prev = until.replace(day=1) - timedelta(days=1)
+        return last_prev.replace(day=1).isoformat(), last_prev, "last_month"
+    if key == "this_month":
+        return until.replace(day=1).isoformat(), until, "this_month"
     days = RANGES.get(key)
     if days:
         return (until - timedelta(days=days)).isoformat(), until, key
@@ -382,13 +602,39 @@ def list_products(
                 "dept": dept_label,
             }
         )
+    attach_likely(user_id, out, today=until)
     key = sort if sort in SORTS else "spend"
     reverse = (direction or "desc").lower() != "asc"
     out.sort(key=SORTS[key], reverse=reverse)
     return out
 
 
+def attach_likely(user_id: int, products: list[dict[str, Any]], *, today: date | None = None) -> list[dict[str, Any]]:
+    from bring_fast import forecast as fc
+
+    today = today or date.today()
+    classified = {}
+    for rec in fc.buy_history(user_id, until=today).values():
+        classified[rec["key"]] = fc.classify(
+            rec,
+            today=today,
+            excluded=False,
+            min_buys=fc.DEFAULTS["min_buys"],
+            max_interval_days=fc.DEFAULTS["max_interval_days"],
+            max_cv=fc.DEFAULTS["max_cv"],
+            ewma_alpha=fc.DEFAULTS["ewma_alpha"],
+            lapsed_factor=fc.DEFAULTS["lapsed_factor"],
+            max_last_age_days=fc.DEFAULTS["max_last_age_days"],
+        )
+    for p in products:
+        hab = classified.get(p.get("key") or "") or {}
+        p["likely"] = int(hab.get("score") or 0)
+        p["likely_reason"] = hab.get("reason") or ""
+    return products
+
+
 def product_purchases(user_id: int, key: str, since: str | None = None, until: date | None = None) -> dict[str, Any] | None:
+    key = canonical_key(key)
     con = db.connect()
     head = con.execute(
         """
@@ -450,7 +696,7 @@ def product_purchases(user_id: int, key: str, since: str | None = None, until: d
     freq, interval = _frequency(dates, times, since=_parse_day(since) if since else None, until=until)
     meta = get_product_meta(key) or {}
     barcodes = skus
-    catalog_sku = (meta.get("sku") or "").strip()
+    catalog_sku = (meta.get("official_ean") or meta.get("sku") or "").strip()
     sku_list = [catalog_sku] if catalog_sku else list(barcodes)
     receipt = head["name"] or ""
     official = (meta.get("official_name") or "").strip()
@@ -478,6 +724,8 @@ def product_purchases(user_id: int, key: str, since: str | None = None, until: d
         "times_bought": times,
         "dept": classify_dept(receipt, official),
     }
+    attach_likely(user_id, [out], today=until or date.today())
+    return out
 
 
 def price_chart_svg(series: list[dict[str, Any]]) -> str:
@@ -803,4 +1051,373 @@ def invoice_receipt(user_id: int, retailer: str, invoice_no: str) -> dict[str, A
         "invoice_date": row["invoice_date"] or "",
         "items": lines,
         "total": sum(float(it.get("line_total") or 0) for it in lines),
+    }
+
+
+def _median(vals: list[float]) -> float | None:
+    if not vals:
+        return None
+    ordered = sorted(vals)
+    n = len(ordered)
+    mid = n // 2
+    if n % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2.0
+
+
+def typical_unit_prices(user_id: int, since: str | None = None, until: date | None = None) -> dict[str, float]:
+    """Median unit price per product; drop piece-vs-kg (ratio outside 1/3–3×)."""
+    con = db.connect()
+    where = "WHERE i.user_id=?"
+    args: list[Any] = [user_id]
+    if since:
+        where += " AND i.invoice_date>=?"
+        args.append(since)
+    if until:
+        where += " AND i.invoice_date<=?"
+        args.append(until.isoformat())
+    rows = con.execute(
+        f"""
+        SELECT it.product_key, it.qty, it.unit_price, it.line_total
+        FROM invoice_items it
+        JOIN invoices i ON i.id = it.invoice_id
+        {where}
+        """,
+        args,
+    ).fetchall()
+    con.close()
+    buckets: dict[str, list[float]] = {}
+    for r in rows:
+        price = _unit_price(dict(r))
+        if price is None or price <= 0:
+            continue
+        buckets.setdefault(r["product_key"], []).append(price)
+    out: dict[str, float] = {}
+    for key, prices in buckets.items():
+        mid = _median(prices)
+        if mid is None or mid <= 0:
+            continue
+        kept = [p for p in prices if _same_price_unit(mid, p)]
+        typical = _median(kept or prices)
+        if typical is not None:
+            out[key] = round(typical, 2)
+    return out
+
+
+def _public_product(p: dict[str, Any]) -> dict[str, Any]:
+    interval = p.get("interval_days")
+    if interval is None or float(interval or 0) >= 10**8:
+        interval_out = None
+    else:
+        interval_out = round(float(interval), 1)
+    return {
+        "key": p.get("key"),
+        "name": p.get("name"),
+        "dept": p.get("dept"),
+        "typical_unit_aed": p.get("typical_unit_aed"),
+        "spend_total": round(float(p.get("spend_total") or 0), 2),
+        "times_bought": int(p.get("times_bought") or 0),
+        "frequency": p.get("frequency"),
+        "interval_days": interval_out,
+        "weighted_interval_days": p.get("weighted_interval_days"),
+        "mean_interval_days": p.get("mean_interval_days"),
+        "std_interval_days": p.get("std_interval_days"),
+        "cv": p.get("cv"),
+        "days_since": p.get("days_since"),
+        "likely": int(p.get("likely") or p.get("score") or 0),
+        "likely_reason": p.get("likely_reason") or p.get("reason"),
+        "score": p.get("score"),
+        "reason": p.get("reason"),
+        "first_buy": p.get("first_buy") or "",
+        "last_buy": p.get("last_buy") or "",
+        "next_due": p.get("next_due") or "",
+        "due_in_days": p.get("due_in_days"),
+        "status": p.get("status") or "unknown",
+    }
+
+
+def forecast_products(
+    user_id: int,
+    *,
+    since: str | None = None,
+    until: date | None = None,
+    dept: str = "",
+    today: date | None = None,
+) -> list[dict[str, Any]]:
+    today = today or date.today()
+    until = until or today
+    products = list_products(user_id, sort="frequency", direction="desc", since=since, until=until, dept=dept)
+    typical = typical_unit_prices(user_id, since=since, until=until)
+    out = []
+    for p in products:
+        p["typical_unit_aed"] = typical.get(p["key"])
+        last = _parse_day(p.get("last_buy"))
+        interval = float(p.get("interval_days") or 0)
+        times = int(p.get("times_bought") or 0)
+        if times < 2 or not last or not interval or interval >= 10**8:
+            p["next_due"] = ""
+            p["due_in_days"] = None
+            p["status"] = "unknown"
+        else:
+            nxt = last + timedelta(days=max(1, round(interval)))
+            p["next_due"] = nxt.isoformat()
+            p["due_in_days"] = (nxt - today).days
+            age = (today - last).days
+            if age > max(45, int(1.5 * interval)):
+                p["status"] = "lapsed"
+            elif p["due_in_days"] < 0:
+                p["status"] = "overdue"
+            elif p["due_in_days"] == 0:
+                p["status"] = "due_today"
+            elif p["due_in_days"] == 1:
+                p["status"] = "due_tomorrow"
+            else:
+                p["status"] = "upcoming"
+        out.append(p)
+    return out
+
+
+def shopping_list(
+    user_id: int,
+    *,
+    horizon_days: int = 7,
+    limit: int = 20,
+    dept: str = "",
+    today: date | None = None,
+    min_buys: int | None = None,
+    exclude: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    from bring_fast import forecast as fc
+
+    today = today or date.today()
+    horizon = max(0, int(horizon_days or 7))
+    skip_bits = ("plastic bag", "shopping bag", "plast shopping", "t shirt hndl bag")
+    extra = {e.strip().lower() for e in (exclude or []) if e and str(e).strip()}
+    blocked = fc.load_exclusions(user_id)
+    classified = {
+        rec["key"]: fc.classify(
+            rec,
+            today=today,
+            excluded=rec["key"] in blocked or rec["key"].lower() in extra or (rec.get("official_name") or rec.get("receipt_name") or "").lower() in extra,
+            min_buys=int(min_buys) if min_buys is not None else fc.DEFAULTS["min_buys"],
+            max_interval_days=fc.DEFAULTS["max_interval_days"],
+            max_cv=fc.DEFAULTS["max_cv"],
+            ewma_alpha=fc.DEFAULTS["ewma_alpha"],
+            lapsed_factor=fc.DEFAULTS["lapsed_factor"],
+            max_last_age_days=fc.DEFAULTS["max_last_age_days"],
+        )
+        for rec in fc.buy_history(user_id, until=today).values()
+    }
+    rows = []
+    for p in forecast_products(user_id, dept=dept, today=today):
+        if p.get("status") in ("unknown", "lapsed"):
+            continue
+        name = (p.get("name") or "").lower()
+        if any(bit in name for bit in skip_bits):
+            continue
+        last = _parse_day(p.get("last_buy"))
+        if last and (today - last).days > 90:
+            continue
+        due = p.get("due_in_days")
+        if due is None or due > horizon:
+            continue
+        if p.get("key") in blocked or (p.get("key") or "").lower() in extra or name in extra:
+            continue
+        hab = classified.get(p["key"]) or {}
+        p["likely"] = int(hab.get("score") or 0)
+        p["likely_reason"] = hab.get("reason") or "unknown"
+        p["score"] = p["likely"]
+        p["reason"] = p["likely_reason"]
+        p["weighted_interval_days"] = hab.get("weighted_interval_days")
+        p["mean_interval_days"] = hab.get("mean_interval_days")
+        p["std_interval_days"] = hab.get("std_interval_days")
+        p["cv"] = hab.get("cv")
+        p["days_since"] = hab.get("days_since")
+        rows.append(p)
+    rows.sort(key=lambda p: (-int(p.get("likely") or 0), int(p.get("due_in_days") or 0)))
+    return [_public_product(p) for p in rows[: max(1, min(int(limit or 20), 50))]]
+
+
+def ranked_products(
+    user_id: int,
+    *,
+    sort: str = "spend",
+    limit: int = 10,
+    dept: str = "",
+    range_key: str = "all",
+    today: date | None = None,
+) -> list[dict[str, Any]]:
+    today = today or date.today()
+    since, until, _ = resolve_window(user_id, range_key, end=today.isoformat())
+    rows = forecast_products(user_id, since=since, until=until, dept=dept, today=today)
+    if sort == "unit_price":
+        rows = [p for p in rows if p.get("typical_unit_aed") is not None]
+        rows.sort(key=lambda p: float(p["typical_unit_aed"]), reverse=True)
+    elif sort == "frequency":
+        rows.sort(key=_freq_score, reverse=True)
+    elif sort == "times":
+        rows.sort(key=lambda p: int(p.get("times_bought") or 0), reverse=True)
+    else:
+        rows.sort(key=lambda p: float(p.get("spend_total") or 0), reverse=True)
+    return [_public_product(p) for p in rows[: max(1, min(int(limit or 10), 50))]]
+
+
+def find_products(user_id: int, query: str, *, limit: int = 8, today: date | None = None) -> list[dict[str, Any]]:
+    q = re.sub(r"\s+", " ", (query or "").strip().lower())
+    if not q:
+        return []
+    today = today or date.today()
+    hits = []
+    for p in forecast_products(user_id, today=today):
+        blob = " ".join(
+            [
+                str(p.get("name") or ""),
+                str(p.get("receipt_name") or ""),
+                str(p.get("official_name") or ""),
+                str(p.get("barcode") or ""),
+                str(p.get("key") or ""),
+            ]
+        ).lower()
+        if q in blob:
+            score = 0 if (p.get("name") or "").lower() == q else 1
+            hits.append((score, -int(p.get("times_bought") or 0), p))
+    hits.sort(key=lambda t: (t[0], t[1]))
+    return [_public_product(t[2]) for t in hits[: max(1, min(int(limit or 8), 20))]]
+
+
+def spend_report(
+    user_id: int,
+    *,
+    range_key: str = "1m",
+    grain: str = "",
+    dept: str = "",
+    today: date | None = None,
+) -> dict[str, Any]:
+    today = today or date.today()
+    since, until, key = resolve_window(user_id, range_key, end=today.isoformat())
+    if not grain:
+        grain = "weekly" if key in ("1w", "2w", "1m") else "monthly"
+    days = daily_spend(user_id, since=since, until=until, dept=dept)
+    total = round(sum(d["spend"] for d in days), 2)
+    invoices = sum(int(d.get("count") or 0) for d in days)
+    first = first_invoice_date(user_id)
+    span_start = _parse_day(since) or first or until
+    span_days = max(1, (until - span_start).days + 1)
+    last_week_since, last_week_until, _ = window("1w", end=until.isoformat())
+    last_month_since, last_month_until, _ = window("1m", end=until.isoformat())
+    last_week = round(sum(d["spend"] for d in daily_spend(user_id, since=last_week_since, until=last_week_until, dept=dept)), 2)
+    last_month = round(sum(d["spend"] for d in daily_spend(user_id, since=last_month_since, until=last_month_until, dept=dept)), 2)
+    by_store: dict[str, float] = {}
+    for d in days:
+        for inv in d.get("invoices") or []:
+            store = inv.get("store") or inv.get("retailer") or "store"
+            by_store[store] = round(by_store.get(store, 0.0) + float(inv.get("spend") or 0), 2)
+    series = [
+        {"date": b["date"], "label": b.get("label") or b["date"], "spend": round(float(b["spend"]), 2), "invoices": int(b.get("count") or 0)}
+        for b in bucket_series(days, grain)
+    ]
+    return {
+        "currency": "AED",
+        "range": key,
+        "grain": grain if grain in GRAINS else "monthly",
+        "since": since,
+        "until": until.isoformat(),
+        "total": total,
+        "invoices": invoices,
+        "days": span_days,
+        "avg_per_week": round(total / (span_days / 7.0), 2),
+        "avg_per_month": round(total / (span_days / 30.437), 2),
+        "last_7_days": last_week,
+        "last_30_days": last_month,
+        "orders": list_orders(user_id, since=since, until=until, include_items=False, limit=80),
+        "by_store": [{"store": k, "spend": v} for k, v in sorted(by_store.items(), key=lambda kv: -kv[1])],
+        "series": series,
+    }
+
+
+def list_orders(
+    user_id: int,
+    *,
+    since: str | None = None,
+    until: date | None = None,
+    include_items: bool = True,
+    limit: int = 40,
+) -> list[dict[str, Any]]:
+    con = db.connect()
+    where = "WHERE i.user_id=?"
+    args: list[Any] = [user_id]
+    if since:
+        where += " AND i.invoice_date>=?"
+        args.append(since)
+    if until:
+        where += " AND i.invoice_date<=?"
+        args.append(until.isoformat())
+    rows = con.execute(
+        f"""
+        SELECT i.id, i.invoice_no, i.order_no, i.invoice_date, i.retailer, i.store_name,
+               COALESCE(SUM(it.line_total), 0) AS total,
+               COUNT(it.id) AS lines
+        FROM invoices i
+        LEFT JOIN invoice_items it ON it.invoice_id = i.id
+        {where}
+        GROUP BY i.id
+        ORDER BY i.invoice_date DESC, i.id DESC
+        LIMIT ?
+        """,
+        [*args, max(1, min(int(limit or 40), 100))],
+    ).fetchall()
+    out = []
+    for r in rows:
+        rec = {
+            "date": r["invoice_date"] or "",
+            "store": r["store_name"] or r["retailer"],
+            "retailer": r["retailer"],
+            "invoice_no": r["invoice_no"],
+            "order_no": r["order_no"] or "",
+            "total": round(float(r["total"] or 0), 2),
+            "lines": int(r["lines"] or 0),
+            "currency": "AED",
+        }
+        if include_items:
+            items = con.execute(
+                """SELECT name, qty, unit_price, line_total, barcode
+                   FROM invoice_items WHERE invoice_id=? ORDER BY id""",
+                (r["id"],),
+            ).fetchall()
+            rec["items"] = [
+                {
+                    "name": it["name"],
+                    "qty": float(it["qty"] or 0),
+                    "unit_price": float(it["unit_price"] or 0),
+                    "line_total": float(it["line_total"] or 0),
+                    "barcode": it["barcode"] or "",
+                }
+                for it in items
+            ]
+        out.append(rec)
+    con.close()
+    return out
+
+
+def orders_report(
+    user_id: int,
+    *,
+    range_key: str = "last_month",
+    include_items: bool = True,
+    limit: int = 40,
+    today: date | None = None,
+) -> dict[str, Any]:
+    today = today or date.today()
+    since, until, key = resolve_window(user_id, range_key, end=today.isoformat())
+    spend = spend_report(user_id, range_key=key, today=today)
+    orders = list_orders(user_id, since=since, until=until, include_items=include_items, limit=limit)
+    return {
+        "currency": "AED",
+        "range": key,
+        "since": since,
+        "until": until.isoformat(),
+        "total": spend["total"],
+        "order_count": spend["invoices"],
+        "returned": len(orders),
+        "orders": orders,
     }

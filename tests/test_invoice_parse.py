@@ -1,4 +1,10 @@
-from bring_fast.invoice_parse import parse_carrefour_text, parse_grandiose_text
+from bring_fast.invoice_parse import (
+    parse_africaneastern_html,
+    parse_carrefour_text,
+    parse_grandiose_confirmation_html,
+    parse_grandiose_text,
+    parse_mmi_text,
+)
 from bring_fast.sku_lookup import _human_cat
 
 
@@ -80,4 +86,46 @@ def test_parse_grandiose_confirmation_html():
     assert out["invoice_no"] == "order-110670729"
     assert out["items"][0]["line_total"] == 24.75
     assert out["items"][0]["qty"] == 0.25
+
+
+def test_parse_mmi_invoice_line():
+    text = """
+Invoice No: ARInv-12869998
+Invoice Date: 01-Apr-2026
+Customer Ref: 260401HVW9G0OR_Emiliano
+MMI Home Delivery
+02420 HEINEKEN CANS 50 CL 2.00 CS24 131.14 262.27 26.23 209.81 62.94 272.75 05 13.64 286.39
+Express Delivery Charge 9.52 05 0.48 10
+"""
+    out = parse_mmi_text(text)
+    assert out["invoice_no"] == "ARInv-12869998"
+    assert out["invoice_date"] == "2026-04-01"
+    assert out["items"][0]["name"] == "HEINEKEN CANS 50 CL"
+    assert out["items"][0]["qty"] == 2.0
+    assert out["items"][0]["line_total"] == 286.39
+
+
+def test_parse_africaneastern_invoice_html():
+    html = """
+    Your Invoice #4000149407 for Order #4000163906
+    Delivery Date: Jun 19, 2024
+    African Eastern Dubai Store
+    Beck's (24 Cans x 500ml)
+    SKU: 90490005
+    UOM: Case
+    1
+    132.38
+    0
+    132.38
+    132.38
+    6.62
+    139.00
+    """
+    out = parse_africaneastern_html(html)
+    assert out["invoice_no"] == "4000149407"
+    assert out["order_no"] == "4000163906"
+    assert out["invoice_date"] == "2024-06-19"
+    assert out["items"][0]["barcode"] == "90490005"
+    assert out["items"][0]["line_total"] == 139.0
+
 

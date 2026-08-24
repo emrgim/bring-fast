@@ -10,6 +10,8 @@ _DRINK = (
     "pel.", "masafi", "aquafina", "mai dubai", "juice", "drink",
     "beverage", "soda", "milk", "latte", "nescafe", "coffee", "tea",
     "zero sugar", "soft drink",
+    "beer", "wine", "whisky", "whiskey", "vodka", "gin", "rum",
+    "champagne", "prosecco", "cider", "heineken",
 )
 
 _NONEDIBLE = (

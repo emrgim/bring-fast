@@ -16,6 +16,8 @@ LOGIN = {
     "grandiose": "https://www.grandiose.ae/customer/account/login/",
     "waitrose": "https://www.waitrose.ae/en/",
     "spinneys": "https://www.spinneys.com/en-ae/",
+    "mmi": "https://www.mmihomedelivery.ae/customer/account/login",
+    "africaneastern": "https://www.africaneasternonline.com/login",
 }
 
 HOME = {
@@ -23,6 +25,8 @@ HOME = {
     "grandiose": "https://www.grandiose.ae/",
     "waitrose": "https://www.waitrose.ae/en/",
     "spinneys": "https://www.spinneys.com/en-ae/",
+    "mmi": "https://www.mmihomedelivery.ae/",
+    "africaneastern": "https://www.africaneasternonline.com/",
 }
 
 # Bring Fast is multi-user but the desktop Chrome profile is shared, so a store
@@ -603,6 +607,28 @@ def verify_login(*, store: str, email: str, password: str) -> dict[str, Any]:
         from bring_fast.stores import grandiose as grandiose_api
 
         auth = grandiose_api.login(email, password)
+        return {
+            "ok": bool(auth.get("ok")),
+            "reused": False,
+            "url": "",
+            "error": auth.get("error"),
+            "driver": "http",
+        }
+    if store == "mmi":
+        from bring_fast.stores import mmi as mmi_api
+
+        auth = mmi_api.login(email, password)
+        return {
+            "ok": bool(auth.get("ok")),
+            "reused": False,
+            "url": "",
+            "error": auth.get("error"),
+            "driver": "http",
+        }
+    if store == "africaneastern":
+        from bring_fast.stores import africaneastern as ae_api
+
+        auth = ae_api.login(email, password)
         return {
             "ok": bool(auth.get("ok")),
             "reused": False,

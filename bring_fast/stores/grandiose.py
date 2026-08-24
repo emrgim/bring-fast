@@ -177,9 +177,14 @@ def ensure_delivery_area() -> dict[str, Any]:
 
 
 def _product_url(url_key: str, sku: str) -> str:
-    if url_key:
-        return f"{SITE}/{url_key}.html"
-    return f"{SITE}/catalogsearch/result/?q={sku}"
+    key = (url_key or "").strip().lstrip("/")
+    if key.endswith(".html"):
+        key = key[: -len(".html")]
+    if key:
+        return f"{SITE}/{key}"
+    if sku:
+        return f"{SITE}/catalogsearch/result/?q={sku}"
+    return ""
 
 
 def _pdp_in_stock(entity_id: str | int) -> bool | None:

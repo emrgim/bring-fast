@@ -3,13 +3,13 @@
 <p class="off"><a href="/purchases?range={{ range }}">← Purchases</a></p>
 <div class="prod-head">
   {% if product.image_url %}
-  <img class="hero" src="{{ product.image_url }}" alt="{{ product.name }}"/>
+  <img class="hero" src="{{ product.image_url }}" alt="{{ product.name }}" decoding="async" referrerpolicy="no-referrer"/>
   {% else %}
   <div class="hero empty">{{ product.name[:1] }}</div>
   {% endif %}
   <div class="copy">
     <h1>{{ product.name }}</h1>
-    <p class="lead">{{ product.frequency }} · {{ product.times_bought }} buys · {{ product.per_year }}/yr</p>
+    <p class="lead">{{ product.frequency }} · likely {{ product.likely or 0 }} · {{ product.times_bought }} buys · {{ product.per_year }}/yr</p>
     {% if product.receipt_name and product.receipt_name != product.name %}
     <p class="skus">Receipt {{ product.receipt_name }}</p>
     {% endif %}
@@ -40,6 +40,9 @@
         <input type="hidden" name="range" value="{{ range }}"/>
         <button class="ghost" type="submit">Reload</button>
       </form>
+      {% if s.price and s.url %}
+      <a class="open" href="{{ s.url }}" target="_blank" rel="noopener noreferrer">Page</a>
+      {% endif %}
     </div>
     {% endfor %}
   </div>

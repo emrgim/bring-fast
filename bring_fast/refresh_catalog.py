@@ -26,9 +26,10 @@ def main() -> None:
     done = skip = fail = 0
     for uid in users:
         products = compare.product_keys_for_user(uid)
-        for prod in products:
-            barcodes = [prod.get("barcode") or ""]
+        for i, prod in enumerate(products, 1):
+            barcodes = [prod.get("official_ean") or "", prod.get("barcode") or ""]
             names = [prod.get("official_name") or "", prod.get("receipt_name") or ""]
+            print(f"PROD {i}/{len(products)} {prod.get('official_name') or prod.get('receipt_name')}", flush=True)
             for store in db.RETAILERS:
                 if not compare.stale_before(uid, prod["product_key"], store["id"], cutoff):
                     skip += 1

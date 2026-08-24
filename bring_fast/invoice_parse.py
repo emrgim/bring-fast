@@ -13,6 +13,9 @@ SKIP_NAMES = (
     "driver tip",
     "tips",
     "shipping",
+    "express delivery",
+    "delivery/order",
+    "miscellaneous charges",
 )
 
 NUMS = re.compile(r"(\d+(?:\.\d+)?)")
@@ -199,9 +202,109 @@ def parse_invoice_pdf(path: str | Path) -> dict[str, Any]:
     low = text.lower()
     if "grandiose" in low:
         return parse_grandiose_text(text, source=p.name)
+    if "mmi home delivery" in low or "mmihomedelivery" in low:
+        return parse_mmi_text(text, source=p.name)
+    if "african" in low and "eastern" in low:
+        return parse_africaneastern_text(text, source=p.name)
     if "majid al futtaim" in low or "carrefour" in low or "tax invoice" in low:
         return parse_carrefour_text(text, source=p.name)
     raise ValueError(f"unrecognized invoice: {p.name}")
+
+
+def parse_mmi_text(text: str, *, source: str = "") -> dict[str, Any]:
+    inv = _first(re.compile(r"Invoice No:\s*([A-Za-z0-9-]+)"), text)
+    date_raw = _first(re.compile(r"Invoice Date:\s*([0-9]{1,2}-[A-Za-z]{3}-[0-9]{4})"), text)
+    order = _first(re.compile(r"Customer Ref:\s*([A-Za-z0-9]+)"), text)
+    line_rx = re.compile(
+        r"^(?P<code>[A-Z0-9-]{3,16})\s+(?P<name>.+?)\s+"
+        r"(?P<qty>\d+\.\d{2})\s+(?P<uom>CS\d+|EACH|BTL|BOTTLE|CASE)\s+"
+        r"(?P<unit>\d+\.\d{2})\s+.+\s+(?P<total>\d+\.\d{2})\s*$",
+        re.I,
+    )
+    items = []
+    for raw in text.splitlines():
+        m = line_rx.match(raw.strip())
+        if not m:
+            continue
+        qty = float(m.group("qty"))
+        total = float(m.group("total"))
+        if total < 1 or _skip(m.group("name")):
+            continue
+        items.append(
+            {
+                "name": re.sub(r"\s+", " ", m.group("name")).strip(),
+                "qty": qty,
+                "unit_price": round(total / max(qty, 0.0001), 2),
+                "line_total": total,
+                "barcode": m.group("code"),
+            }
+        )
+    return {
+        "retailer": "mmi",
+        "store_name": "MMI",
+        "invoice_no": inv,
+        "order_no": order,
+        "invoice_date": _parse_cf_date(date_raw) if date_raw else "",
+        "source": source,
+        "items": items,
+    }
+
+
+def parse_africaneastern_text(text: str, *, source: str = "") -> dict[str, Any]:
+    inv = (
+        _first(re.compile(r"Your Invoice\s*#\s*([0-9]+)", re.I), text)
+        or _first(re.compile(r"Invoice\s*#\s*([0-9]+)", re.I), text)
+    )
+    order = _first(re.compile(r"Order\s*#\s*([0-9]+)", re.I), text)
+    date_raw = _first(re.compile(r"Delivery Date:\s*([A-Za-z]+ \d{1,2}, \d{4})", re.I), text)
+    items = []
+    for m in re.finditer(
+        r"(?P<name>[A-Za-z0-9][^.\n]{2,80})\s+SKU:\s*(?P<sku>\d+)\s+UOM:\s*\w+\s+"
+        r"(?P<qty>\d+(?:\.\d+)?)\s+(?P<rsp>\d+(?:\.\d+)?)\s+(?P<disc>\d+(?:\.\d+)?)\s+"
+        r"(?P<net>\d+(?:\.\d+)?)\s+(?P<neta>\d+(?:\.\d+)?)\s+(?P<vat>\d+(?:\.\d+)?)\s+"
+        r"(?P<total>\d+(?:\.\d+)?)",
+        text,
+        re.I,
+    ):
+        qty = float(m.group("qty"))
+        total = float(m.group("total"))
+        if total <= 0 or _skip(m.group("name")):
+            continue
+        items.append(
+            {
+                "name": re.sub(r"\s+", " ", m.group("name")).strip(),
+                "qty": qty,
+                "unit_price": round(total / max(qty, 0.0001), 2),
+                "line_total": total,
+                "barcode": m.group("sku"),
+            }
+        )
+    date = ""
+    if date_raw:
+        for fmt in ("%b %d, %Y", "%B %d, %Y"):
+            try:
+                date = datetime.strptime(date_raw, fmt).date().isoformat()
+                break
+            except ValueError:
+                continue
+    return {
+        "retailer": "africaneastern",
+        "store_name": "African + Eastern",
+        "invoice_no": inv or (f"order-{order}" if order else ""),
+        "order_no": order,
+        "invoice_date": date,
+        "source": source,
+        "items": items,
+    }
+
+
+def parse_africaneastern_html(html: str, *, source: str = "") -> dict[str, Any]:
+    text = re.sub(r"<style[\s\S]*?</style>", " ", html, flags=re.I)
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
+    text = re.sub(r"</(p|tr|div|h\d|li)>", "\n", text, flags=re.I)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    return parse_africaneastern_text(text, source=source)
 
 
 def parse_grandiose_confirmation_html(html: str, *, source: str = "", date: str = "") -> dict[str, Any]:

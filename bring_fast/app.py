@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import __version__, catalog, checkout, compare, db, purchases
+from . import __version__, catalog, checkout, compare, db, mcp_skill, purchases
 
 HOST = os.environ.get("BRINGFAST_HOST", "127.0.0.1")
 PORT = int(os.environ.get("BRINGFAST_PORT", "8877"))
@@ -226,6 +226,10 @@ def spend_home(request: Request, range: str = "all", grain: str = "monthly"):
     days = purchases.bucket_series(raw_days, grain)
     top = purchases.list_products(user["id"], sort="spend", direction="desc", since=since, until=until)[:8]
     trend = purchases.price_trend(user["id"], since=since, until=until, grain=grain)
+    dash_spend = sum(d["spend"] for d in raw_days)
+    span_start = purchases._parse_day(since) or until
+    calendar_days = max(1, (until - span_start).days + 1)
+    daily_avg = round(dash_spend / calendar_days, 2)
     _remember(request, user)
     return templates.TemplateResponse(
         request,
@@ -236,9 +240,11 @@ def spend_home(request: Request, range: str = "all", grain: str = "monthly"):
             "tab": "dashboard",
             "days": days,
             "days_json": json.dumps(days),
-            "dash_spend": sum(d["spend"] for d in raw_days),
+            "dash_spend": dash_spend,
             "dash_receipts": sum(d["count"] for d in raw_days),
             "dash_days": len(raw_days),
+            "daily_avg": daily_avg,
+            "calendar_days": calendar_days,
             "products": top,
             "trend": trend,
             "grain": grain,
@@ -551,6 +557,7 @@ def purchase_detail(request: Request, key: str, range: str = "all", start: str =
     if not user:
         return RedirectResponse("/login?mode=signin&next=/purchases", status_code=303)
     since, until, range_key = purchases.resolve_window(user["id"], range, start, end)
+    key = purchases.canonical_key(key)
     product = purchases.product_purchases(user["id"], key, since=since, until=until)
     if not product:
         return RedirectResponse("/purchases", status_code=303)
@@ -665,6 +672,7 @@ def health(request: Request):
         "version": __version__,
         "public_url": base,
         "mcp_url": f"{base}/mcp",
+        "description": mcp_skill.DESCRIPTION,
         "public_url_env": PUBLIC_URL or None,
     }
 
@@ -680,8 +688,8 @@ def _store_tools() -> list[dict[str, Any]]:
         {
             "name": "bf_whoami",
             "description": (
-                "THIS user's snapshot: email, which supermarket logins are saved, "
-                "recent official orders (items + the address used on the store), last seen cart. "
+                "THIS user's snapshot only: email and which supermarket logins are saved. "
+                "Does NOT return order history or spend. For last month / invoices use bf_spend or bf_orders. "
                 "linked=true means the store login is saved. Do not say logins are missing when linked is true. "
                 "Delivery address lives on the supermarket account, not on Bring Fast."
             ),
@@ -690,9 +698,10 @@ def _store_tools() -> list[dict[str, Any]]:
         {
             "name": "bf_stores",
             "description": (
-                "THIS user's stores. linked=true means the supermarket login is saved. "
-                "Includes last official orders and last seen cart. "
-                "Address is the one on the supermarket account / last official order — do not ask to set it on Bring Fast."
+                "THIS user's stores and saved logins. linked=true means the supermarket login is saved. "
+                "Does NOT include order history, spend totals, or a last-seen cart. "
+                "For invoices / last month use bf_spend or bf_orders. "
+                "Address is the one on the supermarket account — do not ask to set it on Bring Fast."
             ),
             "inputSchema": {"type": "object", "properties": {}},
         },
@@ -745,6 +754,90 @@ def _store_tools() -> list[dict[str, Any]]:
                     "against": {"type": "string", "description": "Comma-separated store ids, or omit for all"},
                     "query": {"type": "string"},
                     "limit": {"type": "integer"},
+                },
+            },
+        },
+        {
+            "name": "bf_spend",
+            "description": (
+                "How much THIS user spent from invoices. "
+                "THIS is the tool for 'quanto ho speso il mese scorso'. "
+                "range=last_month is the previous calendar month; this_month is the current month; "
+                "1m is the last 30 days. Also 1w|2w|3m|1y|all. grain=weekly|monthly. dept=Edible|Drinks. "
+                "Returns total AED, orders (date/store/total), by_store, series."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "range": {"type": "string"},
+                    "grain": {"type": "string"},
+                    "dept": {"type": "string"},
+                },
+            },
+        },
+        {
+            "name": "bf_products",
+            "description": (
+                "Rank THIS user's bought products. "
+                "sort=unit_price for most expensive typical unit price; sort=spend for most money spent; "
+                "sort=frequency for bought most often. dept=Edible|Drinks. range=1w|1m|3m|1y|all."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "sort": {"type": "string"},
+                    "limit": {"type": "integer"},
+                    "dept": {"type": "string"},
+                    "range": {"type": "string"},
+                },
+            },
+        },
+        {
+            "name": "bf_shopping_list",
+            "description": (
+                "Weekly-style shopping list from invoice history (mean cadence, as before). "
+                "Each item has likely 0-100: how much more probable it is a real buy-again "
+                "(EWMA + regularity; 500ml single water stays on the list with likely=0). "
+                "horizon_days=0 today, 1 tomorrow, 7 week. exclude=comma keys or names."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "horizon_days": {"type": "integer"},
+                    "limit": {"type": "integer"},
+                    "dept": {"type": "string"},
+                    "min_buys": {"type": "integer"},
+                    "exclude": {"type": "string"},
+                },
+            },
+        },
+        {
+            "name": "bf_product",
+            "description": (
+                "One product from THIS user's invoices: last buy, typical unit AED, frequency, next due date. "
+                "Use for: when should I buy Heineken / milk again."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}},
+                "required": ["query"],
+            },
+        },
+        {
+            "name": "bf_orders",
+            "description": (
+                "THIS user's invoice/order history with date, store, total, and line items. "
+                "Use for: order history, last month receipts, what I bought. "
+                "Does NOT read grandiose_cart / bf_whoami. "
+                "range=last_month|this_month|1w|1m|3m|1y|all. include_items=true by default."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "range": {"type": "string"},
+                    "include_items": {"type": "boolean"},
+                    "limit": {"type": "integer"},
+                    "dept": {"type": "string"},
                 },
             },
         },
@@ -1031,6 +1124,19 @@ def _normalize_tool(name: str, args: dict[str, Any]) -> tuple[str, dict[str, Any
         "compare": "bf_compare",
         "compare_cart": "bf_compare",
         "compare_prices": "bf_compare",
+        "spend": "bf_spend",
+        "expenses": "bf_spend",
+        "spending": "bf_spend",
+        "orders": "bf_orders",
+        "order_history": "bf_orders",
+        "invoices": "bf_orders",
+        "history": "bf_orders",
+        "products": "bf_products",
+        "top_products": "bf_products",
+        "shopping_list": "bf_shopping_list",
+        "due": "bf_shopping_list",
+        "product": "bf_product",
+        "when_to_buy": "bf_product",
         "checkout": "bf_checkout",
         "status": "bf_status",
         "bf_retailers": "bf_stores",
@@ -1110,6 +1216,62 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
         )
     if name == "bf_compare":
         return _compare(user, args)
+    if name == "bf_spend":
+        raw_range = str(args.get("range") or args.get("window") or "last_month")
+        return _ok(
+            **purchases.spend_report(
+                uid,
+                range_key=raw_range,
+                grain=str(args.get("grain") or ""),
+                dept=str(args.get("dept") or ""),
+            )
+        )
+    if name == "bf_orders":
+        include = args.get("include_items")
+        if include is None:
+            include = True
+        return _ok(
+            **purchases.orders_report(
+                uid,
+                range_key=str(args.get("range") or args.get("window") or "last_month"),
+                include_items=bool(include),
+                limit=int(args.get("limit") or 40),
+            )
+        )
+    if name == "bf_products":
+        sort = str(args.get("sort") or "spend")
+        if sort in ("price", "expensive", "unit", "cost"):
+            sort = "unit_price"
+        return _ok(
+            sort=sort,
+            products=purchases.ranked_products(
+                uid,
+                sort=sort,
+                limit=int(args.get("limit") or 10),
+                dept=str(args.get("dept") or ""),
+                range_key=str(args.get("range") or "all"),
+            ),
+        )
+    if name == "bf_shopping_list":
+        raw_ex = str(args.get("exclude") or "")
+        exclude = [p.strip() for p in raw_ex.split(",") if p.strip()]
+        min_buys = args.get("min_buys")
+        return _ok(
+            items=purchases.shopping_list(
+                uid,
+                horizon_days=int(args.get("horizon_days") or args.get("days") or 7),
+                limit=int(args.get("limit") or 20),
+                dept=str(args.get("dept") or ""),
+                min_buys=int(min_buys) if min_buys not in (None, "") else None,
+                exclude=exclude or None,
+            )
+        )
+    if name == "bf_product":
+        q = str(args.get("query") or args.get("q") or args.get("name") or "").strip()
+        if not q:
+            return json.dumps({"success": False, "error": "Pass query=product name or barcode."})
+        hits = purchases.find_products(uid, q, limit=int(args.get("limit") or 8))
+        return _ok(query=q, products=hits, product=hits[0] if hits else None)
     if name == "bf_cart":
         retailer = (args.get("retailer") or args.get("store") or "").lower()
         if retailer not in {r["id"] for r in db.enabled_retailers()} or not db.store_can_shop(retailer):
@@ -1235,28 +1397,35 @@ async def _dispatch(user: dict[str, Any], message: Any) -> dict[str, Any] | None
             rid,
             {
                 "protocolVersion": asked if asked in SUPPORTED_PROTOCOL_VERSIONS else LATEST_PROTOCOL_VERSION,
-                "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo": {"name": "Bring Fast", "version": __version__},
-                "instructions": (
-                    f"Bring Fast for {user['email']} only. "
-                    "Call bf_whoami first for linked supermarket logins only. "
-                    "linked=true / login_saved=true means that store login is saved — "
-                    "never say the login is missing for a store in linked_stores. "
-                    "The only cart is the official supermarket account cart. "
-                    "Never invent a local/virtual cart or report awaiting_official_payment. "
-                    "If the official cart cannot be read, say unread — do not use old local items. "
-                    "Search is available on every supermarket for price comparison. "
-                    "Orders (cart/checkout) only on Magento: Grandiose and Union Coop. "
-                    "Use bf_compare with source=grandiose to price the official cart elsewhere. "
-                    "Payment stays on the supermarket site."
-                ),
+                "capabilities": {
+                    "tools": {"listChanged": False},
+                    "prompts": {"listChanged": False},
+                    "resources": {"listChanged": False},
+                },
+                "serverInfo": {
+                    "name": "Bring Fast",
+                    "version": __version__,
+                    "description": mcp_skill.DESCRIPTION,
+                },
+                "instructions": mcp_skill.instructions(user.get("email") or ""),
             },
         )
     if method == "tools/list":
         return _rpc_result(rid, {"tools": tools_catalog()})
-    if method in ("resources/list", "prompts/list"):
-        key = "resources" if method.startswith("resources") else "prompts"
-        return _rpc_result(rid, {key: []})
+    if method == "prompts/list":
+        return _rpc_result(rid, {"prompts": mcp_skill.prompts()})
+    if method == "prompts/get":
+        got = mcp_skill.prompt_get(str(params.get("name") or ""))
+        if not got:
+            return _rpc_error(rid, -32602, "unknown prompt")
+        return _rpc_result(rid, got)
+    if method == "resources/list":
+        return _rpc_result(rid, {"resources": mcp_skill.resources()})
+    if method == "resources/read":
+        got = mcp_skill.resource_read(str(params.get("uri") or ""))
+        if not got:
+            return _rpc_error(rid, -32602, "unknown resource")
+        return _rpc_result(rid, got)
     if method == "tools/call":
         name = params.get("name")
         args = params.get("arguments") or {}

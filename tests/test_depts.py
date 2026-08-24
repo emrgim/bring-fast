@@ -9,6 +9,6 @@ def test_classify_edible_and_drinks():
     assert classify_dept("President Brie 60%") == "Edible"
     assert classify_dept("PLAST SHOPPING BAG") == ""
     assert classify_dept("HMD PULSE PRO") == ""
-    assert classify_dept("Demi Baguette") == "Edible"
+    assert classify_dept("Heineken Can 24 x 50CL") == "Drinks"
     assert normalize_dept("Food") == "Edible"
     assert normalize_dept("Edible") == "Edible"
