@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import __version__, catalog, checkout, compare, db, mcp_skill, purchases
+from . import __version__, catalog, checkout, compare, db, mcp_skill, purchases, update
 
 HOST = os.environ.get("BRINGFAST_HOST", "127.0.0.1")
 PORT = int(os.environ.get("BRINGFAST_PORT", "8877"))
@@ -212,6 +212,25 @@ def home(request: Request, next: str = "/", welcome: int = 0, notice: str = "", 
     if welcome:
         return RedirectResponse("/stores?welcome=1", status_code=303)
     return RedirectResponse(_last_url(user), status_code=303)
+
+
+@app.get("/update/status")
+def update_status(request: Request, fetch: int = 0):
+    user = current_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "login required"}, status_code=401)
+    saved = update.load_saved()
+    if fetch or not saved:
+        return update.status(fetch=True)
+    return saved
+
+
+@app.post("/update/apply")
+def update_apply(request: Request):
+    user = current_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "login required"}, status_code=401)
+    return update.apply()
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
