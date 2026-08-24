@@ -41,6 +41,12 @@ CF_LINE_STORE = re.compile(
 GR_INV = re.compile(r"Tax Invoice\s*#\s*([0-9]+)", re.I)
 GR_DATE = re.compile(r"Tax invoice Date:\s*([A-Za-z]+ \d{1,2}, \d{4})", re.I)
 GR_ORD = re.compile(r"Order\s*#\s*([0-9]+)", re.I)
+GR_SLIP = re.compile(r"Slip:\s*([A-Za-z0-9]+)", re.I)
+GR_SLIP_DATE = re.compile(r"Date:\s*(\d{1,2}/\d{1,2}/\d{4})")
+GR_SLIP_LINE = re.compile(
+    r"^(?P<sku>\d{8,14})\s+(?P<qty>\d+(?:\.\d+)?)\s+(?P<price>\d+(?:\.\d+)?)\s+(?P<amt>\d+(?:\.\d+)?)\s*$",
+    re.M,
+)
 GR_LINE = re.compile(
     r"^(?P<name>.+?)\s+(?P<sku>\d{8,14})\s+"
     r"(?P<qty>\d+(?:\.\d+)?)\s+(?P<price>\d+(?:\.\d+)?)\s+"
@@ -156,7 +162,51 @@ def parse_carrefour_text(text: str, *, source: str = "") -> dict[str, Any]:
     }
 
 
+def parse_grandiose_slip(text: str, *, source: str = "") -> dict[str, Any]:
+    inv = _first(GR_SLIP, text)
+    dm = GR_SLIP_DATE.search(text)
+    date = ""
+    if dm:
+        try:
+            date = datetime.strptime(dm.group(1), "%d/%m/%Y").date().isoformat()
+        except ValueError:
+            date = ""
+    items: list[dict[str, Any]] = []
+    lines = [ln.strip() for ln in text.splitlines()]
+    i = 0
+    while i < len(lines):
+        m = GR_SLIP_LINE.match(lines[i])
+        if m:
+            name = lines[i + 1] if i + 1 < len(lines) else m.group("sku")
+            if GR_SLIP_LINE.match(name) or name.startswith("----") or name.startswith("Total"):
+                name = m.group("sku")
+            else:
+                i += 1
+            items.append(
+                {
+                    "name": re.sub(r"\s+", " ", name).strip(),
+                    "qty": float(m.group("qty")),
+                    "unit_price": float(m.group("price")),
+                    "line_total": float(m.group("amt")),
+                    "barcode": m.group("sku"),
+                }
+            )
+        i += 1
+    kept = [it for it in items if not _skip(it["name"])]
+    return {
+        "retailer": "grandiose",
+        "store_name": "Grandiose",
+        "invoice_no": inv,
+        "order_no": "",
+        "invoice_date": date,
+        "source": source,
+        "items": kept,
+    }
+
+
 def parse_grandiose_text(text: str, *, source: str = "") -> dict[str, Any]:
+    if GR_SLIP.search(text) and GR_SLIP_LINE.search(text):
+        return parse_grandiose_slip(text, source=source)
     inv = _first(GR_INV, text)
     date_m = GR_DATE.search(text)
     order = _first(GR_ORD, text)
