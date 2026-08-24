@@ -30,13 +30,13 @@
 <div class="widgets">
   <div class="trend daily-avg">
     <div>
-      <div class="who">Today</div>
-      <div class="delta">AED {{ '%.2f'|format(today_spend) }}</div>
+      <div class="who">Daily average</div>
+      <div class="delta">AED {{ '%.2f'|format(daily_avg) }}</div>
     </div>
     <div class="who">
-      Daily avg <b>AED {{ '%.2f'|format(daily_avg) }}</b>
-      · 7-day <b>AED {{ '%.2f'|format(week_avg) }}</b><br/>
-      {{ calendar_days }} calendar days in this range
+      Today <b>AED {{ '%.2f'|format(today_spend) }}</b>
+      · last 7 days <b>AED {{ '%.2f'|format(week_avg) }}</b> / day<br/>
+      {{ '%.2f'|format(dash_spend) }} spent · {{ calendar_days }} calendar days
     </div>
   </div>
   <div class="trend {{ trend.direction }}">
