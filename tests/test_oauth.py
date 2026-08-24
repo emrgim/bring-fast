@@ -32,6 +32,9 @@ def test_metadata_advertises_the_endpoints_and_refresh(client):
     assert "refresh_token" in meta["grant_types_supported"]
     prm = client.get("/.well-known/oauth-protected-resource/mcp").json()
     assert prm["resource"].endswith("/mcp")
+    plex = client.get("/.well-known/oauth-protected-resource/plex/mcp").json()
+    assert plex["resource"].endswith("/plex/mcp")
+    assert plex["authorization_servers"]
 
 
 def test_mcp_without_a_token_points_at_the_authorization_server(client):
