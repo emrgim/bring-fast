@@ -44,7 +44,7 @@ GR_ORD = re.compile(r"Order\s*#\s*([0-9]+)", re.I)
 GR_SLIP = re.compile(r"Slip:\s*([A-Za-z0-9]+)", re.I)
 GR_SLIP_DATE = re.compile(r"Date:\s*(\d{1,2}/\d{1,2}/\d{4})")
 GR_SLIP_LINE = re.compile(
-    r"^(?P<sku>\d{8,14})\s+(?P<qty>\d+(?:\.\d+)?)\s+(?P<price>\d+(?:\.\d+)?)\s+(?P<amt>\d+(?:\.\d+)?)\s*$",
+    r"^(?P<sku>\d{6,14})\s+(?P<qty>\d+(?:\.\d+)?)\s+(?P<price>\d+(?:\.\d+)?)\s+(?P<amt>\d+(?:\.\d+)?)\s*$",
     re.M,
 )
 GR_LINE = re.compile(
