@@ -20,9 +20,9 @@
   <div class="bars-scroller">
   <div class="bars" id="spend-bars">
     {% for d in days %}
-    <button type="button" class="bar {% if grain!='daily' %}wide{% endif %}" data-i="{{ loop.index0 }}" title="{{ d.label }} · AED {{ '%.2f'|format(d.spend) }}">
+    <a class="bar {% if grain!='daily' %}wide{% endif %} {% if d.selected %}on{% endif %}" data-i="{{ loop.index0 }}" href="/purchases?sort={{ sort }}&dir={{ dir }}&range={{ range }}&grain={{ grain }}&dept={{ dept }}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}&day={{ d.date }}" title="{{ d.label }} · AED {{ '%.2f'|format(d.spend) }}">
       <i style="height:{{ d.pct }}%"></i>
-    </button>
+    </a>
     {% endfor %}
   </div>
   </div>
@@ -144,34 +144,31 @@
   var days = {{ days_json|safe }};
   var pop = document.getElementById("day-pop");
   var bars = document.querySelectorAll("#spend-bars .bar");
-  bars.forEach(function(btn){
-    btn.addEventListener("click", function(){
-      var i = +btn.getAttribute("data-i");
-      var d = days[i];
-      if(!d) return;
-      bars.forEach(function(b){ b.classList.remove("on"); });
-      btn.classList.add("on");
-      var html = "<b>"+(d.label||d.date)+"</b> · AED "+d.spend.toFixed(2)+" · "+d.count+" receipt"+(d.count===1?"":"s");
-      d.invoices.forEach(function(inv){
-        var no = String(inv.invoice_no||"");
-        var label = "#"+no.slice(-10);
-        var link = '<a href="/receipts/'+inv.retailer+'/'+encodeURIComponent(no)+'" data-receipt="/receipts/'+inv.retailer+'/'+encodeURIComponent(no)+'">'+label+"</a>";
-        html += '<div class="row"><span>'+link+" · "+(inv.store||inv.retailer)+'</span><span>AED '+inv.spend.toFixed(2)+"</span></div>";
-      });
-      pop.innerHTML = html;
-      pop.classList.add("open");
-      pop.querySelectorAll("[data-receipt]").forEach(function(a){
-        a.addEventListener("click", function(e){
-          e.preventDefault();
-          var sheet=document.getElementById("receipt-sheet");
-          var frame=document.getElementById("receipt-frame");
-          if(!sheet||!frame){ location.href=a.getAttribute("data-receipt"); return; }
-          frame.src=a.getAttribute("data-receipt");
-          sheet.classList.add("open");
-        });
+  function show(i){
+    var d = days[i];
+    if(!d || !pop) return;
+    var html = "<b>"+(d.label||d.date)+"</b> · AED "+Number(d.spend||0).toFixed(2)+" · "+(d.count||0)+" receipt"+((d.count===1)?"":"s");
+    (d.invoices||[]).forEach(function(inv){
+      var no = String(inv.invoice_no||"");
+      var label = "#"+no.slice(-10);
+      var link = '<a href="/receipts/'+inv.retailer+'/'+encodeURIComponent(no)+'" data-receipt="/receipts/'+inv.retailer+'/'+encodeURIComponent(no)+'">'+label+"</a>";
+      html += '<div class="row"><span>'+link+" · "+(inv.store||inv.retailer)+'</span><span>AED '+Number(inv.spend||0).toFixed(2)+"</span></div>";
+    });
+    pop.innerHTML = html;
+    pop.classList.add("open");
+    pop.querySelectorAll("[data-receipt]").forEach(function(a){
+      a.addEventListener("click", function(e){
+        e.preventDefault();
+        var sheet=document.getElementById("receipt-sheet");
+        var frame=document.getElementById("receipt-frame");
+        if(!sheet||!frame){ location.href=a.getAttribute("data-receipt"); return; }
+        frame.src=a.getAttribute("data-receipt");
+        sheet.classList.add("open");
       });
     });
-  });
+  }
+  var selected = document.querySelector("#spend-bars .bar.on");
+  if(selected) show(+selected.getAttribute("data-i"));
 })();
 </script>
 <div class="sheet" id="receipt-sheet">
