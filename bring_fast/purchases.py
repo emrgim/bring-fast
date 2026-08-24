@@ -834,6 +834,31 @@ def daily_spend(
     return out
 
 
+def spend_snapshot(user_id: int, since: str | None = None, until: date | None = None) -> dict[str, Any]:
+    """Totals that move when the dashboard range (or new invoices) change."""
+    until = until or date.today()
+    days = daily_spend(user_id, since=since, until=until)
+    total = round(sum(d["spend"] for d in days), 2)
+    receipts = sum(int(d.get("count") or 0) for d in days)
+    span_start = _parse_day(since) or until
+    calendar_days = max(1, (until - span_start).days + 1)
+    today_key = until.isoformat()
+    today = next((d["spend"] for d in days if d.get("date") == today_key), 0.0)
+    week_since, week_until, _ = window("1w", end=until.isoformat())
+    week_days = daily_spend(user_id, since=week_since, until=week_until)
+    week_total = sum(d["spend"] for d in week_days)
+    week_span = max(1, (week_until - (_parse_day(week_since) or week_until)).days + 1)
+    return {
+        "total": total,
+        "receipts": receipts,
+        "shop_days": len(days),
+        "calendar_days": calendar_days,
+        "daily_avg": round(total / calendar_days, 2),
+        "today": round(float(today), 2),
+        "week_avg": round(week_total / week_span, 2),
+    }
+
+
 GRAINS = ("daily", "weekly", "monthly", "yearly")
 
 

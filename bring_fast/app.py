@@ -234,21 +234,24 @@ def update_apply(request: Request):
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
-def spend_home(request: Request, range: str = "all", grain: str = "monthly"):
+def spend_home(request: Request, range: str = "1m", grain: str = "monthly"):
     user = current_user(request)
     if not user:
         return RedirectResponse("/login?mode=signin&next=/dashboard", status_code=303)
+    if not request.query_params:
+        rec = db.get_last_view(user["id"])
+        if rec and rec.get("path") == "/dashboard" and rec.get("query"):
+            return RedirectResponse("/dashboard?" + rec["query"], status_code=303)
     grain = grain if grain in purchases.GRAINS else "monthly"
-    range_key = range if range in purchases.RANGES else "all"
+    range_key = range if range in purchases.RANGES else "1m"
     since, until, range_key = purchases.resolve_window(user["id"], range_key)
     raw_days = purchases.daily_spend(user["id"], since=since, until=until)
     days = purchases.bucket_series(raw_days, grain)
+    if grain == "daily" and len(days) > 60:
+        days = days[-60:]
     top = purchases.list_products(user["id"], sort="spend", direction="desc", since=since, until=until)[:8]
     trend = purchases.price_trend(user["id"], since=since, until=until, grain=grain)
-    dash_spend = sum(d["spend"] for d in raw_days)
-    span_start = purchases._parse_day(since) or until
-    calendar_days = max(1, (until - span_start).days + 1)
-    daily_avg = round(dash_spend / calendar_days, 2)
+    snap = purchases.spend_snapshot(user["id"], since=since, until=until)
     _remember(request, user)
     return templates.TemplateResponse(
         request,
@@ -259,11 +262,13 @@ def spend_home(request: Request, range: str = "all", grain: str = "monthly"):
             "tab": "dashboard",
             "days": days,
             "days_json": json.dumps(days),
-            "dash_spend": dash_spend,
-            "dash_receipts": sum(d["count"] for d in raw_days),
-            "dash_days": len(raw_days),
-            "daily_avg": daily_avg,
-            "calendar_days": calendar_days,
+            "dash_spend": snap["total"],
+            "dash_receipts": snap["receipts"],
+            "dash_days": snap["shop_days"],
+            "daily_avg": snap["daily_avg"],
+            "calendar_days": snap["calendar_days"],
+            "today_spend": snap["today"],
+            "week_avg": snap["week_avg"],
             "products": top,
             "trend": trend,
             "grain": grain,

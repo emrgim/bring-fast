@@ -556,10 +556,45 @@ def test_price_trend_is_mean_of_product_changes(bf, client):
     assert trend["series"][0]["index"] == 100
     assert trend["chart_svg"]
     client.post("/login", data={"email": "trend@example.com", "password": "secret1", "intent": "signin"})
-    html = client.get("/dashboard").text
+    html = client.get("/dashboard?range=all&grain=monthly").text
     assert "Price trend" in html
-    assert "Daily average" in html
+    assert "Daily avg" in html
+    assert "Today" in html
     assert "<svg" in html
+
+
+def test_spend_snapshot_changes_with_range(bf):
+    from datetime import date
+
+    user = bf.db.create_user("avg@example.com", "secret1")
+    bf.purchases.upsert_invoice(
+        user["id"],
+        {
+            "retailer": "carrefour",
+            "invoice_no": "old",
+            "invoice_date": "2025-01-01",
+            "items": [{"name": "Rice", "qty": 1, "unit_price": 100, "line_total": 100, "barcode": "1"}],
+        },
+    )
+    bf.purchases.upsert_invoice(
+        user["id"],
+        {
+            "retailer": "carrefour",
+            "invoice_no": "new",
+            "invoice_date": "2026-08-20",
+            "items": [{"name": "Milk", "qty": 1, "unit_price": 20, "line_total": 20, "barcode": "2"}],
+        },
+    )
+    today = date(2026, 8, 24)
+    since_all, until_all, _ = bf.purchases.resolve_window(user["id"], "all")
+    until_all = today
+    since_1m, until_1m, _ = bf.purchases.window("1m", end=today.isoformat())
+    all_s = bf.purchases.spend_snapshot(user["id"], since=since_all, until=until_all)
+    m_s = bf.purchases.spend_snapshot(user["id"], since=since_1m, until=until_1m)
+    assert all_s["total"] == 120
+    assert m_s["total"] == 20
+    assert m_s["daily_avg"] != all_s["daily_avg"]
+    assert m_s["daily_avg"] > all_s["daily_avg"]
 
 
 
