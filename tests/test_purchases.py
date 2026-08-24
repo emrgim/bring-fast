@@ -648,6 +648,34 @@ def test_daily_bars_include_empty_days(bf):
     assert filled[1]["pct"] == 0
 
 
+def test_clicking_a_day_lists_only_that_days_products(bf, client):
+    user = bf.db.create_user("day@example.com", "secret1")
+    bf.purchases.upsert_invoice(
+        user["id"],
+        {
+            "retailer": "grandiose",
+            "invoice_no": "d1",
+            "invoice_date": "2026-06-26",
+            "items": [{"name": "Milk Day", "qty": 1, "unit_price": 10, "line_total": 10, "barcode": "111"}],
+        },
+    )
+    bf.purchases.upsert_invoice(
+        user["id"],
+        {
+            "retailer": "carrefour",
+            "invoice_no": "d2",
+            "invoice_date": "2026-06-27",
+            "items": [{"name": "Other Day", "qty": 1, "unit_price": 8, "line_total": 8, "barcode": "222"}],
+        },
+    )
+    client.post("/login", data={"email": "day@example.com", "password": "secret1", "intent": "signin"})
+    html = client.get("/purchases?range=all&grain=daily&day=2026-06-26").text
+    assert "Milk Day" in html
+    assert "Other Day" not in html
+    assert 'class="bar  on"' in html or " bar on" in html or "on" in html
+
+
+
 
 
 

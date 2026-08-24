@@ -240,6 +240,7 @@ def spend_home(
     start: str = "",
     end: str = "",
     grain: str = "monthly",
+    day: str = "",
 ):
     user = current_user(request)
     if not user:
@@ -254,7 +255,9 @@ def spend_home(
     days = purchases.bucket_series(raw_days, grain)
     if grain == "daily":
         days = purchases.fill_daily_calendar(days, since, until)
-    top = purchases.list_products(user["id"], sort="spend", direction="desc", since=since, until=until)[:8]
+    days = purchases.mark_day_windows(days, grain, since, until, day)
+    focus_since, focus_until = purchases.focus_products_window(day, grain, since, until)
+    top = purchases.list_products(user["id"], sort="spend", direction="desc", since=focus_since, until=focus_until)[:8]
     trend = purchases.price_trend(user["id"], since=since, until=until, grain=grain)
     snap = purchases.spend_snapshot(user["id"], since=since, until=until)
     _remember(request, user)
@@ -280,6 +283,7 @@ def spend_home(
             "range": range_key,
             "start": start or (since or ""),
             "end": end or until.isoformat(),
+            "day": day,
         },
     )
 
@@ -539,6 +543,7 @@ def purchases_page(
     end: str = "",
     grain: str = "daily",
     dept: str = "",
+    day: str = "",
 ):
     user = current_user(request)
     if not user:
@@ -556,6 +561,8 @@ def purchases_page(
     days = purchases.bucket_series(raw_days, grain)
     if grain == "daily":
         days = purchases.fill_daily_calendar(days, since, until)
+    days = purchases.mark_day_windows(days, grain, since, until, day)
+    focus_since, focus_until = purchases.focus_products_window(day, grain, since, until)
     _remember(request, user)
     return templates.TemplateResponse(
         request,
@@ -565,7 +572,7 @@ def purchases_page(
             "title": "Purchases · Bring Fast",
             "tab": "purchases",
             "products": purchases.list_products(
-                user["id"], sort=sort, direction=direction, since=since, until=until, dept=dept
+                user["id"], sort=sort, direction=direction, since=focus_since, until=focus_until, dept=dept
             ),
             "days": days,
             "days_json": json.dumps(days),
@@ -580,6 +587,7 @@ def purchases_page(
             "dept": dept,
             "start": start,
             "end": end or until.isoformat(),
+            "day": day,
         },
     )
 

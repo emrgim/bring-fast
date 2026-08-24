@@ -893,6 +893,61 @@ def fill_daily_calendar(
     return out
 
 
+def bucket_span(key: str, grain: str) -> tuple[str, str]:
+    grain = grain if grain in GRAINS else "daily"
+    if not key or grain == "daily":
+        return key, key
+    if grain == "weekly":
+        start = _parse_day(key)
+        if not start:
+            return key, key
+        return start.isoformat(), (start + timedelta(days=6)).isoformat()
+    if grain == "monthly" and len(key) >= 7:
+        try:
+            y, m = int(key[:4]), int(key[5:7])
+            start = date(y, m, 1)
+            end = date(y + 1, 1, 1) - timedelta(days=1) if m == 12 else date(y, m + 1, 1) - timedelta(days=1)
+            return start.isoformat(), end.isoformat()
+        except ValueError:
+            return key, key
+    if grain == "yearly" and len(key) >= 4:
+        return f"{key[:4]}-01-01", f"{key[:4]}-12-31"
+    return key, key
+
+
+def mark_day_windows(
+    days: list[dict[str, Any]],
+    grain: str,
+    since: str | None,
+    until: date | None,
+    focus: str = "",
+) -> list[dict[str, Any]]:
+    until_s = until.isoformat() if until else ""
+    since_s = since or ""
+    for d in days:
+        a, b = bucket_span(str(d.get("date") or ""), grain)
+        d["win_start"] = a
+        d["win_end"] = b
+        key = str(d.get("date") or "")
+        d["selected"] = bool(focus and key == focus) or (
+            not focus and bool(a and since_s == a and until_s == b)
+        )
+    return days
+
+
+def focus_products_window(
+    day: str,
+    grain: str,
+    since: str | None,
+    until: date | None,
+) -> tuple[str | None, date | None]:
+    if not day:
+        return since, until
+    a, b = bucket_span(day, grain)
+    end = _parse_day(b)
+    return a or since, end or until
+
+
 GRAINS = ("daily", "weekly", "monthly", "yearly")
 
 
