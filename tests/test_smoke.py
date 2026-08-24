@@ -13,7 +13,9 @@ def test_version_is_semver():
 
 def test_retailers_have_logos_and_urls():
     ids = {r["id"] for r in db.RETAILERS}
-    assert ids == {"carrefour", "grandiose", "waitrose", "spinneys"}
+    assert ids == {"grandiose", "unioncoop", "carrefour", "waitrose", "spinneys", "mmi", "africaneastern"}
+    assert {r["id"] for r in db.RETAILERS if r.get("enabled")} == {"grandiose"}
+    assert {r["id"] for r in db.RETAILERS if r.get("shop")} == {"grandiose", "unioncoop"}
     for r in db.RETAILERS:
         assert r["url"].startswith("https://")
         assert r["logo"].startswith("/static/")

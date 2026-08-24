@@ -116,7 +116,7 @@ def test_failing_tool_stays_json_rpc(client, token):
     """A tool blowing up must not surface as an unparseable HTTP 500."""
     r = client.post("/mcp", headers=auth(token),
                     json={"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                          "params": {"name": "carrefour_cart",
+                          "params": {"name": "grandiose_cart",
                                      "arguments": {"action": "add", "product_id": "x", "qty": "two"}}})
     assert r.status_code == 200
     result = r.json()["result"]
@@ -149,7 +149,9 @@ def test_tools_list_is_reachable_after_the_handshake(client, token):
     tools = client.post("/mcp", headers=auth(token),
                         json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).json()["result"]["tools"]
     names = {t["name"] for t in tools}
-    assert {"bf_search", "bf_stores", "carrefour_cart", "spinneys_checkout"} <= names
+    assert {"bf_search", "bf_stores", "bf_compare", "bf_spend", "bf_products", "bf_shopping_list", "bf_product", "bf_orders", "grandiose_cart", "carrefour_search"} <= names
+    assert "carrefour_cart" not in names
+    assert "spinneys_checkout" not in names
     assert all(t["inputSchema"]["type"] == "object" for t in tools)
 
 
@@ -185,12 +187,35 @@ def test_loopback_public_url_is_ignored_behind_a_tunnel(client, monkeypatch):
     assert meta["issuer"] == "https://bring-fast.example.com"
 
 
-def test_resources_and_prompts_list_are_empty_not_errors(client, token):
-    for method, key in (("resources/list", "resources"), ("prompts/list", "prompts")):
-        r = client.post("/mcp", headers=auth(token),
-                        json={"jsonrpc": "2.0", "id": 1, "method": method})
-        assert r.status_code == 200
-        assert r.json()["result"][key] == []
+def test_resources_and_prompts_ship_the_agent_skill(client, token):
+    prompts = client.post("/mcp", headers=auth(token),
+                          json={"jsonrpc": "2.0", "id": 1, "method": "prompts/list"}).json()["result"]["prompts"]
+    assert prompts[0]["name"] == "bring-fast-agent"
+    got = client.post("/mcp", headers=auth(token),
+                      json={"jsonrpc": "2.0", "id": 2, "method": "prompts/get",
+                            "params": {"name": "bring-fast-agent"}}).json()["result"]
+    text = got["messages"][0]["content"]["text"]
+    assert "bf_spend" in text
+    assert "bf_shopping_list" in text
+    resources = client.post("/mcp", headers=auth(token),
+                            json={"jsonrpc": "2.0", "id": 3, "method": "resources/list"}).json()["result"]["resources"]
+    assert resources[0]["uri"] == "bringfast://skill/agent"
+    read = client.post("/mcp", headers=auth(token),
+                       json={"jsonrpc": "2.0", "id": 4, "method": "resources/read",
+                             "params": {"uri": "bringfast://skill/agent"}}).json()["result"]
+    assert "Bring Fast" in read["contents"][0]["text"]
+
+
+def test_initialize_loads_skill_and_mcp_description(client, token):
+    r = client.post("/mcp", headers=auth(token),
+                    json={"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                          "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                                     "clientInfo": {"name": "Grok", "version": "1.0"}}})
+    body = r.json()["result"]
+    assert "per-user grocery MCP" in body["serverInfo"]["description"]
+    assert "bf_whoami" in body["instructions"]
+    assert "bf_spend" in body["instructions"]
+    assert body["capabilities"]["prompts"] == {"listChanged": False}
 
 
 def test_health_advertises_the_public_host(client):

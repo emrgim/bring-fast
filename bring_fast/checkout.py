@@ -16,6 +16,8 @@ LOGIN = {
     "grandiose": "https://www.grandiose.ae/customer/account/login/",
     "waitrose": "https://www.waitrose.ae/en/",
     "spinneys": "https://www.spinneys.com/en-ae/",
+    "mmi": "https://www.mmihomedelivery.ae/customer/account/login",
+    "africaneastern": "https://www.africaneasternonline.com/login",
 }
 
 HOME = {
@@ -23,6 +25,8 @@ HOME = {
     "grandiose": "https://www.grandiose.ae/",
     "waitrose": "https://www.waitrose.ae/en/",
     "spinneys": "https://www.spinneys.com/en-ae/",
+    "mmi": "https://www.mmihomedelivery.ae/",
+    "africaneastern": "https://www.africaneasternonline.com/",
 }
 
 # Bring Fast is multi-user but the desktop Chrome profile is shared, so a store
@@ -565,16 +569,78 @@ def _goto_checkout(page, store: str) -> str:
     return page.url
 
 
-def _in_thread(fn, **kwargs):
+class LiveCartTimeout(TimeoutError):
+    """Raised when official-site browser work exceeds the MCP-safe budget."""
+
+
+def _in_thread(fn, timeout: float = 240, **kwargs):
     import concurrent.futures
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(fn, **kwargs).result(timeout=240)
+    # Do not use `with ThreadPoolExecutor`: on timeout its shutdown(wait=True)
+    # keeps the MCP request blocked until Chrome finishes (often > Grok's limit).
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
+        return pool.submit(fn, **kwargs).result(timeout=timeout)
+    except concurrent.futures.TimeoutError as e:
+        store = kwargs.get("store") or "store"
+        raise LiveCartTimeout(
+            f"Live {store} cart/status exceeded {int(timeout)}s while driving the official site. "
+            "whoami/stores stay fast because they only read Bring Fast; cart/status open Chrome."
+        ) from e
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 def verify_login(*, store: str, email: str, password: str) -> dict[str, Any]:
-    """Check a saved store login on demand, so problems surface before a checkout."""
-    return _in_thread(_verify_login_sync, store=store, email=email, password=password)
+    if store == "carrefour":
+        from bring_fast.stores import carrefour as carrefour_api
+
+        auth = carrefour_api.login(email, password)
+        return {
+            "ok": bool(auth.get("ok")),
+            "reused": False,
+            "url": "",
+            "error": auth.get("error"),
+            "driver": "http",
+        }
+    if store == "grandiose":
+        from bring_fast.stores import grandiose as grandiose_api
+
+        auth = grandiose_api.login(email, password)
+        return {
+            "ok": bool(auth.get("ok")),
+            "reused": False,
+            "url": "",
+            "error": auth.get("error"),
+            "driver": "http",
+        }
+    if store == "mmi":
+        from bring_fast.stores import mmi as mmi_api
+
+        auth = mmi_api.login(email, password)
+        return {
+            "ok": bool(auth.get("ok")),
+            "reused": False,
+            "url": "",
+            "error": auth.get("error"),
+            "driver": "http",
+        }
+    if store == "africaneastern":
+        from bring_fast.stores import africaneastern as ae_api
+
+        auth = ae_api.login(email, password)
+        return {
+            "ok": bool(auth.get("ok")),
+            "reused": False,
+            "url": "",
+            "error": auth.get("error"),
+            "driver": "http",
+        }
+    return {
+        "ok": False,
+        "error": f"{store} HTTP login is not wired yet. Chrome will not be used.",
+        "driver": "http",
+    }
 
 
 def _verify_login_sync(*, store: str, email: str, password: str) -> dict[str, Any]:
@@ -613,15 +679,42 @@ def official_cart(
     password: str,
     action: str,
     items: list[dict[str, Any]],
+    timeout: float = 25,
+    session_token: str = "",
+    session_user: str = "",
 ) -> dict[str, Any]:
-    return _in_thread(
-        _official_cart_sync,
-        store=store,
-        email=email,
-        password=password,
-        action=action,
-        items=items,
-    )
+    """Official store cart via HTTP APIs. Chrome is not used."""
+    if store == "carrefour":
+        from bring_fast.stores import carrefour as carrefour_api
+
+        return carrefour_api.official_cart(
+            email=email,
+            password=password,
+            action=action,
+            items=items,
+            session_token=session_token,
+            session_user=session_user,
+        )
+    if store == "grandiose":
+        from bring_fast.stores import grandiose as grandiose_api
+
+        return grandiose_api.official_cart(
+            email=email,
+            password=password,
+            action=action,
+            items=items,
+            session_token=session_token,
+            session_user=session_user,
+        )
+    return {
+        "ok": False,
+        "official_count": None,
+        "items": [],
+        "logged_in": False,
+        "session_reused": False,
+        "driver": "http",
+        "error": f"{store} HTTP API client is not wired yet. Chrome will not be used.",
+    }
 
 
 def _official_cart_sync(
@@ -797,6 +890,11 @@ def run_checkout(
     address: str,
     items: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    if store == "grandiose":
+        from bring_fast.stores import grandiose as grandiose_api
+
+        live = grandiose_api.official_checkout(email=email, password=password)
+        return live
     return _in_thread(
         _run_checkout_sync,
         store=store,

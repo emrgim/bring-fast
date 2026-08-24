@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block body %}
+<p class="off"><a href="/purchases?range={{ range }}">← Purchases</a></p>
+<div class="prod-head">
+  {% if product.image_url %}
+  <img class="hero" src="{{ product.image_url }}" alt="{{ product.name }}" decoding="async" referrerpolicy="no-referrer"/>
+  {% else %}
+  <div class="hero empty">{{ product.name[:1] }}</div>
+  {% endif %}
+  <div class="copy">
+    <h1>{{ product.name }}</h1>
+    <p class="lead">{{ product.frequency }} · likely {{ product.likely or 0 }} · {{ product.times_bought }} buys · {{ product.per_year }}/yr</p>
+    {% if product.receipt_name and product.receipt_name != product.name %}
+    <p class="skus">Receipt {{ product.receipt_name }}</p>
+    {% endif %}
+    {% if product.barcodes %}
+    <p class="skus">Barcode {% for s in product.barcodes %}{{ s }}{% if not loop.last %} · {% endif %}{% endfor %}</p>
+    {% endif %}
+    {% if product.skus %}
+    <p class="skus">SKU {% for s in product.skus %}{{ s }}{% if not loop.last %} · {% endif %}{% endfor %}</p>
+    {% endif %}
+    {% if product.dept %}<p class="skus">{{ product.dept }}</p>{% endif %}
+    {% if product.official_name and product.official_name != product.receipt_name and product.official_name != product.name %}<p class="skus">{{ product.official_name }}</p>{% endif %}
+  </div>
+  <div class="compare">
+    {% for s in compare %}
+    <div class="compare-row {% if s.cheapest %}cheapest{% endif %} {% if s.dearest %}dearest{% endif %}">
+      <div class="who">
+        {% if s.logo %}<img src="{{ s.logo }}" alt=""/>{% endif %}
+        <b>{{ s.name }}</b>
+      </div>
+      <div class="amt">
+        {% if s.price %}AED {{ '%.2f'|format(s.price) }}
+          {% if s.vs_paid is not none %}
+          <span class="vs {% if s.vs_paid>0 %}up{% elif s.vs_paid<0 %}down{% endif %}">{{ '%+.0f'|format(s.vs_paid) }}%</span>
+          {% endif %}
+        {% elif s.error %}—{% else %}—{% endif %}
+      </div>
+      <form method="post" action="/purchases/{{ product.key }}/compare/{{ s.id }}">
+        <input type="hidden" name="range" value="{{ range }}"/>
+        <button class="ghost" type="submit">Reload</button>
+      </form>
+      {% if s.price and s.url %}
+      <a class="open" href="{{ s.url }}" target="_blank" rel="noopener noreferrer">Page</a>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="filters">
+  {% for key, label in [('1w','1 week'),('2w','2 weeks'),('1m','1 month'),('3m','3 months'),('1y','1 year'),('2y','2 years'),('3y','3 years'),('all','All')] %}
+  <a class="{% if range==key %}on{% endif %}" href="/purchases/{{ product.key }}?range={{ key }}">{{ label }}</a>
+  {% endfor %}
+  <form method="get" action="/purchases/{{ product.key }}">
+    <input type="hidden" name="range" value="custom"/>
+    <input type="date" name="start" value="{{ start }}"/>
+    <input type="date" name="end" value="{{ end }}"/>
+    <button type="submit">Apply</button>
+  </form>
+</div>
+
+<div class="card">
+  {% if product.series %}
+    {% if product.delta is not none %}
+    <p class="delta {% if product.delta>0 %}up{% else %}down{% endif %}">
+      {% if product.delta>0 %}Up{% elif product.delta<0 %}Down{% else %}Flat{% endif %}
+      AED {{ '%.2f'|format(product.first_price) }} → AED {{ '%.2f'|format(product.last_price) }}
+      ({{ '%+.1f'|format(product.delta_pct) }}%)
+    </p>
+    {% endif %}
+    {{ product.chart_svg|safe }}
+  {% else %}
+    <p class="off">No priced buys in this range.</p>
+  {% endif %}
+</div>
+
+<div class="card" style="margin-top:16px">
+  {% for b in product.purchases %}
+  <div class="buy">
+    <div>
+      <div class="when">{{ b.invoice_date }}</div>
+      <div class="meta">{{ b.store_name or b.retailer }} · {{ '%.2g'|format(b.qty) }} u
+        · <a href="/receipts/{{ b.retailer }}/{{ b.invoice_no }}" data-receipt="/receipts/{{ b.retailer }}/{{ b.invoice_no }}">#{{ b.invoice_no[-10:] }}</a>
+      </div>
+    </div>
+    <div class="amt">
+      {% if b.unit_price %}AED {{ '%.2f'|format(b.unit_price) }}{% else %}AED {{ '%.2f'|format(b.line_total) }}{% endif %}
+    </div>
+  </div>
+  {% else %}
+  <p class="off">No buys in this range.</p>
+  {% endfor %}
+</div>
+
+<div class="sheet" id="receipt-sheet">
+  <div class="sheet-panel">
+    <header>
+      <strong>Receipt</strong>
+      <button class="ghost" type="button" id="receipt-close">Close</button>
+    </header>
+    <iframe id="receipt-frame" title="Receipt"></iframe>
+  </div>
+</div>
+<script>
+(function(){
+  var sheet=document.getElementById("receipt-sheet");
+  var frame=document.getElementById("receipt-frame");
+  document.querySelectorAll("[data-receipt]").forEach(function(a){
+    a.addEventListener("click", function(e){
+      e.preventDefault();
+      frame.src=a.getAttribute("data-receipt");
+      sheet.classList.add("open");
+    });
+  });
+  document.getElementById("receipt-close").addEventListener("click", function(){
+    sheet.classList.remove("open");
+    frame.src="";
+  });
+  sheet.addEventListener("click", function(e){
+    if(e.target===sheet){ sheet.classList.remove("open"); frame.src=""; }
+  });
+})();
+</script>
+{% endblock %}

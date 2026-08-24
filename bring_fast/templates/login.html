@@ -1,28 +1,31 @@
 {% extends "base.html" %}
 {% block body %}
-<h1>Your stores.<br>Your account.</h1>
-<p class="lead">Un solo passaggio: email e password. Se non hai ancora un account Bring Fast, lo creiamo adesso. Ogni persona vede solo i propri login dei supermercati.</p>
-<div class="grid">
+<div class="auth-shell">
+  {% if intent == "signin" %}
+  <h1>Sign <em>in</em></h1>
+  <p class="lead">Welcome back. Use your Bring Fast email to open your stores.</p>
+  {% else %}
+  <h1>Create <em>account</em></h1>
+  <p class="lead">First time here. This email becomes your Bring Fast account. Then you link Grandiose.</p>
+  {% endif %}
   <div class="card">
-    <h2>Enter Bring Fast</h2>
     <form method="post" action="/login">
       <input type="hidden" name="next" value="{{ next or '/' }}"/>
+      <input type="hidden" name="intent" value="{{ intent }}"/>
       <label>Email</label>
       <input name="email" type="email" required autocomplete="username" autofocus
              value="{{ email or '' }}" placeholder="you@example.com"/>
-      <label>Password (min 6)</label>
-      <input name="password" type="password" required minlength="6" autocomplete="current-password"
-             placeholder="your Bring Fast password"/>
-      <p><button type="submit">Continue</button></p>
-      <p class="off">Prima volta? Questa email diventa il tuo account. Poi colleghi Carrefour, Grandiose, Waitrose, Spinneys.</p>
+      <label>Password</label>
+      <input name="password" type="password" required minlength="6" autocomplete="{{ 'current-password' if intent == 'signin' else 'new-password' }}"
+             placeholder="{{ 'Your password' if intent == 'signin' else 'At least 6 characters' }}"/>
+      <p><button type="submit">{% if intent == "signin" %}Sign in{% else %}Create account{% endif %}</button></p>
     </form>
-  </div>
-  <div class="card">
-    <h2>How it works</h2>
-    <p class="off">1 · Entra con la tua email Bring Fast.</p>
-    <p class="off">2 · Salva il login di ogni supermercato che usi.</p>
-    <p class="off">3 · In Grok aggiungi il connettore MCP: ti chiede lo stesso login, una volta sola.</p>
-    <p class="off">Nessun Client ID o secret da incollare. Il pagamento resta sul sito del supermercato.</p>
+    {% if intent == "signin" %}
+    <p class="switch"><a href="/forgot">Forgot your password?</a></p>
+    <p class="switch">New here? <a href="/login?mode=signup">Create an account</a></p>
+    {% else %}
+    <p class="switch">Already have an account? <a href="/login?mode=signin">Sign in</a></p>
+    {% endif %}
   </div>
 </div>
 {% endblock %}

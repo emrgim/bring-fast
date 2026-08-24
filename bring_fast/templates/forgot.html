@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="auth-shell">
+  <h1>Forgot <em>password</em></h1>
+  <p class="lead">Enter your Bring Fast email. If an account exists, we send a reset link.</p>
+  <div class="card">
+    <form method="post" action="/forgot">
+      <label>Email</label>
+      <input name="email" type="email" required autocomplete="username" autofocus placeholder="you@example.com"/>
+      <p><button type="submit">Send reset link</button></p>
+    </form>
+    <p class="switch"><a href="/login?mode=signin">Back to sign in</a></p>
+  </div>
+</div>
+{% endblock %}
