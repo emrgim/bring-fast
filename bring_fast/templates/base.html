@@ -4,9 +4,18 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
   <meta name="theme-color" content="#05060c"/>
+  <meta name="color-scheme" content="dark"/>
+  <meta name="application-name" content="Bring Fast"/>
+  <meta name="mobile-web-app-capable" content="yes"/>
   <meta name="apple-mobile-web-app-capable" content="yes"/>
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="apple-mobile-web-app-title" content="Bring Fast"/>
+  <meta name="format-detection" content="telephone=no"/>
   <title>{{ title or "Bring Fast" }}</title>
+  <link rel="manifest" href="/manifest.webmanifest"/>
+  <link rel="icon" href="/favicon.ico" sizes="32x32"/>
+  <link rel="icon" type="image/png" href="/static/pwa/icon-192.png" sizes="192x192"/>
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png"/>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Outfit:wght@400;500;600;700&family=Syne:wght@600;700;800&display=swap" rel="stylesheet"/>
   <style>
@@ -367,6 +376,11 @@
     table.data th a { color:inherit; }
     table.data th.sort a { color:var(--acc); }
     table.data th a:after { content:" ↕"; opacity:.35; }
+    @media (display-mode: standalone), (display-mode: fullscreen) {
+      nav.topnav { padding-top: max(10px, env(safe-area-inset-top)); }
+      .wrap { padding-bottom: calc(90px + env(safe-area-inset-bottom)); }
+      #pwa-install { display:none !important; }
+    }
     table.data th.sort.asc a:after { content:" ↑"; opacity:1; }
     table.data th.sort.desc a:after { content:" ↓"; opacity:1; }
     table.data td { padding:10px 8px; border-top:1px solid var(--line); vertical-align:middle; }
@@ -402,7 +416,12 @@
             <a href="/stores" class="{% if tab == 'stores' %}on{% endif %}">Stores</a>
           </div>
           <div class="user">{{ user.email }} · <a href="/logout">Sign out</a></div>
+          <button class="ghost upd-btn" type="button" id="pwa-install">Install</button>
           <button class="ghost upd-btn" type="button" id="upd-nav">Update</button>
+        </div>
+      {% else %}
+        <div class="nav-right">
+          <button class="ghost upd-btn" type="button" id="pwa-install">Install</button>
         </div>
       {% endif %}
     </nav>
@@ -464,6 +483,26 @@
       if(nav) nav.addEventListener("click", apply);
     })();
     {% endif %}
+    (function(){
+      if("serviceWorker" in navigator){
+        navigator.serviceWorker.register("/sw.js", {scope:"/"}).catch(function(){});
+      }
+      var btn=document.getElementById("pwa-install");
+      var deferred=null;
+      window.addEventListener("beforeinstallprompt", function(e){
+        e.preventDefault();
+        deferred=e;
+        if(btn) btn.classList.add("on");
+      });
+      if(btn){
+        btn.addEventListener("click", function(){
+          if(!deferred) return;
+          deferred.prompt();
+          deferred.userChoice.finally(function(){ deferred=null; btn.classList.remove("on"); });
+        });
+      }
+      window.addEventListener("appinstalled", function(){ if(btn) btn.classList.remove("on"); });
+    })();
   </script>
 </body>
 </html>
