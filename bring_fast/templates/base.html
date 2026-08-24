@@ -435,6 +435,10 @@
       window.addEventListener("scroll", sync, {passive:true});
       window.addEventListener("resize", sync);
     })();
+    (function(){
+      var sc=document.querySelector(".bars-scroller");
+      if(sc) sc.scrollLeft=sc.scrollWidth;
+    })();
     {% if user %}
     (function(){
       var bar=document.getElementById("upd-bar");
