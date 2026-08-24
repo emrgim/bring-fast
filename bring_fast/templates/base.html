@@ -374,6 +374,16 @@
     .thumb { width:48px; height:48px; border-radius:10px; object-fit:contain; background:#fff; }
     .thumb.empty { display:grid; place-items:center; color:#061018; font-weight:800; font-size:12px; background:linear-gradient(135deg,var(--acc),var(--acc2)); }
     .switch { margin-top:18px; color:var(--muted); font-size:13px; }
+    .upd {
+      display:none; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;
+      margin:0 0 14px; padding:10px 12px; border-radius:12px;
+      border:1px solid rgba(103,232,249,.35); background:rgba(103,232,249,.1);
+    }
+    .upd.on { display:flex; }
+    .upd b { color:var(--acc); }
+    .upd button { width:auto; min-height:36px; padding:8px 14px; }
+    .nav-right .upd-btn { display:none; padding:7px 10px; font-size:12px; width:auto; min-height:0; }
+    .nav-right .upd-btn.on { display:inline-block; }
   </style>
 </head>
 <body>
@@ -391,11 +401,18 @@
             <a href="/stores" class="{% if tab == 'stores' %}on{% endif %}">Stores</a>
           </div>
           <div class="user">{{ user.email }} · <a href="/logout">Sign out</a></div>
+          <button class="ghost upd-btn" type="button" id="upd-nav">Update</button>
         </div>
       {% endif %}
     </nav>
     {% if error %}<p class="err">{{ error }}</p>{% endif %}
     {% if notice %}<p class="notice">{{ notice }}</p>{% endif %}
+    {% if user %}
+    <div class="upd" id="upd-bar">
+      <div><b>Update available</b> from GitHub <span id="upd-meta"></span></div>
+      <button type="button" id="upd-go">Install update</button>
+    </div>
+    {% endif %}
     {% block body %}{% endblock %}
   </div>
   {% if user %}
@@ -417,6 +434,31 @@
       window.addEventListener("scroll", sync, {passive:true});
       window.addEventListener("resize", sync);
     })();
+    {% if user %}
+    (function(){
+      var bar=document.getElementById("upd-bar");
+      var meta=document.getElementById("upd-meta");
+      var nav=document.getElementById("upd-nav");
+      var go=document.getElementById("upd-go");
+      function paint(d){
+        if(!d||!d.available){ if(bar) bar.classList.remove("on"); if(nav) nav.classList.remove("on"); return; }
+        if(bar) bar.classList.add("on");
+        if(nav) nav.classList.add("on");
+        if(meta) meta.textContent=" · "+(d.behind||"?")+" commit(s) · "+(d.remote||"");
+      }
+      function apply(){
+        if(go){ go.disabled=true; go.textContent="Updating…"; }
+        fetch("/update/apply", {method:"POST", credentials:"same-origin"}).then(function(r){ return r.json(); }).then(function(d){
+          if(d.applied){ location.reload(); return; }
+          if(go){ go.disabled=false; go.textContent="Install update"; }
+          if(d.error && bar) bar.querySelector("div").insertAdjacentHTML("beforeend", " · "+d.error);
+        }).catch(function(){ setTimeout(function(){ location.reload(); }, 2500); });
+      }
+      fetch("/update/status", {credentials:"same-origin"}).then(function(r){ return r.json(); }).then(paint).catch(function(){});
+      if(go) go.addEventListener("click", apply);
+      if(nav) nav.addEventListener("click", apply);
+    })();
+    {% endif %}
   </script>
 </body>
 </html>

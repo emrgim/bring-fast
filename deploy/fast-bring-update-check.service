@@ -1,0 +1,8 @@
+[Unit]
+Description=Check Bring Fast updates on GitHub
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/domvs/bring-fast
+Environment=BRINGFAST_DATA=/home/domvs/.bring-fast
+ExecStart=/home/domvs/bring-fast/.venv/bin/python -m bring_fast.update
