@@ -71,6 +71,29 @@ def test_parse_grandiose_lines():
     assert {i["barcode"] for i in out["items"]} == {"9814172000000", "9816250000000"}
 
 
+def test_parse_grandiose_sms_slip():
+    text = """
+TAX INVOICE
+Grandiose Supermarket Sole Proprietorship LLC
+Slip: 000000ST11000167487
+Date: 06/08/2026 7:50 PM
+Items Qty. Price Amount
+3000000003617 1 19.00 19.00
+Veroni Spianata Romana Slices
+8005573008356 1 19.00 19.00
+Veroni Salami Napoli Slices
+3000000003073 1 0.60 0.60
+Pacific Printed Brown Paper Bag
+Total 38.60
+"""
+    out = parse_grandiose_text(text)
+    assert out["invoice_no"] == "000000ST11000167487"
+    assert out["invoice_date"] == "2026-08-06"
+    assert len(out["items"]) == 3
+    assert out["items"][0]["barcode"] == "3000000003617"
+    assert out["items"][0]["line_total"] == 19.0
+
+
 def test_parse_grandiose_confirmation_html():
     from bring_fast.invoice_parse import parse_grandiose_confirmation_html
 
