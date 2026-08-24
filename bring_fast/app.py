@@ -234,7 +234,13 @@ def update_apply(request: Request):
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
-def spend_home(request: Request, range: str = "1m", grain: str = "monthly"):
+def spend_home(
+    request: Request,
+    range: str = "1m",
+    start: str = "",
+    end: str = "",
+    grain: str = "monthly",
+):
     user = current_user(request)
     if not user:
         return RedirectResponse("/login?mode=signin&next=/dashboard", status_code=303)
@@ -243,8 +249,7 @@ def spend_home(request: Request, range: str = "1m", grain: str = "monthly"):
         if rec and rec.get("path") == "/dashboard" and rec.get("query"):
             return RedirectResponse("/dashboard?" + rec["query"], status_code=303)
     grain = grain if grain in purchases.GRAINS else "monthly"
-    range_key = range if range in purchases.RANGES else "1m"
-    since, until, range_key = purchases.resolve_window(user["id"], range_key)
+    since, until, range_key = purchases.resolve_window(user["id"], range, start, end)
     raw_days = purchases.daily_spend(user["id"], since=since, until=until)
     days = purchases.bucket_series(raw_days, grain)
     if grain == "daily" and len(days) > 60:
@@ -264,15 +269,17 @@ def spend_home(request: Request, range: str = "1m", grain: str = "monthly"):
             "days_json": json.dumps(days),
             "dash_spend": snap["total"],
             "dash_receipts": snap["receipts"],
-            "dash_days": snap["shop_days"],
+            "dash_days": snap["calendar_days"],
             "daily_avg": snap["daily_avg"],
             "calendar_days": snap["calendar_days"],
-            "today_spend": snap["today"],
-            "week_avg": snap["week_avg"],
+            "range_start": since or "",
+            "range_end": until.isoformat(),
             "products": top,
             "trend": trend,
             "grain": grain,
             "range": range_key,
+            "start": start or (since or ""),
+            "end": end or until.isoformat(),
         },
     )
 
