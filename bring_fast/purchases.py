@@ -1074,7 +1074,7 @@ def invoice_receipt(user_id: int, retailer: str, invoice_no: str) -> dict[str, A
         "invoice_no": row["invoice_no"],
         "order_no": row["order_no"] or "",
         "invoice_date": row["invoice_date"] or "",
-        "items": lines,
+        "lines": lines,
         "total": sum(float(it.get("line_total") or 0) for it in lines),
     }
 

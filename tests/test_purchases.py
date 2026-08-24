@@ -597,6 +597,27 @@ def test_spend_snapshot_changes_with_range(bf):
     assert m_s["daily_avg"] > all_s["daily_avg"]
 
 
+def test_receipt_view_without_pdf(bf, client):
+    user = bf.db.create_user("slip@example.com", "secret1")
+    bf.purchases.upsert_invoice(
+        user["id"],
+        {
+            "retailer": "grandiose",
+            "invoice_no": "00000OCM07000182242",
+            "invoice_date": "2025-07-04",
+            "store_name": "Grandiose",
+            "items": [
+                {"name": "Arabic Shawarma", "qty": 1, "unit_price": 2.5, "line_total": 2.5, "barcode": "194798"}
+            ],
+        },
+    )
+    client.post("/login", data={"email": "slip@example.com", "password": "secret1", "intent": "signin"})
+    r = client.get("/receipts/grandiose/00000OCM07000182242")
+    assert r.status_code == 200
+    assert "Arabic Shawarma" in r.text
+    assert "2.50" in r.text
+
+
 
 
 

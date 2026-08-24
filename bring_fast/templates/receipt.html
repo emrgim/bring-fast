@@ -30,7 +30,7 @@
     <table>
       <thead><tr><th>Item</th><th class="r">Qty</th><th class="r">AED</th></tr></thead>
       <tbody>
-      {% for it in built.items %}
+      {% for it in built.lines %}
         <tr>
           <td>{{ it.name }}</td>
           <td class="r">{{ '%.2g'|format(it.qty) }}</td>
