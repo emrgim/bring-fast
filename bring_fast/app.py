@@ -60,6 +60,36 @@ app.add_middleware(
     https_only=PUBLIC_URL.startswith("https://"),
 )
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
+STATIC = Path(__file__).resolve().parent / "static"
+
+
+@app.get("/manifest.webmanifest")
+def pwa_manifest():
+    return FileResponse(
+        STATIC / "pwa" / "manifest.webmanifest",
+        media_type="application/manifest+json",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@app.get("/sw.js")
+def pwa_service_worker():
+    return FileResponse(
+        STATIC / "pwa" / "sw.js",
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@app.get("/apple-touch-icon.png")
+def pwa_apple_touch_icon():
+    return FileResponse(STATIC / "pwa" / "icon-180.png", media_type="image/png")
+
+
+@app.get("/favicon.ico")
+def pwa_favicon():
+    return FileResponse(STATIC / "pwa" / "favicon.ico", media_type="image/x-icon")
+
 
 
 def current_user(request: Request):
