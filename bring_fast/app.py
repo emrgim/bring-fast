@@ -1632,6 +1632,23 @@ def oauth_prm_metadata(request: Request):
     return _prm_metadata(request)
 
 
+@app.get("/.well-known/oauth-protected-resource/plex/mcp")
+def oauth_prm_plex(request: Request):
+    base = _issuer(request)
+    return {
+        "resource": f"{base}/plex/mcp",
+        "authorization_servers": [base],
+        "bearer_methods_supported": ["header"],
+        "scopes_supported": ["mcp"],
+        "resource_name": "Plex",
+    }
+
+
+@app.get("/.well-known/oauth-authorization-server/plex/mcp")
+def oauth_as_plex(request: Request):
+    return _as_metadata(request)
+
+
 def _safe_redirect(uri: str) -> bool:
     if not uri:
         return False
