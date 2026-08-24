@@ -618,6 +618,37 @@ def test_receipt_view_without_pdf(bf, client):
     assert "2.50" in r.text
 
 
+def test_daily_bars_include_empty_days(bf):
+    from datetime import date
+
+    user = bf.db.create_user("bars@example.com", "secret1")
+    bf.purchases.upsert_invoice(
+        user["id"],
+        {
+            "retailer": "grandiose",
+            "invoice_no": "a",
+            "invoice_date": "2026-08-20",
+            "items": [{"name": "Milk", "qty": 1, "unit_price": 10, "line_total": 10, "barcode": "1"}],
+        },
+    )
+    filled = bf.purchases.fill_daily_calendar(
+        bf.purchases.daily_spend(user["id"], since="2026-08-20", until=date(2026, 8, 24)),
+        "2026-08-20",
+        date(2026, 8, 24),
+    )
+    assert [d["date"] for d in filled] == [
+        "2026-08-20",
+        "2026-08-21",
+        "2026-08-22",
+        "2026-08-23",
+        "2026-08-24",
+    ]
+    assert filled[0]["spend"] == 10
+    assert filled[1]["spend"] == 0
+    assert filled[1]["pct"] == 0
+
+
+
 
 
 

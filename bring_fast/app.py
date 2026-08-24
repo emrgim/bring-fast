@@ -252,8 +252,8 @@ def spend_home(
     since, until, range_key = purchases.resolve_window(user["id"], range, start, end)
     raw_days = purchases.daily_spend(user["id"], since=since, until=until)
     days = purchases.bucket_series(raw_days, grain)
-    if grain == "daily" and len(days) > 60:
-        days = days[-60:]
+    if grain == "daily":
+        days = purchases.fill_daily_calendar(days, since, until)
     top = purchases.list_products(user["id"], sort="spend", direction="desc", since=since, until=until)[:8]
     trend = purchases.price_trend(user["id"], since=since, until=until, grain=grain)
     snap = purchases.spend_snapshot(user["id"], since=since, until=until)
@@ -554,6 +554,8 @@ def purchases_page(
     since, until, range_key = purchases.resolve_window(user["id"], range, start, end)
     raw_days = purchases.daily_spend(user["id"], since=since, until=until, dept=dept)
     days = purchases.bucket_series(raw_days, grain)
+    if grain == "daily":
+        days = purchases.fill_daily_calendar(days, since, until)
     _remember(request, user)
     return templates.TemplateResponse(
         request,

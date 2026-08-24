@@ -859,6 +859,40 @@ def spend_snapshot(user_id: int, since: str | None = None, until: date | None = 
     }
 
 
+def fill_daily_calendar(
+    days: list[dict[str, Any]],
+    since: str | None,
+    until: date | None,
+) -> list[dict[str, Any]]:
+    """Every calendar day in the window, including days with AED 0."""
+    by = {d["date"]: d for d in days if d.get("date")}
+    start = _parse_day(since) if since else None
+    if start is None and days:
+        start = _parse_day(days[0]["date"])
+    end = until or date.today()
+    if start is None or start > end:
+        return days
+    out: list[dict[str, Any]] = []
+    cur = start
+    while cur <= end:
+        iso = cur.isoformat()
+        if iso in by:
+            out.append(by[iso])
+        else:
+            out.append(
+                {
+                    "date": iso,
+                    "label": iso,
+                    "spend": 0.0,
+                    "invoices": [],
+                    "count": 0,
+                    "pct": 0,
+                }
+            )
+        cur += timedelta(days=1)
+    return out
+
+
 GRAINS = ("daily", "weekly", "monthly", "yearly")
 
 
