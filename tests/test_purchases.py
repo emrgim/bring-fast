@@ -558,8 +558,8 @@ def test_price_trend_is_mean_of_product_changes(bf, client):
     client.post("/login", data={"email": "trend@example.com", "password": "secret1", "intent": "signin"})
     html = client.get("/dashboard?range=all&grain=monthly").text
     assert "Price trend" in html
-    assert "Daily average" in html
-    assert "Today" in html
+    assert "Daily average this period" in html
+    assert "÷" in html
     assert "<svg" in html
 
 

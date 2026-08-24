@@ -12,7 +12,7 @@
     </div>
     <div class="grain">
       {% for key, label in [('daily','Daily'),('weekly','Weekly'),('monthly','Monthly'),('yearly','Yearly')] %}
-      <a class="{% if grain==key %}on{% endif %}" href="/dashboard?range={{ range }}&grain={{ key }}">{{ label }}</a>
+      <a class="{% if grain==key %}on{% endif %}" href="/dashboard?range={{ range }}&grain={{ key }}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}">{{ label }}</a>
       {% endfor %}
     </div>
   </div>
@@ -30,13 +30,12 @@
 <div class="widgets">
   <div class="trend daily-avg">
     <div>
-      <div class="who">Daily average</div>
+      <div class="who">Daily average this period</div>
       <div class="delta">AED {{ '%.2f'|format(daily_avg) }}</div>
     </div>
     <div class="who">
-      Today <b>AED {{ '%.2f'|format(today_spend) }}</b>
-      · last 7 days <b>AED {{ '%.2f'|format(week_avg) }}</b> / day<br/>
-      {{ '%.2f'|format(dash_spend) }} spent · {{ calendar_days }} calendar days
+      AED {{ '%.2f'|format(dash_spend) }} ÷ {{ calendar_days }} days
+      · {{ range_start }} → {{ range_end }}
     </div>
   </div>
   <div class="trend {{ trend.direction }}">
@@ -55,9 +54,16 @@
 {% endif %}
 
 <div class="filters">
-  {% for key, label in [('1m','1 month'),('3m','3 months'),('1y','1 year'),('2y','2 years'),('all','All')] %}
+  {% for key, label in [('1w','1 week'),('1m','1 month'),('3m','3 months'),('1y','1 year'),('all','All')] %}
   <a class="{% if range==key %}on{% endif %}" href="/dashboard?range={{ key }}&grain={{ grain }}">{{ label }}</a>
   {% endfor %}
+  <form method="get" action="/dashboard">
+    <input type="hidden" name="grain" value="{{ grain }}"/>
+    <input type="hidden" name="range" value="custom"/>
+    <input type="date" name="start" value="{{ start }}"/>
+    <input type="date" name="end" value="{{ end }}"/>
+    <button type="submit">Apply</button>
+  </form>
 </div>
 
 <div class="mlist">
