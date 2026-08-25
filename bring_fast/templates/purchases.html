@@ -1,5 +1,17 @@
 {% extends "base.html" %}
+{# The board and the first batch of the shelf arrive as markup. The rest is not
+   in this page at all: it is asked for a batch at a time once the board is on
+   screen, so an account with hundreds of products costs the same to open as an
+   account with twelve, and a tap on another tab is never queued behind a shelf. #}
+{% import "_shelf_shapes.html" as shapes with context %}
 {% block body %}
+{# Same bar as the home tab, so the figure stays on screen in both places. #}
+<div class="spend-pin" id="spend-pin" aria-hidden="true">
+  <div class="pin-in">
+    <span class="pin-avg">{{ period_word }} avg <b>AED {{ '%.2f'|format(period_avg) }}</b></span>
+    <span class="pin-spent"><b>AED {{ '%.0f'|format(dash_spend) }}</b> spent</span>
+  </div>
+</div>
 <div class="purchases-board">
 <div class="dash">
   <div class="dash-top">
@@ -67,10 +79,12 @@
   <a class="{% if sort=='times' %}on{% endif %}" href="/purchases?sort=times&dir=desc&range={{ range }}&grain={{ grain }}&dept={{ dept }}">Times</a>
   <a class="{% if sort=='name' %}on{% endif %}" href="/purchases?sort=name&dir=asc&range={{ range }}&grain={{ grain }}&dept={{ dept }}">Name</a>
 </div>
-<div class="mlist" id="shelf-cards">
-  {% include "_shelf_cards.html" %}
+<div class="mlist" id="buy-cards">
+  {% for p in products %}{{ shapes.card(p) }}{% endfor %}
+  {% if not shelf_total %}
+  <p class="off">No invoices in this range.</p>
+  {% endif %}
 </div>
-{% if not shelf_total %}<p class="off">No invoices in this range.</p>{% endif %}
 <div class="table-wrap desk-table">
   <table class="data">
     <colgroup>
@@ -105,20 +119,21 @@
         </th>
       </tr>
     </thead>
-    <tbody id="shelf-rows">
-    {% include "_shelf_rows.html" %}
+    <tbody id="buy-rows">
+    {% for p in products %}{{ shapes.row(p) }}{% endfor %}
     {% if not shelf_total %}
       <tr><td colspan="7" class="off">No invoices in this range.</td></tr>
     {% endif %}
     </tbody>
   </table>
 </div>
-{# The shelf keeps arriving after the page does. The line says where the app is
-   up to and carries the batch the loader asks for next, so a reader with no
-   JavaScript still gets the first batch and the count of the rest. #}
-<p class="shelf-note{% if shelf_next %} on{% endif %}" id="shelf-note" role="status" aria-live="polite"
+{# Where the shelf is up to, and where the loader asks for the rest of it. It is
+   a line of prose rather than a spinner: the products already on screen are
+   read while the rest arrives. A reader with no JavaScript still gets the board,
+   the first batch and an honest count of what the tab holds. #}
+<p class="drip-rest off{% if not shelf_next %} done{% endif %}" id="buy-rest" role="status" aria-live="polite"
    data-shelf="{{ shelf_url }}" data-next="{{ shelf_next }}" data-total="{{ shelf_total }}" data-batch="{{ shelf_batch }}">
-  {% if shelf_next %}Loading the shelf · {{ shelf_next }} of {{ shelf_total }} products{% endif %}
+  {% if shelf_next %}{{ shelf_total - shelf_next }} more products loading…{% endif %}
 </p>
 </div>
 <script>
@@ -153,25 +168,37 @@
   if(selected) show(+selected.getAttribute("data-i"));
 })();
 (function(){
-  /* The shelf arrives a batch at a time, after the board is already on screen,
-     and a batch is only asked for once the pictures of the one before it have
-     landed. Leaving the tab stops it where it is: the next page's own request
-     must never queue behind a shelf of product shots. */
-  var note=document.getElementById("shelf-note");
-  var cards=document.getElementById("shelf-cards");
-  var rows=document.getElementById("shelf-rows");
-  if(!note||!cards) return;
+  /* The shelf arrives a batch at a time from the server, after the board is
+     already on screen, and the next batch is only asked for once the pictures
+     of the one before it have mostly landed. Leaving the tab stops it where it
+     is: the next page's own request must never queue behind a shelf of product
+     shots. */
+  var note=document.getElementById("buy-rest");
+  if(!note) return;
   var url=note.getAttribute("data-shelf")||"";
-  var step=+note.getAttribute("data-batch")||12;
+  var step=+note.getAttribute("data-batch")||24;
   var total=+note.getAttribute("data-total")||0;
   var at=+note.getAttribute("data-next")||0;
-  var SHOT_MS=2500;
+  var ON_THE_WIRE=12;   /* shots still coming before the next batch waits */
+  var NUDGE_MS=1500;    /* a stalled shop must not stop the shelf */
+  var NEAR_END=1200;    /* scrolling this close to the end skips the wait */
   var TRIES=3;
-  var control=null, paused=false, busy=false, tries=0;
+  /* The phone list and the desk table are the same products in two shapes. A
+     batch carries both and only the one the layout is showing is put in, so a
+     phone asks for each picture once; the other waits in case the screen turns. */
+  var shapes=[
+    {into:document.getElementById("buy-cards"), pick:"[data-shelf-cards]", waiting:[]},
+    {into:document.getElementById("buy-rows"), pick:"[data-shelf-rows]", waiting:[]}
+  ];
+  var control=null, paused=false, busy=false, tries=0, rush=false, poured=Date.now();
+
   function say(text, again){
     note.textContent=text||"";
-    note.classList.toggle("on", !!text);
+    note.classList.toggle("done", !text);
     note.classList.toggle("again", !!again);
+  }
+  function count(){
+    say(at?((total-at)+" more products loading…"):"");
   }
   function pause(){
     paused=true;
@@ -181,46 +208,40 @@
     if(window.requestIdleCallback) requestIdleCallback(fn, {timeout:1200});
     else setTimeout(fn, 120);
   }
-  function move(from, to){
-    var added=[];
-    if(!from||!to) return added;
-    while(from.firstElementChild){
-      to.appendChild(from.firstElementChild);
-      added.push(to.lastElementChild);
-    }
-    return added;
+  function drawn(into){
+    return !!into && (into.offsetParent!==null || into.getClientRects().length>0);
   }
-  function shots(nodes){
-    var pics=[];
-    nodes.forEach(function(node){
-      Array.prototype.forEach.call(node.querySelectorAll("img"), function(img){ pics.push(img); });
-    });
-    return pics;
+  function calm(){
+    return rush || window.__bfShots.live<ON_THE_WIRE || Date.now()-poured>NUDGE_MS;
   }
-  function landed(pics){
-    if(!pics.length) return Promise.resolve();
-    var each=pics.map(function(img){
-      if(img.complete) return Promise.resolve();
-      return new Promise(function(done){
-        img.addEventListener("load", done, {once:true});
-        img.addEventListener("error", done, {once:true});
-      });
+  /* Whatever is waiting goes into whichever shape the layout is showing, which
+     is also how a turned screen catches up on the batches it missed. */
+  function flush(){
+    shapes.forEach(function(shape){
+      if(!shape.waiting.length || !drawn(shape.into)) return;
+      var html=shape.waiting.join("");
+      shape.waiting=[];
+      window.__bfShots.live+=(html.match(/<img/g)||[]).length;
+      shape.into.insertAdjacentHTML("beforeend", html);
+      poured=Date.now();
     });
-    /* A shop CDN that never answers must not hold the rest of the shelf back. */
-    return Promise.race([Promise.all(each), new Promise(function(done){ setTimeout(done, SHOT_MS); })]);
   }
   function put(html){
     var doc=new DOMParser().parseFromString(html, "text/html");
     var batch=doc.querySelector("[data-shelf-batch]");
     if(!batch) throw new Error("no batch");
-    var added=move(batch.querySelector("[data-shelf-cards]"), cards);
-    added=added.concat(move(batch.querySelector("[data-shelf-rows]"), rows));
+    shapes.forEach(function(shape){
+      var hold=batch.querySelector(shape.pick);
+      if(hold) shape.waiting.push(hold.innerHTML);
+    });
     total=+batch.getAttribute("data-total")||total;
     at=+batch.getAttribute("data-next")||0;
-    return shots(added);
+    flush();
   }
   function more(){
     if(paused||busy||!at||!url) return;
+    if(!calm()){ setTimeout(more, 250); return; }
+    rush=false;
     busy=true;
     control=("AbortController" in window)?new AbortController():null;
     fetch(url+"&offset="+at+"&limit="+step, {
@@ -231,27 +252,25 @@
       return r.text();
     }).then(function(html){
       control=null;
-      if(paused){ busy=false; return; }
-      var pics=put(html);
+      busy=false;
+      if(paused) return;
+      put(html);
       tries=0;
-      say(at?("Loading the shelf · "+at+" of "+total+" products"):"");
-      landed(pics).then(function(){
-        busy=false;
-        if(!paused && at) idle(more);
-      });
+      count();
+      if(at) idle(more);
     }).catch(function(){
       control=null;
       busy=false;
       if(paused) return;
       tries+=1;
       if(tries<TRIES){ setTimeout(more, 1200*tries); return; }
-      /* Offline, or the server said no: the shelf so far stays readable and
-         the line becomes the way to ask for the rest. */
+      /* Offline, or the server said no: the shelf so far stays readable and the
+         line becomes the way to ask for the rest. */
       say("The rest of the shelf did not arrive · tap to try again", true);
       note.addEventListener("click", function once(){
         note.removeEventListener("click", once);
         tries=0;
-        say("Loading the shelf · "+at+" of "+total+" products");
+        count();
         more();
       }, {once:true});
     });
@@ -260,6 +279,7 @@
     if(document.visibilityState==="hidden") return;
     paused=false;
     tries=0;
+    flush();
     if(at) idle(more);
   }
   /* A tap on any link is the reader leaving: the shelf gives the network back
@@ -276,6 +296,13 @@
   document.addEventListener("visibilitychange", function(){
     if(document.visibilityState==="hidden") pause(); else resume();
   });
+  /* Turning the screen changes which shape is being read. */
+  window.addEventListener("resize", flush, {passive:true});
+  /* A reader already at the end is not waiting on politeness. */
+  window.addEventListener("scroll", function(){
+    var bottom=document.documentElement.scrollHeight-window.scrollY-window.innerHeight;
+    if(bottom<NEAR_END){ rush=true; if(!busy) idle(more); }
+  }, {passive:true});
   /* Not before the page it belongs to has finished: the board and the first
      batch are what the reader opened the tab for. */
   if(!at) return;

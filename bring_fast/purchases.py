@@ -637,7 +637,9 @@ def attach_likely(user_id: int, products: list[dict[str, Any]], *, today: date |
     return products
 
 
-SHELF_BATCH = 12
+# A screenful, so the tab opens with something to read and the batches after it
+# are few enough that a high-latency connection is not spent on round trips.
+SHELF_BATCH = 24
 SHELF_BATCH_MAX = 60
 _SHELF_HOLD_S = 30.0
 _shelf_memo: dict[tuple[Any, ...], tuple[float, list[dict[str, Any]]]] = {}

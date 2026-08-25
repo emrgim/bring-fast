@@ -1,79 +1,35 @@
 {% extends "base.html" %}
 {% block body %}
 <h1>Your <em>stores</em></h1>
-<p class="lead">Search every store for comparisons. Orders only on Magento: Grandiose and Union Coop.</p>
+<p class="lead">Every store can be searched and compared. Open a store to link it, turn it off, or change what it holds.</p>
 
-<div class="card mcp">
+<div class="grid">
+{% for r in retailers %}
+  {# The list reads a store out; it never changes one. #}
+  <a class="card store cardlink{% if not r.enabled %} is-off{% endif %}" id="store-{{ r.id }}" href="/stores/{{ r.id }}" style="--store: {{ r.color }}">
+    <div class="head">
+      <img class="logo" src="{{ r.logo }}" alt="{{ r.name }} logo" width="64" height="64" loading="eager" decoding="async"/>
+      <div>
+        <h2>{{ r.name }}
+          {% if r.enabled %}<span class="pill on">On</span>{% else %}<span class="pill off">Off</span>{% endif %}
+        </h2>
+        {% if r.linked %}<div class="ok">Linked · {{ r.login_email }}</div>{% else %}<div class="off">Not linked</div>{% endif %}
+      </div>
+    </div>
+    <div class="caps" aria-label="What this store can do">
+      {% for c in r.caps %}<span class="cap{% if not c.on %} no{% endif %}">{{ c.label }}</span>{% endfor %}
+    </div>
+    <div class="go">Open {{ r.name }} →</div>
+  </a>
+{% endfor %}
+</div>
+
+<div class="card mcp" style="margin-top:16px">
   <h2>Grok connector</h2>
   <p class="off">MCP URL</p>
   <p><code>{{ mcp_url }}</code></p>
   <p class="off">Personal token — keep it private</p>
   <p class="token">{{ user.mcp_token }}</p>
   <form method="post" action="/rotate-token"><button class="ghost" type="submit">Generate new token</button></form>
-</div>
-
-<div class="grid">
-{% for r in retailers %}
-  <div class="card store{% if not r.enabled %} is-off{% endif %}" id="store-{{ r.id }}" style="--store: {{ r.color }}">
-    <div class="head">
-      <img class="logo" src="{{ r.logo }}" alt="{{ r.name }} logo" width="64" height="64" loading="eager" decoding="async"/>
-      <div>
-        <h2>{{ r.name }}
-          {% if r.enabled %}<span class="pill on">On</span>{% else %}<span class="pill off">Off</span>{% endif %}
-          {% if r.shop %}<span class="pill on">Shop</span>{% else %}<span class="pill off">Search only</span>{% endif %}
-        </h2>
-        <div class="site"><a href="{{ r.url }}" target="_blank" rel="noopener">{{ r.url }}</a></div>
-        {% if r.linked %}<div class="ok">Linked · {{ r.login_email }}</div>{% else %}<div class="off">Not linked</div>{% endif %}
-      </div>
-    </div>
-    <form method="post" action="/retailers/{{ r.id }}/toggle">
-      <p class="split">
-        <button class="{% if r.enabled %}ghost danger{% endif %}" type="submit">
-          {% if r.enabled %}Disable {{ r.name }}{% else %}Enable {{ r.name }}{% endif %}
-        </button>
-      </p>
-    </form>
-    {% if r.enabled and r.shop %}
-    {% if r.login_email and edit != r.id %}
-    <dl class="saved">
-      <dt>Username / email on {{ r.name }}</dt>
-      <dd>{{ r.login_email }}</dd>
-      <dt>Password</dt>
-      <dd>{% if r.has_password %}Saved{% else %}Not saved yet{% endif %}</dd>
-      <dt>Delivery address for {{ r.name }}</dt>
-      <dd>{{ r.delivery_address or "Not set" }}</dd>
-    </dl>
-    <p class="split">
-      <a class="btn" href="/stores?edit={{ r.id }}#store-{{ r.id }}">Edit {{ r.name }}</a>
-    </p>
-    {% else %}
-    <form method="post" action="/retailers/{{ r.id }}" autocomplete="off">
-      <label for="email-{{ r.id }}">Username / email on {{ r.name }}</label>
-      <input id="email-{{ r.id }}" name="email" type="email" value="{{ r.login_email or '' }}" required
-             placeholder="your store login" autocomplete="off" autocapitalize="none" spellcheck="false"/>
-      <label for="password-{{ r.id }}">Password{% if r.has_password %} (leave blank to keep current){% endif %}</label>
-      <input id="password-{{ r.id }}" name="password" type="password" placeholder="store password" autocomplete="new-password"/>
-      <label for="address-{{ r.id }}">Delivery address for {{ r.name }}</label>
-      <input id="address-{{ r.id }}" name="address" type="text" value="{{ r.delivery_address or '' }}"
-             placeholder="Building, area, city" autocomplete="off"/>
-      <p class="split">
-        <button type="submit">Save {{ r.name }}</button>
-        {% if r.login_email %}<a class="btn ghost" href="/stores#store-{{ r.id }}">Cancel</a>{% endif %}
-      </p>
-    </form>
-    {% endif %}
-    {% if r.linked %}
-    <div class="split">
-      <form method="post" action="/retailers/{{ r.id }}/check"><button class="ghost" type="submit">Check login</button></form>
-      <form method="post" action="/retailers/{{ r.id }}/clear"><button class="ghost" type="submit">Remove login</button></form>
-    </div>
-    {% endif %}
-    {% elif r.enabled %}
-    <p class="off">Search only. Not Magento — no cart and no orders until we test it.</p>
-    {% else %}
-    <p class="off">Off. Hidden from MCP tools until you enable it.{% if not r.shop %} Search only when enabled.{% endif %}</p>
-    {% endif %}
-  </div>
-{% endfor %}
 </div>
 {% endblock %}

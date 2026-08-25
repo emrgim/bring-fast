@@ -20,8 +20,15 @@ const NET_TIMEOUT_MS = 6000;
 const REFRESH_FLOOR_MS = 30000;
 const WARM_FLOOR_MS = 60000;
 /* Product shots come from the shops, so the shelf is capped instead of
- * growing for as long as the app is installed. */
-const IMAGE_CAP = 300;
+ * growing for as long as the app is installed. A thumbnail is a few kilobytes
+ * and an account can hold hundreds of products, so the cap holds a whole
+ * shelf rather than evicting the top of the list the user just scrolled. */
+const IMAGE_CAP = 700;
+/* Warming a page in the background saves the shots that page draws, not every
+ * shot it names: the rest arrive as the list fills, and a background flood is
+ * exactly what made a tap wait. */
+const SHOT_WARM = 12;
+const WARM_AT_ONCE = 3;
 const STAMP = "x-bf-cached-at";
 /* Where the purchases tab asks for the next batch of its shelf. */
 const SHELF_PATH = "/purchases/rows";
@@ -231,6 +238,21 @@ async function sent(event) {
   }
 }
 
+/* A few at a time, never all at once: warming in the background must leave the
+ * wire free for whatever the person is actually doing. */
+async function pool(items, width, run) {
+  let at = 0;
+  const hands = [];
+  for (let i = 0; i < Math.min(width, items.length); i++) {
+    hands.push(
+      (async () => {
+        while (at < items.length) await run(items[at++]);
+      })()
+    );
+  }
+  await Promise.all(hands);
+}
+
 async function trim(cache, cap) {
   const keys = await cache.keys();
   if (keys.length <= cap) return;
@@ -325,7 +347,7 @@ async function warmShots(html, base) {
   const tag = /<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/gi;
   const urls = [];
   let found;
-  while ((found = tag.exec(html)) !== null) {
+  while ((found = tag.exec(html)) !== null && urls.length < SHOT_WARM) {
     if (!found[1] || found[1].indexOf("data:") === 0) continue;
     let url;
     try {
@@ -341,19 +363,17 @@ async function warmShots(html, base) {
   const local = await caches.open(ASSETS);
   const shops = await caches.open(IMAGES);
   let saved = 0;
-  await Promise.all(
-    urls.map(async (href) => {
-      const mine = href.indexOf(here) === 0;
-      const cache = mine ? local : shops;
-      try {
-        if (await cache.match(href)) return;
-        const res = await fetch(href, mine ? { credentials: "same-origin" } : { mode: "no-cors" });
-        if (!keepable(res)) return;
-        await cache.put(href, res);
-        saved += 1;
-      } catch (e) {}
-    })
-  );
+  await pool(urls, WARM_AT_ONCE, async (href) => {
+    const mine = href.indexOf(here) === 0;
+    const cache = mine ? local : shops;
+    try {
+      if (await cache.match(href)) return;
+      const res = await fetch(href, mine ? { credentials: "same-origin" } : { mode: "no-cors" });
+      if (!keepable(res)) return;
+      await cache.put(href, res);
+      saved += 1;
+    } catch (e) {}
+  });
   if (saved) await trim(shops, IMAGE_CAP);
   return saved;
 }
@@ -369,7 +389,7 @@ function attr(html, name) {
 async function warmShelf(html, base) {
   const url = attr(html, "data-shelf");
   if (!url) return 0;
-  const step = +attr(html, "data-batch") || 12;
+  const step = +attr(html, "data-batch") || 24;
   let at = +attr(html, "data-next") || 0;
   const pages = await caches.open(PAGES);
   let saved = 0;

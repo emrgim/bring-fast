@@ -47,7 +47,7 @@ def _cards(html):
 
 
 def _note(html):
-    line = html[html.index('id="shelf-note"') - 200 : html.index("</p>", html.index('id="shelf-note"'))]
+    line = html[html.index('id="buy-rest"') - 200 : html.index("</p>", html.index('id="buy-rest"'))]
     return {
         "url": (re.search(r'data-shelf="([^"]*)"', line) or [None, ""])[1].replace("&amp;", "&"),
         "next": int((re.search(r'data-next="(\d+)"', line) or [0, 0])[1]),
@@ -77,11 +77,11 @@ def test_the_board_is_on_screen_before_the_whole_shelf_is(bf, client):
     assert note["total"] == 30
     assert note["next"] == step
     assert note["batch"] == step
-    assert f"{step} of 30 products" in note["text"]
+    assert f"{30 - step} more products loading" in note["text"]
 
 
 def test_a_batch_continues_the_shelf_the_page_started(bf, client):
-    _signed_in(bf, client, "next@example.com", count=30)
+    _signed_in(bf, client, "next@example.com", count=70)
     page = client.get("/purchases?range=all&grain=daily").text
     note = _note(page)
 
@@ -90,7 +90,7 @@ def test_a_batch_continues_the_shelf_the_page_started(bf, client):
     step = note["batch"]
     assert _cards(batch.text) == [str(9000 + n) for n in range(step, step * 2)]
     assert f'data-next="{step * 2}"' in batch.text
-    assert 'data-total="30"' in batch.text
+    assert 'data-total="70"' in batch.text
     # Both shapes travel together: the phone appends the cards, the desk the rows.
     assert 'data-shelf-cards' in batch.text
     assert 'data-shelf-rows' in batch.text
@@ -98,17 +98,18 @@ def test_a_batch_continues_the_shelf_the_page_started(bf, client):
 
 
 def test_the_last_batch_says_there_is_nothing_left(bf, client):
-    _signed_in(bf, client, "last@example.com", count=20)
+    _signed_in(bf, client, "last@example.com", count=30)
     note = _note(client.get("/purchases?range=all&grain=daily").text)
+    step = note["batch"]
 
-    tail = client.get(f"{note['url']}&offset=12&limit=12")
-    assert _cards(tail.text) == [str(9000 + n) for n in range(12, 20)]
+    tail = client.get(f"{note['url']}&offset={step}&limit={step}")
+    assert _cards(tail.text) == [str(9000 + n) for n in range(step, 30)]
     # Nowhere left to go, so the page stops asking and clears its line.
     assert 'data-next="0"' in tail.text
 
 
 def test_every_product_arrives_once_and_only_once(bf, client):
-    _signed_in(bf, client, "walk@example.com", count=41)
+    _signed_in(bf, client, "walk@example.com", count=61)
     page = client.get("/purchases?range=all&grain=daily").text
     note = _note(page)
 
@@ -119,8 +120,8 @@ def test_every_product_arrives_once_and_only_once(bf, client):
         seen += _cards(batch)
         at = int(re.search(r'data-next="(\d+)"', batch)[1])
 
-    assert len(seen) == len(set(seen)) == 41
-    assert seen == [str(9000 + n) for n in range(41)]
+    assert len(seen) == len(set(seen)) == 61
+    assert seen == [str(9000 + n) for n in range(61)]
 
 
 def test_a_batch_keeps_the_window_and_the_order_of_its_page(bf, client):
@@ -134,23 +135,23 @@ def test_a_batch_keeps_the_window_and_the_order_of_its_page(bf, client):
             "invoice_date": "2026-08-10",
             "items": [
                 {"name": f"Water {n}", "qty": 1, "unit_price": 5, "line_total": 5, "barcode": str(7000 + n)}
-                for n in range(14)
+                for n in range(40)
             ]
             + [
                 {"name": f"Rice {n}", "qty": 1, "unit_price": 9, "line_total": 9, "barcode": str(7100 + n)}
-                for n in range(14)
+                for n in range(40)
             ],
         },
     )
     page = client.get("/purchases?range=all&grain=daily&dept=Drinks&sort=name&dir=asc").text
     note = _note(page)
 
-    assert note["total"] == 14
+    assert note["total"] == 40
     assert "dept=Drinks" in note["url"]
     assert "sort=name" in note["url"]
     assert "dir=asc" in note["url"]
 
-    names = sorted(f"Water {n}" for n in range(14))
+    names = sorted(f"Water {n}" for n in range(40))
     assert re.findall(r"<b>(Water \d+)</b>", page) == names[: note["batch"]]
 
     batch = client.get(f"{note['url']}&offset={note['next']}&limit={note['batch']}").text
@@ -220,23 +221,25 @@ def test_a_new_receipt_is_never_read_off_a_held_shelf(bf, client):
 
 
 def test_a_late_batch_never_outranks_what_the_reader_asked_for(bf, client):
-    _signed_in(bf, client, "prio@example.com", count=20)
+    _signed_in(bf, client, "prio@example.com", count=40)
     note = _note(client.get("/purchases?range=all&grain=daily").text)
 
-    batch = client.get(f"{note['url']}&offset=12&limit=12").text
+    batch = client.get(f"{note['url']}&offset={note['next']}&limit={note['batch']}").text
     # Still not lazy: a batch is fetched because the app asked for it, not
     # because something was scrolled into view. It just yields the wire to the
     # page the reader may be opening next.
     assert 'loading="lazy"' not in batch
     assert 'loading="eager"' in batch
     assert 'fetchpriority="low"' in batch
-    # And it reserves its box, so a landing thumbnail shoves nothing around.
+    # And it reserves its box, so a landing thumbnail shoves nothing around,
+    # and names the letter to fall back to if the shop never answers.
     assert 'width="56" height="56"' in batch
     assert 'width="48" height="48"' in batch
+    assert 'data-letter="T"' in batch
     # The page's own first batch is not held back behind anything.
     page = client.get("/purchases?range=all&grain=daily").text
-    shelf = page[page.index('id="shelf-cards"') : page.index('id="shelf-note"')]
-    assert 'fetchpriority="low"' not in shelf
+    first = page[page.index('id="buy-cards"') : page.index('id="buy-rest"')]
+    assert 'fetchpriority="low"' not in first
 
 
 def test_leaving_the_tab_gives_the_network_back(bf, client):
@@ -257,29 +260,52 @@ def test_a_batch_waits_for_the_pictures_of_the_one_before_it(bf, client):
     _signed_in(bf, client, "wait@example.com", count=30)
     html = client.get("/purchases?range=all&grain=daily").text
 
-    # One after another, not all at once — and a shop CDN that never answers
-    # cannot hold the rest of the shelf back for ever.
-    assert 'img.addEventListener("load", done, {once:true})' in html
-    assert 'img.addEventListener("error", done, {once:true})' in html
-    assert "Promise.race" in html
-    assert "SHOT_MS=2500" in html
+    # One after another, not all at once: the next batch waits while the shots
+    # already asked for are still on the wire.
+    assert "ON_THE_WIRE=12" in html
+    assert "window.__bfShots.live<ON_THE_WIRE" in html
+    # A shop that never answers cannot hold the rest of the shelf back for ever,
+    # and a reader already at the end is not waiting on politeness.
+    assert "NUDGE_MS=1500" in html
+    assert "NEAR_END=1200" in html
     assert "requestIdleCallback" in html
     # And the first batch is asked for only once the page it came with is done.
     assert 'document.readyState==="complete"' in html
 
 
-def test_the_shelf_line_says_where_the_app_is_up_to(bf, client):
+def test_only_the_shape_the_layout_shows_is_put_into_the_page(bf, client):
+    _signed_in(bf, client, "shape@example.com", count=40)
+    note = _note(client.get("/purchases?range=all&grain=daily").text)
+    html = client.get("/purchases?range=all&grain=daily").text
+
+    # A batch carries a card and a row for every product, because it cannot know
+    # which way the device is held.
+    batch = client.get(f"{note['url']}&offset={note['next']}&limit={note['batch']}").text
+    rest = 40 - note["next"]
+    assert batch.count('class="mcard"') == rest
+    assert batch.count("<tr") == rest
+    # They arrive inert, so nothing in the shape nobody is reading is ever
+    # asked for: a phone fetches each product's picture once, not twice.
+    assert "<template data-shelf-cards>" in batch
+    assert "<template data-shelf-rows>" in batch
+    # Only the drawn one is put in, and turning the screen catches the other up.
+    assert "offsetParent!==null" in html
+    assert 'window.addEventListener("resize", flush' in html
+
+
+def test_the_shelf_line_says_what_is_still_coming(bf, client):
     _signed_in(bf, client, "line@example.com", count=30)
     html = client.get("/purchases?range=all&grain=daily").text
 
     assert 'role="status"' in html
     assert 'aria-live="polite"' in html
-    assert "Loading the shelf · 12 of 30 products" in _note(html)["text"]
+    assert "6 more products loading" in _note(html)["text"]
     # A shelf that fits in one batch has nothing to announce.
     _signed_in(bf, client, "short@example.com", count=4)
     short = client.get("/purchases?range=all&grain=daily").text
-    assert "Loading the shelf" not in _note(short)["text"]
+    assert "more products loading" not in _note(short)["text"]
     assert _note(short)["next"] == 0
+    assert "drip-rest off done" in short
 
 
 def test_an_empty_range_still_says_so(bf, client):
