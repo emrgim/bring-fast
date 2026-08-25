@@ -16,7 +16,7 @@
 {% for r in retailers %}
   <div class="card store{% if not r.enabled %} is-off{% endif %}" id="store-{{ r.id }}" style="--store: {{ r.color }}">
     <div class="head">
-      <img class="logo" src="{{ r.logo }}" alt="{{ r.name }} logo"/>
+      <img class="logo" src="{{ r.logo }}" alt="{{ r.name }} logo" width="64" height="64" loading="eager" decoding="async"/>
       <div>
         <h2>{{ r.name }}
           {% if r.enabled %}<span class="pill on">On</span>{% else %}<span class="pill off">Off</span>{% endif %}

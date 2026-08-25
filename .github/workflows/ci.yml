@@ -30,5 +30,7 @@ jobs:
           names = zipfile.ZipFile(wheels[0]).namelist()
           assert any(n.endswith('bring_fast/templates/login.html') for n in names), names
           assert any('/static/logos/' in n for n in names), names
-          print('wheel includes templates and logos')
+          assert any(n.endswith('.woff2') for n in names), names
+          assert any(n.endswith('bring_fast/static/pwa/sw.js') for n in names), names
+          print('wheel includes templates, logos, fonts and the service worker')
           "

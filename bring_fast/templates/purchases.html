@@ -71,7 +71,7 @@
   {% for p in products %}
   <a class="mcard" href="/purchases/{{ p.key }}?range={{ range }}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}">
     {% if p.image_url %}
-    <img class="thumb" src="{{ p.image_url }}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer"/>
+    <img class="thumb" src="{{ p.image_url }}" alt="" width="56" height="56" loading="eager" decoding="async" referrerpolicy="no-referrer"/>
     {% else %}
     <div class="thumb empty">{{ p.name[:1] }}</div>
     {% endif %}
@@ -127,7 +127,7 @@
       <tr class="rowlink" onclick="location.href='/purchases/{{ p.key }}?range={{ range }}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}'">
         <td>
           {% if p.image_url %}
-          <img class="thumb" src="{{ p.image_url }}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer"/>
+          <img class="thumb" src="{{ p.image_url }}" alt="" width="48" height="48" loading="eager" decoding="async" referrerpolicy="no-referrer"/>
           {% else %}
           <div class="thumb empty">{{ p.name[:1] }}</div>
           {% endif %}

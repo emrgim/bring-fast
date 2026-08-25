@@ -34,9 +34,39 @@ short offline screen instead of a browser error.
 - **Online**: pages come from the server, so a change shows up at once.
 - **Offline**: the saved copy is served and the app retries every 10 minutes,
   refreshing everything the moment the network answers again. A chip in the
-  header says `Offline · retry 9:47` so the countdown is never a mystery.
+  header says `Offline · saved 09:12 · retry 9:47`, so both the countdown and
+  the age of what you are reading are on screen.
+- Dashboard, Purchases and Stores are saved in the background once a page has
+  finished loading, so the first time the network drops there is already
+  something to read on all three.
+- Product shots are kept with the page that shows them, and the shell — offline
+  screen, icons and font — is saved on install. A saved page looks like the app,
+  not like a stylesheet that never arrived.
+- Sending a form with no network says **Not saved** and keeps you in the app
+  instead of handing you a browser error. Nothing is queued behind your back.
+- A page reached by a redirect is never saved under the address that was asked
+  for, so an expired session cannot leave a login form named “Dashboard”.
 - Signing out wipes the saved pages, so a shared device never shows the next
   person your receipts.
+
+## Installed app
+
+`display: standalone`, so the installed app has no browser chrome. Chrome and
+Edge get the **Install** button in the header; Safari has no install prompt to
+offer, so iOS is shown where the Share sheet's *Add to Home Screen* lives — once,
+and “Not now” sticks.
+
+- Nothing is lazy-loaded. Every picture is requested with the page and carries
+  its own width and height, so a slow shop CDN cannot shove the rows around.
+- The font is served by Bring Fast itself. No font CDN means nothing
+  third-party blocks the first paint, and the app reads the same offline.
+- Safe areas on all four sides, so a notch in landscape and the iPhone home bar
+  never sit on top of a row. Date fields are 16px on a phone, because anything
+  smaller makes iOS zoom in on focus and never zoom back out.
+- The phone header keeps **Sign out** and drops only the address; the tabs move
+  to the bottom dock.
+- Fonts are immutable for a year, logos for a day, and a page is always
+  revalidated — money figures are never read from a stale cache.
 
 ## Updates
 
@@ -109,7 +139,9 @@ Official checkout stays on each supermarket site.
 
 `tests/test_mcp_handshake.py` replays the OAuth and MCP handshake a client performs.
 Login, refresh tokens, and per-user store sessions are covered in `tests/test_login.py`,
-`tests/test_oauth.py`, and `tests/test_store_login.py`.
+`tests/test_oauth.py`, and `tests/test_store_login.py`. The installed app is covered in
+`tests/test_pwa.py`, `tests/test_offline_ui.py`, `tests/test_webapp_layout.py`, and
+`tests/test_content_loading.py`.
 
 ## Docker
 

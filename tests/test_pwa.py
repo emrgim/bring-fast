@@ -11,6 +11,8 @@ def test_pwa_manifest_and_icons(client):
     sizes = {icon["sizes"] for icon in data["icons"]}
     assert "192x192" in sizes
     assert "512x512" in sizes
+    # An installed app opens straight on the tab you long-pressed for.
+    assert {s["url"] for s in data["shortcuts"]} == {"/purchases", "/stores"}
 
 
 def test_pwa_service_worker(client):
@@ -18,7 +20,7 @@ def test_pwa_service_worker(client):
     assert sw.status_code == 200
     assert "javascript" in (sw.headers.get("content-type") or "")
     assert "skipWaiting" in sw.text
-    assert "bf-pwa-v3" in sw.text
+    assert "bf-pwa-v4" in sw.text
     assert sw.headers.get("cache-control", "").startswith("no-cache") or "no-cache" in (
         sw.headers.get("cache-control") or ""
     )
@@ -34,6 +36,57 @@ def test_service_worker_serves_pages_offline(client):
     assert "600000" in sw
     assert "periodicsync" in sw
     assert "bf-refresh" in sw
+
+
+def test_service_worker_saves_the_tabs_before_they_are_opened(bf, client):
+    sw = client.get("/sw.js").text
+    # Going offline on the dashboard still leaves purchases and stores readable.
+    assert "warmPages" in sw
+    assert '"bf-warm"' in sw
+    assert "WARM_FLOOR_MS" in sw  # asked for once a minute at most
+
+    bf.db.create_user("warm@example.com", "secret1")
+    client.post("/login", data={"email": "warm@example.com", "password": "secret1", "intent": "signin"})
+    html = client.get("/stores").text
+    assert 'TABS=["/dashboard","/purchases","/stores"]' in html
+    assert '{type:"bf-warm", urls:TABS}' in html
+    # It waits for the open page to finish first — warming is never a race.
+    assert "requestIdleCallback" in html
+
+    client.get("/logout")
+    assert "bf-warm" not in client.get("/login").text
+
+
+def test_service_worker_keeps_the_pictures_a_saved_page_needs(client):
+    sw = client.get("/sw.js").text
+    # Product shots come from the shops, so a saved page needs them saved too.
+    assert "IMAGES" in sw
+    assert "isImage" in sw
+    assert 'res.type === "opaque"' in sw
+    # And the shelf is capped instead of growing for as long as the app lives.
+    assert "IMAGE_CAP" in sw
+    assert "trim(" in sw
+    # Warming a page fetches the page alone, so the pictures it names are
+    # collected too — otherwise a tab saved but never opened shows blanks.
+    assert "warmShots" in sw
+    assert "<img" in sw
+
+
+def test_service_worker_never_saves_a_page_it_was_redirected_to(client):
+    sw = client.get("/sw.js").text
+    # An expired session redirects to sign-in; saving that under /dashboard
+    # would show a login form named "Dashboard" the next time the network drops.
+    assert "samePage" in sw
+    assert "res.redirected" in sw
+
+
+def test_a_form_sent_with_no_network_says_nothing_was_saved(client):
+    sw = client.get("/sw.js").text
+    assert 'req.method !== "GET"' in sw
+    assert "NOT_SAVED" in sw
+    assert "Not saved" in sw
+    # A cache must never answer a form: it either reaches the server or fails.
+    assert "history.back()" in sw
 
 
 def test_service_worker_keeps_sessions_and_updates_off_the_cache(client):
@@ -65,6 +118,19 @@ def test_health_marks_each_boot_so_a_restart_is_visible(client):
     assert "revision" in first
     # Same process, same boot id — a changed one means the update is live.
     assert client.get("/health").json()["boot"] == first["boot"]
+
+
+def test_the_offline_shell_carries_its_own_font(client):
+    sw = client.get("/sw.js").text
+    # Precached with the icons: the first launch with no network still looks
+    # like the app rather than falling back to the system monospace. Every
+    # weight, so one met for the first time offline does not fall back either.
+    for weight in ("400", "500", "600", "700"):
+        for subset in ("latin", "latin-ext"):
+            assert f"/static/fonts/ibm-plex-mono-{weight}-{subset}.woff2" in sw
+    offline = client.get("/offline").text
+    assert "@font-face" in offline
+    assert "/static/fonts/" in offline
 
 
 def test_pwa_apple_icon_and_head(client):
