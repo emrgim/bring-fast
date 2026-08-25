@@ -18,6 +18,24 @@
   <link rel="apple-touch-icon" href="/apple-touch-icon.png"/>
   {% include "_fonts.html" %}
   <script>
+    /* A pinch has nothing to reveal in an installed app: the layout already
+       fits the phone, and zooming out past scale 1 parks the sticky header
+       and the dock off the screen until the next scroll settles. In a browser
+       tab zoom is left alone, because there a page is still a page. */
+    (function(){
+      function mode(q){ return window.matchMedia ? matchMedia("(display-mode: "+q+")").matches : false; }
+      if(navigator.standalone!==true && !mode("standalone") && !mode("fullscreen") && !mode("minimal-ui")) return;
+      document.documentElement.classList.add("installed");
+      var v=document.querySelector('meta[name="viewport"]');
+      if(v) v.setAttribute("content","width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover");
+      /* WebKit keeps its pinch out of reach of the viewport rules, so the
+         gesture itself is turned down as well. */
+      ["gesturestart","gesturechange","gestureend"].forEach(function(name){
+        document.addEventListener(name, function(e){ e.preventDefault(); }, {passive:false});
+      });
+    })();
+  </script>
+  <script>
     window.__bfTheme=(function(){
       var KEY="bf-theme";
       var COLORS={light:"#ffffff",dark:"#0a0a0a"};
@@ -408,6 +426,10 @@
       .trend .delta { font-size:24px; }
       .purchases-board {
         height:auto; min-height:0; display:block;
+        /* The desktop nudge would push the edge-to-edge filter row two pixels
+           past the screen, and a page wider than the phone can be dragged and
+           pinched sideways. */
+        margin:0;
       }
       .purchases-board .table-wrap, .desk-table { display:none !important; }
       .mlist { display:flex; flex-direction:column; gap:8px; }
@@ -475,10 +497,15 @@
       nav.topnav { padding-top: max(10px, env(safe-area-inset-top)); }
       .wrap { padding-bottom: calc(90px + env(safe-area-inset-bottom)); }
       #pwa-install, #ios-install { display:none !important; }
-      /* Installed there is no browser to pull down to, so a rubber band at
-         the top of a list only ever looks broken. */
-      html, body { overscroll-behavior-y:contain; }
+      /* Installed there is no browser to pull down to, so a rubber band at the
+         top of a list only ever looks broken, and a pinch has nothing left to
+         show: panning is allowed in both directions, pinching in neither. A
+         descendant cannot hand the pinch back, so the sideways row scrollers
+         keep working untouched. */
+      html, body { overscroll-behavior-y:contain; touch-action:pan-x pan-y; }
     }
+    /* Home-screen Safari before it learned the display-mode query. */
+    :root.installed, :root.installed body { touch-action:pan-x pan-y; overscroll-behavior-y:contain; }
     table.data th.sort.asc a:after { content:" ↑"; opacity:1; }
     table.data th.sort.desc a:after { content:" ↓"; opacity:1; }
     table.data td { padding:10px 8px; border-top:1px dashed var(--line); vertical-align:middle; }

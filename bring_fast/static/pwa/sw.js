@@ -7,7 +7,7 @@
  * Nothing here is lazy: a page is saved with the pictures it needs, and the
  * tabs the app can reach are saved before they are asked for.
  */
-const VERSION = "bf-pwa-v4";
+const VERSION = "bf-pwa-v5";
 const SHELL = VERSION + "-shell";
 const PAGES = VERSION + "-pages";
 const ASSETS = VERSION + "-assets";
@@ -68,14 +68,29 @@ const NOT_SAVED = `<!doctype html>
   .w{max-width:520px;margin:0 auto;padding:14vh 16px 40px}
   h1{font-size:24px;margin:0 0 10px;text-transform:uppercase;letter-spacing:.02em}
   p{line-height:1.5;margin:0 0 16px}
-  .b{border:1px solid #111;padding:12px 16px;font:inherit;font-weight:700;cursor:pointer;background:transparent;color:inherit}
+  .b{border:1px solid #111;padding:12px 16px;font:inherit;font-weight:700;cursor:pointer;background:transparent;color:inherit;touch-action:manipulation}
+  @media (display-mode:standalone),(display-mode:fullscreen){html,body{touch-action:pan-x pan-y}}
+  :root.installed,:root.installed body{touch-action:pan-x pan-y}
 </style></head>
 <body><div class="w">
 <h1>Not saved</h1>
 <p>Bring Fast could not be reached, so this change was not stored. Nothing was
 half-written — go back and send it again once the connection is up.</p>
 <button class="b" type="button" onclick="history.back()">Go back</button>
-</div></body></html>`;
+</div>
+<script>
+(function(){
+  function mode(q){ return window.matchMedia ? matchMedia("(display-mode: "+q+")").matches : false; }
+  if(navigator.standalone!==true && !mode("standalone") && !mode("fullscreen") && !mode("minimal-ui")) return;
+  document.documentElement.classList.add("installed");
+  var v=document.querySelector('meta[name="viewport"]');
+  if(v) v.setAttribute("content","width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover");
+  ["gesturestart","gesturechange","gestureend"].forEach(function(name){
+    document.addEventListener(name, function(e){ e.preventDefault(); }, {passive:false});
+  });
+})();
+</script>
+</body></html>`;
 
 let lastRefresh = 0;
 let lastWarm = 0;

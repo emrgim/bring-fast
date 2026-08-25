@@ -8,6 +8,20 @@
   <title>Offline · Bring Fast</title>
   <link rel="icon" href="/favicon.ico" sizes="32x32"/>
   <link rel="apple-touch-icon" href="/apple-touch-icon.png"/>
+  <script>
+    /* The same zoom lock as the rest of the shell: a screen reached inside the
+       installed app must not be pinchable just because the network is down. */
+    (function(){
+      function mode(q){ return window.matchMedia ? matchMedia("(display-mode: "+q+")").matches : false; }
+      if(navigator.standalone!==true && !mode("standalone") && !mode("fullscreen") && !mode("minimal-ui")) return;
+      document.documentElement.classList.add("installed");
+      var v=document.querySelector('meta[name="viewport"]');
+      if(v) v.setAttribute("content","width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover");
+      ["gesturestart","gesturechange","gestureend"].forEach(function(name){
+        document.addEventListener(name, function(e){ e.preventDefault(); }, {passive:false});
+      });
+    })();
+  </script>
   <style>
     /* Saved on the device with the rest of the shell, so this screen looks
        like the app even on the first launch with no network. */
@@ -35,6 +49,10 @@
       padding-top:max(14vh, env(safe-area-inset-top));
     }
     button, a { touch-action:manipulation; }
+    @media (display-mode: standalone), (display-mode: fullscreen) {
+      html, body { touch-action:pan-x pan-y; overscroll-behavior-y:contain; }
+    }
+    :root.installed, :root.installed body { touch-action:pan-x pan-y; overscroll-behavior-y:contain; }
     .mark {
       width:42px; height:42px; background:var(--fill); color:var(--on-fill);
       font-weight:700; display:grid; place-items:center; letter-spacing:-1px; font-size:15px;

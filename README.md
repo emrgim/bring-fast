@@ -56,6 +56,13 @@ Edge get the **Install** button in the header; Safari has no install prompt to
 offer, so iOS is shown where the Share sheet's *Add to Home Screen* lives — once,
 and “Not now” sticks.
 
+- Installed, the app cannot be pinched. Zooming out past scale 1 parks the
+  sticky header and the bottom dock off the screen until the next scroll
+  settles, so the app takes the pan and refuses the pinch — on WebKit the
+  gesture itself is turned down, since Safari keeps its pinch out of reach of
+  the viewport rules. In a browser tab zoom is left alone: there a page is
+  still a page. A receipt is the one screen that stays pinchable installed,
+  because it is a scan of paper and the small print is the reason to open it.
 - Nothing is lazy-loaded. Every picture is requested with the page and carries
   its own width and height, so a slow shop CDN cannot shove the rows around.
 - The font is served by Bring Fast itself. No font CDN means nothing

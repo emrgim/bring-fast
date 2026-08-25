@@ -20,7 +20,7 @@ def test_pwa_service_worker(client):
     assert sw.status_code == 200
     assert "javascript" in (sw.headers.get("content-type") or "")
     assert "skipWaiting" in sw.text
-    assert "bf-pwa-v4" in sw.text
+    assert "bf-pwa-v5" in sw.text
     assert sw.headers.get("cache-control", "").startswith("no-cache") or "no-cache" in (
         sw.headers.get("cache-control") or ""
     )
@@ -87,6 +87,9 @@ def test_a_form_sent_with_no_network_says_nothing_was_saved(client):
     assert "Not saved" in sw
     # A cache must never answer a form: it either reaches the server or fails.
     assert "history.back()" in sw
+    # And it is a screen inside the installed app, so it cannot be pinched either.
+    assert "touch-action:pan-x pan-y" in sw
+    assert "gesturestart" in sw
 
 
 def test_service_worker_keeps_sessions_and_updates_off_the_cache(client):
@@ -110,6 +113,9 @@ def test_offline_fallback_page(client):
     # to be back — navigator.onLine would lie whenever only the server is down.
     assert 'fetch("/health"' in r.text
     assert "navigator.onLine" not in r.text
+    # Reaching it inside the installed app must not turn the zoom back on.
+    assert "user-scalable=no" in r.text
+    assert "touch-action:pan-x pan-y" in r.text
 
 
 def test_health_marks_each_boot_so_a_restart_is_visible(client):
