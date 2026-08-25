@@ -9,7 +9,7 @@
  * so those are saved too — one after another, behind whatever the reader is
  * doing, never as one flood of requests the open page has to compete with.
  */
-const VERSION = "bf-pwa-v6";
+const VERSION = "bf-pwa-v7";
 const SHELL = VERSION + "-shell";
 const PAGES = VERSION + "-pages";
 const ASSETS = VERSION + "-assets";

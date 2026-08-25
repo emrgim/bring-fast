@@ -414,4 +414,4 @@ def test_the_service_worker_warms_one_thing_at_a_time(client):
     # in front of it.
     assert "for (const url of urls || [])" in sw
     assert "for (const req of keys)" in sw
-    assert "bf-pwa-v6" in sw
+    assert "bf-pwa-v7" in sw
