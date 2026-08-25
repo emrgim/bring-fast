@@ -511,19 +511,27 @@ def clear_retailer_account(user_id: int, retailer: str) -> None:
 def list_retailer_accounts(user_id: int) -> list[dict[str, Any]]:
     con = connect()
     rows = con.execute(
-        "SELECT retailer, email, address FROM retailer_accounts WHERE user_id=?", (user_id,)
+        "SELECT retailer, email, address, secret FROM retailer_accounts WHERE user_id=?", (user_id,)
     ).fetchall()
     con.close()
+    f = _fernet()
     linked = {r["retailer"]: r for r in rows}
     out = []
     for r in RETAILERS:
         row = linked.get(r["id"])
+        password = ""
+        if row is not None and row["secret"]:
+            try:
+                password = json.loads(f.decrypt(row["secret"]).decode()).get("password") or ""
+            except Exception:
+                password = ""
         out.append(
             {
                 **r,
                 "enabled": is_store_enabled(r["id"]),
                 "linked": row is not None,
                 "login_email": row["email"] if row else None,
+                "has_password": bool(password),
                 "delivery_address": (row["address"] if row else None) or "",
             }
         )

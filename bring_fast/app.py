@@ -320,7 +320,12 @@ def spend_home(
 
 
 @app.get("/stores", response_class=HTMLResponse)
-def stores_page(request: Request, welcome: int = 0, notice: str = ""):
+def stores_page(request: Request, welcome: int = 0, notice: str = "", edit: str = ""):
+    """`edit` names the one store whose credentials get real input fields.
+
+    Every other saved store is printed as plain text, so opening the tab does not
+    put a login form on screen for the browser's password manager to jump on.
+    """
     user = current_user(request)
     if not user:
         return RedirectResponse("/login?mode=signin&next=/stores", status_code=303)
@@ -331,6 +336,7 @@ def stores_page(request: Request, welcome: int = 0, notice: str = ""):
         {
             "user": user,
             "retailers": db.list_retailer_accounts(user["id"]),
+            "edit": edit if edit in {r["id"] for r in db.RETAILERS} else "",
             "mcp_url": mcp_url(request),
             "title": "Stores · Bring Fast",
             "notice": (
@@ -513,7 +519,7 @@ def save_retailer(
     if retailer not in {r["id"] for r in db.RETAILERS}:
         return RedirectResponse("/", status_code=303)
     db.set_retailer_account(user["id"], retailer, email.strip(), password, address)
-    return RedirectResponse("/", status_code=303)
+    return RedirectResponse(f"/stores#store-{retailer}", status_code=303)
 
 
 @app.post("/retailers/{retailer}/clear")

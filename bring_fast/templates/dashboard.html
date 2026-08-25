@@ -14,7 +14,7 @@
 
 <div class="grid">
 {% for r in retailers %}
-  <div class="card store{% if not r.enabled %} is-off{% endif %}" style="--store: {{ r.color }}">
+  <div class="card store{% if not r.enabled %} is-off{% endif %}" id="store-{{ r.id }}" style="--store: {{ r.color }}">
     <div class="head">
       <img class="logo" src="{{ r.logo }}" alt="{{ r.name }} logo"/>
       <div>
@@ -34,17 +34,34 @@
       </p>
     </form>
     {% if r.enabled and r.shop %}
-    <form method="post" action="/retailers/{{ r.id }}">
-      <label>Username / email on {{ r.name }}</label>
-      <input name="email" type="email" value="{{ r.login_email or '' }}" required placeholder="your store login"/>
-      <label>Password (leave blank to keep current)</label>
-      <input name="password" type="password" placeholder="store password"/>
-      <label>Delivery address for {{ r.name }}</label>
-      <input name="address" type="text" value="{{ r.delivery_address or '' }}" placeholder="Building, area, city"/>
+    {% if r.login_email and edit != r.id %}
+    <dl class="saved">
+      <dt>Username / email on {{ r.name }}</dt>
+      <dd>{{ r.login_email }}</dd>
+      <dt>Password</dt>
+      <dd>{% if r.has_password %}Saved{% else %}Not saved yet{% endif %}</dd>
+      <dt>Delivery address for {{ r.name }}</dt>
+      <dd>{{ r.delivery_address or "Not set" }}</dd>
+    </dl>
+    <p class="split">
+      <a class="btn" href="/stores?edit={{ r.id }}#store-{{ r.id }}">Edit {{ r.name }}</a>
+    </p>
+    {% else %}
+    <form method="post" action="/retailers/{{ r.id }}" autocomplete="off">
+      <label for="email-{{ r.id }}">Username / email on {{ r.name }}</label>
+      <input id="email-{{ r.id }}" name="email" type="email" value="{{ r.login_email or '' }}" required
+             placeholder="your store login" autocomplete="off" autocapitalize="none" spellcheck="false"/>
+      <label for="password-{{ r.id }}">Password{% if r.has_password %} (leave blank to keep current){% endif %}</label>
+      <input id="password-{{ r.id }}" name="password" type="password" placeholder="store password" autocomplete="new-password"/>
+      <label for="address-{{ r.id }}">Delivery address for {{ r.name }}</label>
+      <input id="address-{{ r.id }}" name="address" type="text" value="{{ r.delivery_address or '' }}"
+             placeholder="Building, area, city" autocomplete="off"/>
       <p class="split">
         <button type="submit">Save {{ r.name }}</button>
+        {% if r.login_email %}<a class="btn ghost" href="/stores#store-{{ r.id }}">Cancel</a>{% endif %}
       </p>
     </form>
+    {% endif %}
     {% if r.linked %}
     <div class="split">
       <form method="post" action="/retailers/{{ r.id }}/check"><button class="ghost" type="submit">Check login</button></form>
