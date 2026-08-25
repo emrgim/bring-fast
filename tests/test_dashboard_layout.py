@@ -46,6 +46,14 @@ def test_spend_totals_stay_pinned_while_scrolling(bf, client):
     assert "Weekly avg" not in pin
 
 
+def test_mobile_kpis_keep_number_and_label_on_one_line(bf, client):
+    """No stacked KPI numbers: "AED 2537" and "34" must never sit side by side unlabeled."""
+    html = client.get("/login").text
+
+    assert ".dash-kpis b { font-size:16px; display:block; }" not in html
+    assert ".dash-kpis span + span { border-left:1px solid var(--line); padding-left:12px; }" in html
+
+
 def test_mobile_header_pads_the_safe_area_only_at_the_top(bf, client):
     html = client.get("/login").text
 
