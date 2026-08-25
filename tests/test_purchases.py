@@ -328,6 +328,8 @@ def test_range_filter_and_price_chart(bf, client):
     assert detail["last_price"] == 12
     assert detail["delta"] == 4
     assert "polyline" in detail["chart_svg"]
+    assert "currentColor" in detail["chart_svg"]
+    assert "var(--muted)" in detail["chart_svg"]
     client.post("/login", data={"email": "e@example.com", "password": "secret1", "intent": "signin"})
     page = client.get("/purchases", params={"range": "1y"})
     assert page.status_code == 200
@@ -555,12 +557,15 @@ def test_price_trend_is_mean_of_product_changes(bf, client):
     assert len(trend["series"]) >= 2
     assert trend["series"][0]["index"] == 100
     assert trend["chart_svg"]
+    assert "currentColor" in trend["chart_svg"]
     client.post("/login", data={"email": "trend@example.com", "password": "secret1", "intent": "signin"})
     html = client.get("/dashboard?range=all&grain=monthly").text
     assert "Price trend" in html
     assert "Daily average this period" in html
     assert "÷" in html
     assert "<svg" in html
+    assert "data-theme-toggle" in html
+    assert "IBM Plex Mono" in html
 
 
 def test_spend_snapshot_changes_with_range(bf):

@@ -749,18 +749,17 @@ def price_chart_svg(series: list[dict[str, Any]]) -> str:
     pts = [xy(i) for i in range(len(series))]
     line = " ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
     dots = "".join(
-        f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5" fill="#67e8f9"/>'
-        f'<text x="{x:.1f}" y="{max(14, y-10):.1f}" text-anchor="middle" fill="#8b95b8" font-size="11">{prices[i]:.2f}</text>'
+        f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="currentColor"/>'
+        f'<text x="{x:.1f}" y="{max(14, y-10):.1f}" text-anchor="middle" fill="var(--muted)" font-size="11">{prices[i]:.2f}</text>'
         for i, (x, y) in enumerate(pts)
     )
-    color = "#67e8f9" if prices[-1] <= prices[0] else "#fb7185"
     return (
         f'<svg viewBox="0 0 {w} {h}" class="chart" preserveAspectRatio="xMidYMid meet">'
-        f'<line x1="{pad}" y1="{h-pad}" x2="{w-pad}" y2="{h-pad}" stroke="rgba(140,170,255,.25)"/>'
-        f'<line x1="{pad}" y1="{pad}" x2="{pad}" y2="{h-pad}" stroke="rgba(140,170,255,.25)"/>'
-        f'<text x="{pad}" y="{h-12}" fill="#8b95b8" font-size="12">{series[0]["date"]}</text>'
-        f'<text x="{w-pad}" y="{h-12}" text-anchor="end" fill="#8b95b8" font-size="12">{series[-1]["date"]}</text>'
-        f'<polyline fill="none" stroke="{color}" stroke-width="2.5" points="{line}"/>'
+        f'<line x1="{pad}" y1="{h-pad}" x2="{w-pad}" y2="{h-pad}" stroke="var(--line)"/>'
+        f'<line x1="{pad}" y1="{pad}" x2="{pad}" y2="{h-pad}" stroke="var(--line)"/>'
+        f'<text x="{pad}" y="{h-12}" fill="var(--muted)" font-size="12">{series[0]["date"]}</text>'
+        f'<text x="{w-pad}" y="{h-12}" text-anchor="end" fill="var(--muted)" font-size="12">{series[-1]["date"]}</text>'
+        f'<polyline fill="none" stroke="currentColor" stroke-width="2" points="{line}"/>'
         f"{dots}</svg>"
     )
 
@@ -1123,18 +1122,18 @@ def index_chart_svg(series: list[dict[str, Any]]) -> str:
         xs.append(pad + (w - 2 * pad) * (i / (n - 1)))
     pts = " ".join(f"{xs[i]:.1f},{y_of(values[i]):.1f}" for i in range(n))
     y100 = y_of(100.0)
-    color = "#fb7185" if values[-1] > 100.5 else "#4ade80" if values[-1] < 99.5 else "#67e8f9"
     last = series[-1]
+    arrow = "↑ " if last["pct"] > 0.5 else "↓ " if last["pct"] < -0.5 else ""
     return (
         f'<svg viewBox="0 0 {w} {h}" class="chart" preserveAspectRatio="xMidYMid meet">'
-        f'<line x1="{pad}" y1="{h-pad}" x2="{w-pad}" y2="{h-pad}" stroke="rgba(140,170,255,.25)"/>'
-        f'<line x1="{pad}" y1="{y100:.1f}" x2="{w-pad}" y2="{y100:.1f}" stroke="rgba(140,170,255,.28)" stroke-dasharray="4 4"/>'
-        f'<text x="{pad}" y="{max(12, y100-6):.1f}" fill="#8b95b8" font-size="11">100</text>'
-        f'<text x="{pad}" y="{h-12}" fill="#8b95b8" font-size="12">{series[0]["label"]}</text>'
-        f'<text x="{w-pad}" y="{h-12}" text-anchor="end" fill="#8b95b8" font-size="12">{last["label"]}</text>'
-        f'<polyline fill="none" stroke="{color}" stroke-width="2.5" points="{pts}"/>'
-        f'<text x="{w-pad}" y="{max(14, y_of(values[-1])-8):.1f}" text-anchor="end" fill="{color}" font-size="12">'
-        f'{last["pct"]:+.1f}%</text>'
+        f'<line x1="{pad}" y1="{h-pad}" x2="{w-pad}" y2="{h-pad}" stroke="var(--line)"/>'
+        f'<line x1="{pad}" y1="{y100:.1f}" x2="{w-pad}" y2="{y100:.1f}" stroke="var(--line)" stroke-dasharray="4 4"/>'
+        f'<text x="{pad}" y="{max(12, y100-6):.1f}" fill="var(--muted)" font-size="11">100</text>'
+        f'<text x="{pad}" y="{h-12}" fill="var(--muted)" font-size="12">{series[0]["label"]}</text>'
+        f'<text x="{w-pad}" y="{h-12}" text-anchor="end" fill="var(--muted)" font-size="12">{last["label"]}</text>'
+        f'<polyline fill="none" stroke="currentColor" stroke-width="2" points="{pts}"/>'
+        f'<text x="{w-pad}" y="{max(14, y_of(values[-1])-8):.1f}" text-anchor="end" fill="currentColor" font-size="12">'
+        f'{arrow}{last["pct"]:+.1f}%</text>'
         f"</svg>"
     )
 
