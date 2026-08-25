@@ -3,15 +3,23 @@
  * Online, every page comes from the network so an update shows up at once.
  * Offline, the last copy of a page is served and the client retries on a
  * ten minute cadence (BF_OFFLINE_REFRESH_MS) until the network is back.
+ *
+ * Nothing here is lazy: a page is saved with the pictures it needs, and the
+ * tabs the app can reach are saved before they are asked for.
  */
-const VERSION = "bf-pwa-v3";
+const VERSION = "bf-pwa-v4";
 const SHELL = VERSION + "-shell";
 const PAGES = VERSION + "-pages";
 const ASSETS = VERSION + "-assets";
+const IMAGES = VERSION + "-images";
 const OFFLINE_URL = "/offline";
 const OFFLINE_REFRESH_MS = 600000;
 const NET_TIMEOUT_MS = 6000;
 const REFRESH_FLOOR_MS = 30000;
+const WARM_FLOOR_MS = 60000;
+/* Product shots come from the shops, so the shelf is capped instead of
+ * growing for as long as the app is installed. */
+const IMAGE_CAP = 300;
 const STAMP = "x-bf-cached-at";
 
 const PRECACHE = [
@@ -20,6 +28,8 @@ const PRECACHE = [
   "/static/pwa/icon-512.png",
   "/static/pwa/icon-180.png",
   "/static/pwa/icon-512-maskable.png",
+  "/static/fonts/ibm-plex-mono-400-latin.woff2",
+  "/static/fonts/ibm-plex-mono-700-latin.woff2",
   "/manifest.webmanifest",
 ];
 
@@ -38,9 +48,29 @@ const LIVE_PATHS = [
   "/rotate-token",
 ];
 
-const FONT_HOSTS = ["fonts.googleapis.com", "fonts.gstatic.com"];
+/* Shown when a form is sent with no network: the browser's own error page
+ * would lose the app and say nothing about the change. */
+const NOT_SAVED = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<title>Not saved · Bring Fast</title>
+<style>
+  html,body{margin:0;background:#fff;color:#111;font-family:ui-monospace,Menlo,Consolas,monospace}
+  @media (prefers-color-scheme:dark){html,body{background:#0a0a0a;color:#f5f5f5}.b{border-color:#f5f5f5!important}}
+  .w{max-width:520px;margin:0 auto;padding:14vh 16px 40px}
+  h1{font-size:24px;margin:0 0 10px;text-transform:uppercase;letter-spacing:.02em}
+  p{line-height:1.5;margin:0 0 16px}
+  .b{border:1px solid #111;padding:12px 16px;font:inherit;font-weight:700;cursor:pointer;background:transparent;color:inherit}
+</style></head>
+<body><div class="w">
+<h1>Not saved</h1>
+<p>Bring Fast could not be reached, so this change was not stored. Nothing was
+half-written — go back and send it again once the connection is up.</p>
+<button class="b" type="button" onclick="history.back()">Go back</button>
+</div></body></html>`;
 
 let lastRefresh = 0;
+let lastWarm = 0;
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -52,7 +82,7 @@ self.addEventListener("install", (event) => {
 });
 
 self.addEventListener("activate", (event) => {
-  const keep = [SHELL, PAGES, ASSETS];
+  const keep = [SHELL, PAGES, ASSETS, IMAGES];
   event.waitUntil(
     caches
       .keys()
@@ -65,6 +95,14 @@ function isLive(pathname) {
   return LIVE_PATHS.some((p) => (p.endsWith("/") ? pathname.startsWith(p) : pathname === p || pathname.startsWith(p + "/")));
 }
 
+/* `destination` is the reliable signal in both engines; Accept covers the
+ * few requests that arrive without one. */
+function isImage(req) {
+  if (req.destination === "image") return true;
+  const accept = req.headers.get("accept") || "";
+  return accept.indexOf("image/") === 0 || accept.indexOf("image/webp") !== -1;
+}
+
 /* Consumes `res`: callers that still need the body must pass a clone. */
 function stamped(res) {
   const headers = new Headers(res.headers);
@@ -74,6 +112,12 @@ function stamped(res) {
 
 function cacheable(res) {
   return res && res.ok && res.type === "basic" && res.status === 200;
+}
+
+/* A sign-in page reached by following a redirect is not the page that was
+ * asked for, and saving it there would show a login form named "Dashboard". */
+function samePage(res) {
+  return cacheable(res) && !res.redirected;
 }
 
 function timeout(ms) {
@@ -102,7 +146,7 @@ async function page(event) {
   try {
     const res = await fromNetwork(req, saved ? NET_TIMEOUT_MS : 0);
     /* Clone now: after this returns the body belongs to the page. */
-    if (cacheable(res)) event.waitUntil(savePage(req, res.clone()));
+    if (samePage(res)) event.waitUntil(savePage(req, res.clone()));
     return res;
   } catch (e) {
     if (saved) return saved;
@@ -112,36 +156,79 @@ async function page(event) {
   }
 }
 
-async function asset(event) {
+/* Sending a form is never answered from a cache — it either reaches the
+ * server or the page says plainly that nothing was stored. */
+async function sent(event) {
+  try {
+    return await fetch(event.request);
+  } catch (e) {
+    return new Response(NOT_SAVED, {
+      status: 503,
+      headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
+    });
+  }
+}
+
+async function trim(cache, cap) {
+  const keys = await cache.keys();
+  if (keys.length <= cap) return;
+  await Promise.all(keys.slice(0, keys.length - cap).map((req) => cache.delete(req)));
+}
+
+function keepable(res) {
+  return res && (res.ok || res.type === "opaque");
+}
+
+async function store(event, name, cap) {
   const req = event.request;
-  const cache = await caches.open(ASSETS);
+  const cache = await caches.open(name);
   const hit = await cache.match(req);
   if (hit) {
     /* Refresh in the background so an updated build lands on the next load. */
     event.waitUntil(
       fetch(req)
-        .then((res) => (res && (res.ok || res.type === "opaque") ? cache.put(req, res.clone()) : null))
+        .then((res) => (keepable(res) ? cache.put(req, res.clone()) : null))
         .catch(() => {})
     );
     return hit;
   }
   try {
     const res = await fetch(req);
-    if (res && (res.ok || res.type === "opaque")) event.waitUntil(cache.put(req, res.clone()));
+    if (keepable(res)) {
+      event.waitUntil(
+        cache
+          .put(req, res.clone())
+          .then(() => (cap ? trim(cache, cap) : null))
+          .catch(() => {})
+      );
+    }
     return res;
   } catch (e) {
     return new Response("", { status: 504 });
   }
 }
 
+function asset(event) {
+  return store(event, ASSETS, 0);
+}
+
+/* Product shots live on the shops' own domains: they are saved opaque so a
+ * saved page still shows its shelf with no network. */
+function remote(event) {
+  return store(event, IMAGES, IMAGE_CAP);
+}
+
 self.addEventListener("fetch", (event) => {
   const req = event.request;
-  if (req.method !== "GET") return;
   const url = new URL(req.url);
   const sameOrigin = url.origin === self.location.origin;
 
+  if (req.method !== "GET") {
+    if (sameOrigin && req.mode === "navigate") event.respondWith(sent(event));
+    return;
+  }
   if (!sameOrigin) {
-    if (FONT_HOSTS.indexOf(url.hostname) !== -1) event.respondWith(asset(event));
+    if (isImage(req)) event.respondWith(remote(event));
     return;
   }
   if (url.pathname === "/logout") {
@@ -153,7 +240,13 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(page(event));
     return;
   }
-  if (url.pathname.startsWith("/static/") || url.pathname === "/favicon.ico" || url.pathname === "/apple-touch-icon.png") {
+  if (
+    url.pathname.startsWith("/static/") ||
+    url.pathname.startsWith("/receipts/") ||
+    url.pathname === "/favicon.ico" ||
+    url.pathname === "/apple-touch-icon.png" ||
+    isImage(req)
+  ) {
     event.respondWith(asset(event));
   }
 });
@@ -172,15 +265,15 @@ async function refreshPages(force) {
     keys.map((req) =>
       fetch(req.url, { credentials: "same-origin" })
         .then(async (res) => {
-          if (!cacheable(res)) return;
+          if (!samePage(res)) return;
           await pages.put(req, await stamped(res));
           refreshed += 1;
         })
         .catch(() => {})
     )
   );
-  /* The offline screen and icons are only fetched when this worker installs,
-   * so an app update would otherwise leave an old copy on the device. */
+  /* The offline screen, icons and fonts are only fetched when this worker
+   * installs, so an app update would otherwise leave an old copy behind. */
   const shell = await caches.open(SHELL);
   await Promise.all(
     PRECACHE.map((url) =>
@@ -190,6 +283,29 @@ async function refreshPages(force) {
     )
   );
   return { refreshed: refreshed, offline: false };
+}
+
+/* Saves the tabs the app can reach before anyone opens them, so the first
+ * time the network drops there is already something to read. */
+async function warmPages(urls, force) {
+  if (navigator.onLine === false) return { warmed: 0, offline: true };
+  const now = Date.now();
+  if (!force && now - lastWarm < WARM_FLOOR_MS) return { warmed: 0, throttled: true };
+  lastWarm = now;
+  const pages = await caches.open(PAGES);
+  let warmed = 0;
+  await Promise.all(
+    (urls || []).map((url) =>
+      fetch(url, { credentials: "same-origin" })
+        .then(async (res) => {
+          if (!samePage(res)) return;
+          await pages.put(new Request(url, { credentials: "same-origin" }), await stamped(res));
+          warmed += 1;
+        })
+        .catch(() => {})
+    )
+  );
+  return { warmed: warmed, offline: false };
 }
 
 async function pageInfo(url) {
@@ -206,6 +322,10 @@ self.addEventListener("message", (event) => {
   };
   if (data.type === "bf-refresh") {
     event.waitUntil(refreshPages(!!data.force).then(reply));
+    return;
+  }
+  if (data.type === "bf-warm") {
+    event.waitUntil(warmPages(data.urls, !!data.force).then(reply));
     return;
   }
   if (data.type === "bf-page-info") {

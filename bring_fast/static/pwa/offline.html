@@ -9,15 +9,32 @@
   <link rel="icon" href="/favicon.ico" sizes="32x32"/>
   <link rel="apple-touch-icon" href="/apple-touch-icon.png"/>
   <style>
+    /* Saved on the device with the rest of the shell, so this screen looks
+       like the app even on the first launch with no network. */
+    @font-face {
+      font-family:"IBM Plex Mono"; font-style:normal; font-weight:400; font-display:swap;
+      src:url(/static/fonts/ibm-plex-mono-400-latin.woff2) format("woff2");
+    }
+    @font-face {
+      font-family:"IBM Plex Mono"; font-style:normal; font-weight:700; font-display:swap;
+      src:url(/static/fonts/ibm-plex-mono-700-latin.woff2) format("woff2");
+    }
     :root { --bg:#fff; --ink:#111; --muted:#444; --line:#111; --fill:#111; --on-fill:#fff; color-scheme:light; }
     :root[data-theme="dark"] { --bg:#0a0a0a; --ink:#f5f5f5; --muted:#b5b5b5; --line:#f5f5f5; --fill:#f5f5f5; --on-fill:#0a0a0a; color-scheme:dark; }
     * { box-sizing:border-box; }
     html, body { margin:0; min-height:100%; }
+    html { -webkit-text-size-adjust:100%; text-size-adjust:100%; -webkit-tap-highlight-color:transparent; }
     body {
       background:var(--bg); color:var(--ink);
       font-family:"IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+      padding-left:env(safe-area-inset-left); padding-right:env(safe-area-inset-right);
     }
-    .wrap { max-width:520px; margin:0 auto; padding:14vh 16px 40px; }
+    .wrap {
+      max-width:520px; margin:0 auto;
+      padding:14vh 16px calc(40px + env(safe-area-inset-bottom));
+      padding-top:max(14vh, env(safe-area-inset-top));
+    }
+    button, a { touch-action:manipulation; }
     .mark {
       width:42px; height:42px; background:var(--fill); color:var(--on-fill);
       font-weight:700; display:grid; place-items:center; letter-spacing:-1px; font-size:15px;
@@ -35,6 +52,7 @@
     button {
       font:inherit; font-weight:700; cursor:pointer; border:1px solid var(--fill);
       background:var(--fill); color:var(--on-fill); padding:12px 16px;
+      -webkit-appearance:none; appearance:none; min-height:44px;
     }
   </style>
 </head>
