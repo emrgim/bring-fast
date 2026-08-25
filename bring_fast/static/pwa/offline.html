@@ -44,7 +44,7 @@
     <h1>Offline</h1>
     <p>This page was never saved on the device, so there is nothing to show yet. Pages you have already opened still work offline.</p>
     <div class="card">
-      <b id="state">Retrying every 10 minutes</b>
+      <b id="state">No connection · retrying every 10 minutes</b>
       <div id="next"></div>
     </div>
     <div class="links">
@@ -66,22 +66,37 @@
     })();
     (function(){
       var RETRY_MS=600000;
+      var IDLE="No connection · retrying every 10 minutes";
       var state=document.getElementById("state");
       var next=document.getElementById("next");
       var due=Date.now()+RETRY_MS;
-      function reload(){ location.reload(); }
+      var busy=false;
       function paint(){
-        if(navigator.onLine!==false && state){ state.textContent="Back online. Reloading…"; }
         var left=Math.max(0, Math.round((due-Date.now())/1000));
         var mm=Math.floor(left/60), ss=left%60;
         if(next) next.textContent="Next try in "+mm+":"+(ss<10?"0":"")+ss;
-        if(left<=0){ due=Date.now()+RETRY_MS; reload(); }
+        if(left<=0 && !busy) probe();
+      }
+      /* Only the server answering counts as back: the device can be on a
+         network the app cannot reach. */
+      function probe(){
+        busy=true;
+        if(state) state.textContent="Trying now…";
+        fetch("/health", {cache:"no-store"}).then(function(r){
+          if(r.ok){ location.reload(); return; }
+          throw new Error("no server");
+        }).catch(function(){
+          busy=false;
+          due=Date.now()+RETRY_MS;
+          if(state) state.textContent=IDLE;
+          paint();
+        });
       }
       setInterval(paint, 1000);
       paint();
-      window.addEventListener("online", reload);
+      window.addEventListener("online", probe);
       var retry=document.getElementById("retry");
-      if(retry) retry.addEventListener("click", reload);
+      if(retry) retry.addEventListener("click", probe);
     })();
   </script>
 </body>

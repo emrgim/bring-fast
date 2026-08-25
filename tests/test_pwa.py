@@ -53,6 +53,10 @@ def test_offline_fallback_page(client):
     # It counts the ten minute retry down instead of sitting there dead.
     assert "600000" in r.text
     assert "/dashboard" in r.text
+    # A reachable network is not a reachable server, so it asks before claiming
+    # to be back — navigator.onLine would lie whenever only the server is down.
+    assert 'fetch("/health"' in r.text
+    assert "navigator.onLine" not in r.text
 
 
 def test_health_marks_each_boot_so_a_restart_is_visible(client):
