@@ -158,24 +158,34 @@ self.addEventListener("fetch", (event) => {
   }
 });
 
-/* Re-fetch every saved page so the next offline read is as fresh as the
+/* Re-fetch everything saved so the next offline read is as fresh as the
  * cadence allows: at once while online, every ten minutes while not. */
 async function refreshPages(force) {
   if (navigator.onLine === false) return { refreshed: 0, offline: true };
   const now = Date.now();
   if (!force && now - lastRefresh < REFRESH_FLOOR_MS) return { refreshed: 0, throttled: true };
   lastRefresh = now;
-  const cache = await caches.open(PAGES);
-  const keys = await cache.keys();
+  const pages = await caches.open(PAGES);
+  const keys = await pages.keys();
   let refreshed = 0;
   await Promise.all(
     keys.map((req) =>
       fetch(req.url, { credentials: "same-origin" })
         .then(async (res) => {
           if (!cacheable(res)) return;
-          await cache.put(req, await stamped(res));
+          await pages.put(req, await stamped(res));
           refreshed += 1;
         })
+        .catch(() => {})
+    )
+  );
+  /* The offline screen and icons are only fetched when this worker installs,
+   * so an app update would otherwise leave an old copy on the device. */
+  const shell = await caches.open(SHELL);
+  await Promise.all(
+    PRECACHE.map((url) =>
+      fetch(url, { cache: "reload" })
+        .then((res) => (res && res.ok ? shell.put(url, res) : null))
         .catch(() => {})
     )
   );
