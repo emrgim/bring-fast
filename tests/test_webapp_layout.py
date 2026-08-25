@@ -77,6 +77,21 @@ def test_the_installed_app_cannot_be_pinched(bf, client):
     assert ":root.installed, :root.installed body { touch-action:pan-x pan-y;" in html
 
 
+def test_the_buy_page_is_never_wider_than_the_phone(bf, client):
+    _signed_in(bf, client, "wide@example.com")
+    html = client.get("/purchases").text
+    phone = html[html.index("@media (max-width:720px)") :]
+    board = phone[phone.index(".purchases-board {\n") :]
+    board = board[: board.index("}")]
+
+    # The filter row runs edge to edge by cancelling the wrap padding exactly.
+    # Any leftover desktop nudge on the board makes the page wider than the
+    # screen, and a page wider than the screen can be dragged and pinched.
+    assert ".wrap { padding:10px 12px" in phone
+    assert "margin:0 -12px 10px" in phone
+    assert "margin:0;" in board
+
+
 def test_a_browser_tab_can_still_be_zoomed(bf, client):
     html = client.get("/login").text
 

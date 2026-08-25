@@ -426,6 +426,10 @@
       .trend .delta { font-size:24px; }
       .purchases-board {
         height:auto; min-height:0; display:block;
+        /* The desktop nudge would push the edge-to-edge filter row two pixels
+           past the screen, and a page wider than the phone can be dragged and
+           pinched sideways. */
+        margin:0;
       }
       .purchases-board .table-wrap, .desk-table { display:none !important; }
       .mlist { display:flex; flex-direction:column; gap:8px; }
