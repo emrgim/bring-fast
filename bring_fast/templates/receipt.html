@@ -7,9 +7,7 @@
   <meta name="color-scheme" content="light dark"/>
   <meta name="format-detection" content="telephone=no"/>
   <title>Receipt {{ invoice_no }}</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com"/>
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+  {% include "_fonts.html" %}
   <script>
     window.__bfTheme=(function(){
       var KEY="bf-theme";
@@ -42,13 +40,21 @@
       --bg:#0a0a0a; --ink:#f5f5f5; --muted:#b5b5b5; --line:#f5f5f5;
       color-scheme:dark;
     }
+    html { -webkit-text-size-adjust:100%; text-size-adjust:100%; }
     html,body {
       margin:0; background:var(--bg); color:var(--ink);
       font-family:"IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
     }
-    img { display:block; width:100%; background:#fff; }
+    img { display:block; width:100%; height:auto; background:#fff; }
     .miss { padding:24px; color:var(--ink); }
     .miss a { color:var(--ink); }
+    /* iOS renders nothing inside <object>, so the way out is always drawn. */
+    .pdf { display:block; width:100%; height:100vh; height:100dvh; border:0; }
+    .pdf-out {
+      display:block; padding:14px 16px calc(14px + env(safe-area-inset-bottom));
+      border-top:1px dashed var(--line); font-size:13px;
+    }
+    .pdf-out a { color:var(--ink); font-weight:700; }
     .slip {
       background:var(--bg); margin:0;
       padding:18px 16px calc(28px + env(safe-area-inset-bottom));
@@ -73,7 +79,7 @@
 <body>
 {% if pages %}
   {% for n in pages %}
-  <img src="/receipts/{{ retailer }}/{{ invoice_no }}/p/{{ n }}" alt="Receipt page {{ n }}"/>
+  <img src="/receipts/{{ retailer }}/{{ invoice_no }}/p/{{ n }}" alt="Receipt page {{ n }}" loading="eager" decoding="async"/>
   {% endfor %}
 {% elif built %}
   <div class="slip">
@@ -94,9 +100,10 @@
     <div class="tot"><span>Total</span><span>AED {{ '%.2f'|format(built.total) }}</span></div>
   </div>
 {% else %}
-  <object data="/receipts/{{ retailer }}/{{ invoice_no }}/file.pdf" type="application/pdf" style="width:100%;height:100vh">
+  <object class="pdf" data="/receipts/{{ retailer }}/{{ invoice_no }}/file.pdf" type="application/pdf">
     <p class="miss"><a href="/receipts/{{ retailer }}/{{ invoice_no }}/file.pdf">Open PDF</a></p>
   </object>
+  <p class="pdf-out"><a href="/receipts/{{ retailer }}/{{ invoice_no }}/file.pdf">Open the PDF</a> · needed on iPhone and iPad, where a receipt cannot be drawn in the page.</p>
 {% endif %}
 </body>
 </html>
