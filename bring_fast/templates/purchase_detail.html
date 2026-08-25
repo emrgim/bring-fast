@@ -3,7 +3,7 @@
 <p class="off"><a href="/purchases?range={{ range }}">← Purchases</a></p>
 <div class="prod-head">
   {% if product.image_url %}
-  <img class="hero" src="{{ product.image_url }}" alt="{{ product.name }}" decoding="async" referrerpolicy="no-referrer"/>
+  <img class="hero" src="{{ product.image_url }}" alt="{{ product.name }}" width="120" height="120" loading="eager" fetchpriority="high" decoding="async" referrerpolicy="no-referrer"/>
   {% else %}
   <div class="hero empty">{{ product.name[:1] }}</div>
   {% endif %}
@@ -26,7 +26,7 @@
     {% for s in compare %}
     <div class="compare-row {% if s.cheapest %}cheapest{% endif %} {% if s.dearest %}dearest{% endif %}">
       <div class="who">
-        {% if s.logo %}<img src="{{ s.logo }}" alt=""/>{% endif %}
+        {% if s.logo %}<img src="{{ s.logo }}" alt="" width="22" height="22" loading="eager" decoding="async"/>{% endif %}
         <b>{{ s.name }}</b>
       </div>
       <div class="amt">

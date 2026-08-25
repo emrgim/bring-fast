@@ -69,7 +69,7 @@
 <div class="mlist">
   {% for p in products %}
   <a class="mcard" href="/purchases/{{ p.key }}">
-    {% if p.image_url %}<img class="thumb" src="{{ p.image_url }}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer"/>{% else %}<div class="thumb empty">{{ p.name[:1] }}</div>{% endif %}
+    {% if p.image_url %}<img class="thumb" src="{{ p.image_url }}" alt="" width="56" height="56" loading="eager" decoding="async" referrerpolicy="no-referrer"/>{% else %}<div class="thumb empty">{{ p.name[:1] }}</div>{% endif %}
     <div class="copy">
       <b>{{ p.name }}</b>
       <div class="pair">
@@ -92,7 +92,7 @@
     {% for p in products %}
       <tr class="rowlink" onclick="location.href='/purchases/{{ p.key }}'">
         <td>
-          {% if p.image_url %}<img class="thumb" src="{{ p.image_url }}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer"/>{% else %}<div class="thumb empty">{{ p.name[:1] }}</div>{% endif %}
+          {% if p.image_url %}<img class="thumb" src="{{ p.image_url }}" alt="" width="48" height="48" loading="eager" decoding="async" referrerpolicy="no-referrer"/>{% else %}<div class="thumb empty">{{ p.name[:1] }}</div>{% endif %}
         </td>
         <td>{{ p.name }}</td>
         <td>{{ p.times_bought }}</td>
