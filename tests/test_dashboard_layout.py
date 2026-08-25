@@ -23,6 +23,7 @@ def test_spend_card_holds_the_period_average(bf, client):
     assert html.count("Weekly average this period") == 1
     assert html.count("÷") == 1
     # The average sits inside the spend card, above the bars, not in a widget of its own.
+    assert html.index('<div class="dash">') < html.index("Weekly average this period")
     assert html.index("Weekly average this period") < html.index('id="spend-bars"')
     assert html.index('id="spend-bars"') < html.index('class="widgets"')
     assert "daily-avg" not in html
@@ -39,7 +40,7 @@ def test_spend_totals_stay_pinned_while_scrolling(bf, client):
     assert ".spend-pin {\n      display:none; position:fixed" in html
     assert 'pin.classList.toggle("on"' in html
     # The pinned bar carries the total and the selected grain's average.
-    pin = html[html.index('id="spend-pin"') : html.index('id="spend-dash"')]
+    pin = html[html.index('id="spend-pin"') : html.index('<div class="dash">')]
     assert "spent" in pin
     assert "Monthly avg" in pin
     assert "Weekly avg" not in pin
