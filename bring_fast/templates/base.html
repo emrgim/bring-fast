@@ -179,7 +179,7 @@
       display:flex; flex-direction:column;
       margin:0 -2px;
     }
-    .purchases-board .filters { flex:0 0 auto; background:var(--bg); padding:8px 0 12px; }
+    .purchases-board .filters { flex:0 0 auto; background:var(--bg); padding:0 0 8px; }
     .purchases-board .table-wrap {
       flex:1 1 auto; min-height:0; overflow:auto; -webkit-overflow-scrolling:touch;
       border:1px solid var(--line); border-radius:0; background:var(--card); padding:0 10px 0 0;
@@ -231,13 +231,22 @@
       background:var(--card); padding:10px 12px 8px; margin:0 0 10px;
     }
     .dash-top { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap; }
-    .grain { display:flex; gap:4px; flex-wrap:wrap; }
-    .grain a {
-      color:var(--muted); border:1px solid var(--line); border-radius:0;
-      padding:5px 10px; font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase;
-      text-decoration:none;
+    .grain, .chip-row, .msort {
+      display:flex; gap:4px; flex-wrap:wrap; align-items:center;
     }
-    .grain a.on { color:var(--on-fill); background:var(--fill); border-color:var(--fill); }
+    .grain a, .chip-row a, .msort a, .filters button {
+      color:var(--muted); border:1px solid var(--line); border-radius:0;
+      padding:4px 8px; font-size:11px; font-weight:700; letter-spacing:.04em;
+      text-decoration:none; line-height:1.2; background:transparent;
+      min-height:0; width:auto; cursor:pointer; font-family:inherit;
+    }
+    .grain a { text-transform:uppercase; }
+    .grain a.on, .chip-row a.on, .msort a.on {
+      color:var(--on-fill); background:var(--fill); border-color:var(--fill);
+    }
+    .filters button {
+      background:var(--fill); color:var(--on-fill); border-color:var(--fill);
+    }
     .bar.wide { flex:0 0 22px; min-width:16px; }
     .dash-kpis { display:flex; gap:14px; flex-wrap:wrap; color:var(--muted); font-size:12px; margin:0 0 8px; }
     .dash-kpis b { color:var(--ink); font-size:14px; }
@@ -278,14 +287,12 @@
     }
     .pop.open { display:block; }
     .pop .row { display:flex; justify-content:space-between; gap:10px; padding:5px 0; }
-    .filters { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 16px; }
-    .filters a {
-      color:var(--muted); border:1px solid var(--line); border-radius:0;
-      padding:7px 12px; font-size:12px; font-weight:700; text-decoration:none;
+    .filters { display:flex; flex-direction:column; gap:6px; margin:0 0 12px; }
+    .filters form { display:flex; gap:4px; align-items:center; flex-wrap:nowrap; flex:0 0 auto; }
+    .filters input[type=date] {
+      width:auto; max-width:11.5em; padding:3px 6px; font-size:11px; height:26px;
+      line-height:1.2; min-height:0;
     }
-    .filters form { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
-    .filters input[type=date] { width:auto; padding:6px 8px; font-size:12px; }
-    .filters a.on { color:var(--on-fill); background:var(--fill); border-color:var(--fill); }
     .chart { width:100%; height:auto; min-height:180px; display:block; color:var(--ink); }
     .buy { display:grid; grid-template-columns: 1fr auto; gap:4px 12px; padding:12px 0; border-top:1px dashed var(--line); }
     .buy:first-child { border-top:0; }
@@ -324,10 +331,11 @@
       .logo { width:48px; height:48px; }
       .grid { grid-template-columns:1fr; gap:12px; }
       .split > * { min-width:0; flex:1 1 100%; }
-      button.btn, a.btn, .card button, .filters button { min-height:44px; width:100%; text-align:center; }
+      button.btn, a.btn, .card button { min-height:44px; width:100%; text-align:center; }
       .ghost { width:auto; }
       .nav-right .theme-toggle { min-height:44px; }
       .compare-row button, .compare-row a.open { width:auto; min-height:36px; }
+      .filters button { min-height:0; width:auto; padding:4px 8px; }
       button.bar, .bar {
         width:auto !important; min-width:7px !important; min-height:0 !important;
         flex:0 0 8px; height:72px;
@@ -335,14 +343,18 @@
       .bars { height:72px; }
       .purchases-board, .purchases-board .dash { height:auto !important; min-height:0 !important; display:block !important; overflow:visible !important; }
       .filters {
-        flex-wrap:nowrap; overflow-x:auto; -webkit-overflow-scrolling:touch;
-        gap:6px; margin:0 -12px 12px; padding:0 12px 10px;
-        scrollbar-width:none;
+        gap:6px; margin:0 -12px 10px; padding:0;
       }
-      .filters::-webkit-scrollbar { display:none; }
-      .filters a { flex:0 0 auto; padding:10px 14px; font-size:13px; }
+      .grain, .chip-row, .msort {
+        flex-wrap:nowrap; overflow-x:auto; -webkit-overflow-scrolling:touch;
+        scrollbar-width:none; gap:4px;
+      }
+      .grain::-webkit-scrollbar, .chip-row::-webkit-scrollbar, .msort::-webkit-scrollbar { display:none; }
+      .chip-row { padding:0 12px; }
+      .grain a, .chip-row a, .msort a, .filters button {
+        flex:0 0 auto; padding:5px 8px; font-size:11px;
+      }
       .filters form { display:flex; }
-      .grain { flex-wrap:nowrap; overflow-x:auto; }
       .dash-kpis { gap:10px; font-size:12px; }
       .dash-kpis b { font-size:16px; display:block; }
       .dash-kpis span { flex:1 1 30%; }
@@ -371,15 +383,7 @@
       .pair b { display:block; color:var(--ink); font-size:12px; font-weight:700; }
       .mcard .amt { text-align:right; font-weight:700; font-size:14px; white-space:nowrap; }
       .mcard .amt small { display:block; font-weight:600; color:var(--muted); font-size:11px; }
-      .msort {
-        display:flex; gap:6px; overflow-x:auto; margin:0 0 10px; padding-bottom:4px;
-      }
-      .msort a {
-        flex:0 0 auto; color:var(--muted); border:1px solid var(--line);
-        border-radius:0; padding:8px 12px; font-size:12px; font-weight:700;
-        text-decoration:none;
-      }
-      .msort a.on { color:var(--on-fill); background:var(--fill); border-color:var(--fill); }
+      .msort { margin:0 0 10px; padding:0 0 4px; }
       .prod-head { flex-direction:column; }
       .prod-head .hero { width:96px; height:96px; flex-basis:96px; }
       .prod-head h1 { font-size:22px; }

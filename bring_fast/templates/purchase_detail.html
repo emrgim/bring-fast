@@ -49,15 +49,17 @@
 </div>
 
 <div class="filters">
-  {% for key, label in [('1w','1 week'),('2w','2 weeks'),('1m','1 month'),('3m','3 months'),('1y','1 year'),('2y','2 years'),('3y','3 years'),('all','All')] %}
-  <a class="{% if range==key %}on{% endif %}" href="/purchases/{{ product.key }}?range={{ key }}">{{ label }}</a>
-  {% endfor %}
-  <form method="get" action="/purchases/{{ product.key }}">
-    <input type="hidden" name="range" value="custom"/>
-    <input type="date" name="start" value="{{ start }}"/>
-    <input type="date" name="end" value="{{ end }}"/>
-    <button type="submit">Apply</button>
-  </form>
+  <div class="chip-row" aria-label="Range">
+    {% for key, label, title in [('1w','1w','1 week'),('2w','2w','2 weeks'),('1m','1m','1 month'),('3m','3m','3 months'),('1y','1y','1 year'),('2y','2y','2 years'),('3y','3y','3 years'),('all','All','All')] %}
+    <a class="{% if range==key %}on{% endif %}" href="/purchases/{{ product.key }}?range={{ key }}" title="{{ title }}">{{ label }}</a>
+    {% endfor %}
+    <form method="get" action="/purchases/{{ product.key }}">
+      <input type="hidden" name="range" value="custom"/>
+      <input type="date" name="start" value="{{ start }}"/>
+      <input type="date" name="end" value="{{ end }}"/>
+      <button type="submit">Apply</button>
+    </form>
+  </div>
 </div>
 
 <div class="card">
