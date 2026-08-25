@@ -44,15 +44,45 @@ def test_taps_land_at_once_and_never_zoom(bf, client):
     assert "-webkit-appearance:none; appearance:none;" in html
 
 
-def test_the_installed_app_does_not_rubber_band(bf, client):
-    html = client.get("/login").text
+def _installed_block(html):
     block = html[html.index("@media (display-mode: standalone)") :]
-    block = block[: block.index("}\n    table.data th.sort.asc")]
+    return block[: block.index("\n    }\n")]
+
+
+def test_the_installed_app_does_not_rubber_band(bf, client):
+    block = _installed_block(client.get("/login").text)
 
     assert "overscroll-behavior-y:contain" in block
     assert "env(safe-area-inset-top)" in block
     # Nothing offers to install an app that is already installed.
     assert "#pwa-install, #ios-install { display:none !important; }" in block
+
+
+def test_the_installed_app_cannot_be_pinched(bf, client):
+    _signed_in(bf, client, "pinch@example.com")
+    html = client.get("/purchases").text
+
+    # Zooming out past scale 1 parks the sticky header and the dock off the
+    # screen, so installed the app takes the pan and refuses the pinch.
+    assert "touch-action:pan-x pan-y" in _installed_block(html)
+    assert (
+        'v.setAttribute("content","width=device-width, initial-scale=1, '
+        'maximum-scale=1, user-scalable=no, viewport-fit=cover")' in html
+    )
+    # WebKit keeps its pinch out of reach of the viewport rules.
+    for name in ("gesturestart", "gesturechange", "gestureend"):
+        assert name in html
+    assert "{passive:false}" in html
+    # Home-screen Safari that predates the display-mode query still gets it.
+    assert ":root.installed, :root.installed body { touch-action:pan-x pan-y;" in html
+
+
+def test_a_browser_tab_can_still_be_zoomed(bf, client):
+    html = client.get("/login").text
+
+    # A page in a tab is still a page: pinching it is the reader's business.
+    assert '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>' in html
+    assert html.count("user-scalable=no") == 1  # the installed branch only
 
 
 def test_ios_is_told_where_its_install_button_is(bf, client):
@@ -120,3 +150,6 @@ def test_a_pdf_receipt_offers_a_way_out_on_ios(bf, client, tmp_path):
     # And the receipt viewer carries the app font like every other page.
     assert "/static/fonts/ibm-plex-mono-400-latin.woff2" in html
     assert "fonts.googleapis.com" not in html
+    # A receipt is a scan of paper: unlike the app screens it stays pinchable,
+    # because reading the small print is the only reason to open it.
+    assert "user-scalable=no" not in html
