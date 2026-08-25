@@ -28,8 +28,16 @@ const PRECACHE = [
   "/static/pwa/icon-512.png",
   "/static/pwa/icon-180.png",
   "/static/pwa/icon-512-maskable.png",
+  /* Every weight and subset, not just the two the head preloads: a weight
+   * first met while offline would otherwise fall back mid-page. */
   "/static/fonts/ibm-plex-mono-400-latin.woff2",
+  "/static/fonts/ibm-plex-mono-400-latin-ext.woff2",
+  "/static/fonts/ibm-plex-mono-500-latin.woff2",
+  "/static/fonts/ibm-plex-mono-500-latin-ext.woff2",
+  "/static/fonts/ibm-plex-mono-600-latin.woff2",
+  "/static/fonts/ibm-plex-mono-600-latin-ext.woff2",
   "/static/fonts/ibm-plex-mono-700-latin.woff2",
+  "/static/fonts/ibm-plex-mono-700-latin-ext.woff2",
   "/manifest.webmanifest",
 ];
 
@@ -251,6 +259,55 @@ self.addEventListener("fetch", (event) => {
   }
 });
 
+/* A saved page is only readable if the pictures in it were saved too. Warming
+ * a page fetches the page alone, so the store logos and product shots it names
+ * are collected here — the ones already held are skipped, so the ten minute
+ * cadence costs a cache lookup each and nothing more. */
+async function warmShots(html, base) {
+  const tag = /<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/gi;
+  const urls = [];
+  let found;
+  while ((found = tag.exec(html)) !== null) {
+    if (!found[1] || found[1].indexOf("data:") === 0) continue;
+    let url;
+    try {
+      url = new URL(found[1], base);
+    } catch (e) {
+      continue;
+    }
+    if (url.protocol !== "http:" && url.protocol !== "https:") continue;
+    if (urls.indexOf(url.href) === -1) urls.push(url.href);
+  }
+  if (!urls.length) return 0;
+  const here = self.location.origin + "/";
+  const local = await caches.open(ASSETS);
+  const shops = await caches.open(IMAGES);
+  let saved = 0;
+  await Promise.all(
+    urls.map(async (href) => {
+      const mine = href.indexOf(here) === 0;
+      const cache = mine ? local : shops;
+      try {
+        if (await cache.match(href)) return;
+        const res = await fetch(href, mine ? { credentials: "same-origin" } : { mode: "no-cors" });
+        if (!keepable(res)) return;
+        await cache.put(href, res);
+        saved += 1;
+      } catch (e) {}
+    })
+  );
+  if (saved) await trim(shops, IMAGE_CAP);
+  return saved;
+}
+
+async function savedWith(cache, url, res) {
+  const copy = res.clone();
+  await cache.put(new Request(url, { credentials: "same-origin" }), await stamped(res));
+  try {
+    await warmShots(await copy.text(), new URL(url, self.location.origin).href);
+  } catch (e) {}
+}
+
 /* Re-fetch everything saved so the next offline read is as fresh as the
  * cadence allows: at once while online, every ten minutes while not. */
 async function refreshPages(force) {
@@ -266,7 +323,7 @@ async function refreshPages(force) {
       fetch(req.url, { credentials: "same-origin" })
         .then(async (res) => {
           if (!samePage(res)) return;
-          await pages.put(req, await stamped(res));
+          await savedWith(pages, req.url, res);
           refreshed += 1;
         })
         .catch(() => {})
@@ -299,7 +356,7 @@ async function warmPages(urls, force) {
       fetch(url, { credentials: "same-origin" })
         .then(async (res) => {
           if (!samePage(res)) return;
-          await pages.put(new Request(url, { credentials: "same-origin" }), await stamped(res));
+          await savedWith(pages, url, res);
           warmed += 1;
         })
         .catch(() => {})

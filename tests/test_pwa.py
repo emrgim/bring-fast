@@ -66,6 +66,10 @@ def test_service_worker_keeps_the_pictures_a_saved_page_needs(client):
     # And the shelf is capped instead of growing for as long as the app lives.
     assert "IMAGE_CAP" in sw
     assert "trim(" in sw
+    # Warming a page fetches the page alone, so the pictures it names are
+    # collected too — otherwise a tab saved but never opened shows blanks.
+    assert "warmShots" in sw
+    assert "<img" in sw
 
 
 def test_service_worker_never_saves_a_page_it_was_redirected_to(client):
@@ -119,9 +123,11 @@ def test_health_marks_each_boot_so_a_restart_is_visible(client):
 def test_the_offline_shell_carries_its_own_font(client):
     sw = client.get("/sw.js").text
     # Precached with the icons: the first launch with no network still looks
-    # like the app rather than falling back to the system monospace.
-    assert "/static/fonts/ibm-plex-mono-400-latin.woff2" in sw
-    assert "/static/fonts/ibm-plex-mono-700-latin.woff2" in sw
+    # like the app rather than falling back to the system monospace. Every
+    # weight, so one met for the first time offline does not fall back either.
+    for weight in ("400", "500", "600", "700"):
+        for subset in ("latin", "latin-ext"):
+            assert f"/static/fonts/ibm-plex-mono-{weight}-{subset}.woff2" in sw
     offline = client.get("/offline").text
     assert "@font-face" in offline
     assert "/static/fonts/" in offline
