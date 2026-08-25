@@ -347,7 +347,6 @@ def spend_home(
             "title": "Dashboard · Bring Fast",
             "tab": "dashboard",
             "days": days,
-            "days_json": json.dumps(days),
             "dash_spend": snap["total"],
             "period_avg": snap["period_avg"],
             "period_word": snap["period_word"],
@@ -679,7 +678,9 @@ def purchases_page(
                 sort=sort, dir=direction, range=range_key, grain=grain, dept=dept, day=day, start=start, end=end
             ),
             "days": days,
-            "days_json": json.dumps(days),
+            # Only what a tap on a bar reads: over years of daily bars the rest
+            # would weigh more than the products.
+            "days_json": json.dumps(purchases.day_marks(days)),
             "dash_spend": total_spend,
             "period_avg": round(total_spend / periods, 2),
             "period_word": purchases.PERIOD_WORDS[grain],

@@ -4,6 +4,7 @@ Switching tabs must never wait on a shelf: the page carries the first batch and
 asks for the rest once it is on screen, one batch after another.
 """
 
+import json
 import re
 
 
@@ -288,6 +289,53 @@ def test_an_empty_range_still_says_so(bf, client):
     html = client.get("/purchases?range=all&grain=daily").text
     assert "No invoices in this range." in html
     assert _note(html)["total"] == 0
+
+
+def test_a_bar_carries_only_what_a_tap_reads(bf, client):
+    user = _shelf(bf, "bars@example.com", count=3, day="2026-08-10")
+    bf.purchases.upsert_invoice(
+        user["id"],
+        {
+            "retailer": "grandiose",
+            "store_name": "Grandiose Marina",
+            "invoice_no": "BAR2",
+            "invoice_date": "2026-08-12",
+            "items": [{"name": "Milk", "qty": 1, "unit_price": 7, "line_total": 7, "barcode": "5"}],
+        },
+    )
+    client.post("/login", data={"email": "bars@example.com", "password": "secret1", "intent": "signin"})
+    html = client.get("/purchases?range=all&grain=daily").text
+    marks = json.loads(html[html.index("var days = ") + 11 : html.index(";\n  var pop")])
+
+    # The bars are drawn in the page already, so their heights, their window
+    # bounds and the selected flag have no reason to travel a second time —
+    # over years of daily bars that repetition weighs more than the products.
+    every = {k for m in marks for k in m}
+    assert every <= {"date", "label", "spend", "count", "invoices"}
+    assert "pct" not in every
+    assert "win_start" not in every
+    assert "selected" not in every
+    # A tap still names the day, the money and the receipts behind it.
+    tapped = next(m for m in marks if m["date"] == "2026-08-12")
+    assert tapped["count"] == 1
+    assert tapped["spend"] == 7
+    assert tapped["invoices"][0]["invoice_no"] == "BAR2"
+    assert tapped["invoices"][0]["store"] == "Grandiose Marina"
+    # A day nobody shopped on carries no empty list, and a label that is the
+    # date is left for the page to fall back to.
+    quiet = next(m for m in marks if m["date"] == "2026-08-11")
+    assert "invoices" not in quiet
+    assert "label" not in quiet
+    assert '(d.label||d.date)' in html
+
+
+def test_the_dashboard_does_not_ship_a_popup_it_never_opens(bf, client):
+    _signed_in(bf, client, "dash@example.com", count=3)
+
+    html = client.get("/dashboard?range=all&grain=daily").text
+    # Only the purchases board has a day popup: the dashboard's bars are links.
+    assert "var days = " not in html
+    assert "spend-bars" in html
 
 
 def test_the_service_worker_saves_the_batches_too(client):

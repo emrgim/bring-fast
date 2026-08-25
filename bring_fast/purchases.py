@@ -1033,6 +1033,37 @@ def mark_day_windows(
     return days
 
 
+def day_marks(days: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """What a tap on a bar has to answer with, and nothing more.
+
+    The bars themselves are already drawn in the page, so the window bounds,
+    the bar heights and the selected flag have no reason to travel again. Over
+    a few years of daily bars that repetition is most of the page.
+    """
+    out = []
+    for d in days:
+        day = str(d.get("date") or "")
+        label = str(d.get("label") or "")
+        mark: dict[str, Any] = {"date": day, "spend": round(float(d.get("spend") or 0), 2), "count": int(d.get("count") or 0)}
+        # The popup already falls back to the date, so a label that is the date
+        # is left out.
+        if label and label != day:
+            mark["label"] = label
+        invoices = [
+            {
+                "invoice_no": inv.get("invoice_no") or "",
+                "retailer": inv.get("retailer") or "",
+                "store": inv.get("store") or inv.get("retailer") or "",
+                "spend": round(float(inv.get("spend") or 0), 2),
+            }
+            for inv in (d.get("invoices") or [])
+        ]
+        if invoices:
+            mark["invoices"] = invoices
+        out.append(mark)
+    return out
+
+
 def focus_products_window(
     day: str,
     grain: str,
