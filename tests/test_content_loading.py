@@ -115,9 +115,12 @@ def test_a_page_is_always_asked_for_again_but_a_logo_is_not(bf, client):
         assert "immutable" not in (logo.headers.get("cache-control") or "")
 
 
-def test_live_state_still_overrides_the_page_policy(bf, client):
+def test_live_state_is_never_read_from_a_cache(bf, client):
     _signed_in(bf, client, "live@example.com")
 
     assert "no-store" in (client.get("/update/status").headers.get("cache-control") or "")
+    # /health decides whether the app believes it is back online, so a
+    # heuristically cached copy would answer for a server that is still down.
+    assert "no-store" in (client.get("/health").headers.get("cache-control") or "")
     assert "no-cache" in (client.get("/sw.js").headers.get("cache-control") or "")
     assert "no-cache" in (client.get("/manifest.webmanifest").headers.get("cache-control") or "")

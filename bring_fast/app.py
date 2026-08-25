@@ -68,10 +68,12 @@ STATIC = Path(__file__).resolve().parent / "static"
 # A font subset is fixed for the life of its filename, so it is fetched once
 # and never asked about again. A page carries live money figures, so the
 # browser revalidates it every time — the service worker, not the HTTP cache,
-# is what answers when there is no network.
+# is what answers when there is no network. JSON here is always live state:
+# health, update, MCP and OAuth are worth nothing stale.
 FONT_CACHE = "public, max-age=31536000, immutable"
 ASSET_CACHE = "public, max-age=86400"
 PAGE_CACHE = "no-cache"
+LIVE_CACHE = "no-store"
 
 
 @app.middleware("http")
@@ -80,12 +82,15 @@ async def cache_policy(request: Request, call_next):
     if response.headers.get("Cache-Control"):
         return response
     path = request.url.path
+    kind = response.headers.get("content-type") or ""
     if path.startswith("/static/fonts/"):
         response.headers["Cache-Control"] = FONT_CACHE
     elif path.startswith("/static/"):
         response.headers["Cache-Control"] = ASSET_CACHE
-    elif (response.headers.get("content-type") or "").startswith("text/html"):
+    elif kind.startswith("text/html"):
         response.headers["Cache-Control"] = PAGE_CACHE
+    elif kind.startswith("application/json"):
+        response.headers["Cache-Control"] = LIVE_CACHE
     return response
 
 
