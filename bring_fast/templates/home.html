@@ -1,13 +1,17 @@
 {% extends "base.html" %}
 {% block body %}
-<div class="dash-anchor" id="spend-anchor" aria-hidden="true"></div>
-<div class="dash is-sticky" id="spend-dash">
+<div class="spend-pin" id="spend-pin" aria-hidden="true">
+  <div class="pin-in">
+    <span><b>AED {{ '%.0f'|format(dash_spend) }}</b> spent</span>
+    <span class="pin-avg">{{ period_word }} avg <b>AED {{ '%.2f'|format(period_avg) }}</b></span>
+  </div>
+</div>
+<div class="dash" id="spend-dash">
   <div class="dash-top">
     <div>
       <h1>Your <em>spend</em></h1>
       <div class="dash-kpis">
         <span><b>AED {{ '%.0f'|format(dash_spend) }}</b> spent</span>
-        <span class="opt"><b>{{ periods_text }}</b> {{ period_unit }}</span>
         <span class="opt"><b>{{ dash_receipts }}</b> receipts</span>
       </div>
     </div>
@@ -17,9 +21,8 @@
       {% endfor %}
     </div>
   </div>
-  <div class="dash-avg">
-    <span class="who long">{{ period_word }} average this period</span>
-    <span class="who short">{{ period_word }} avg</span>
+  <div class="dash-avg" id="spend-avg">
+    <span class="who">{{ period_word }} average this period</span>
     <b class="delta">AED {{ '%.2f'|format(period_avg) }}</b>
     <span class="who fine">
       AED {{ '%.2f'|format(dash_spend) }} ÷ {{ periods_text }} {{ period_unit }}

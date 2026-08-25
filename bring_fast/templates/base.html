@@ -230,28 +230,23 @@
       flex:0 0 auto; border:1px solid var(--line); border-radius:0;
       background:var(--card); padding:10px 12px 8px; margin:0 0 10px;
     }
-    .dash.is-sticky { position:sticky; top:var(--sticky-top,56px); z-index:30; }
-    .dash-anchor { height:0; }
+    .spend-pin {
+      display:none; position:fixed; left:0; right:0; top:var(--sticky-top,56px); z-index:35;
+      background:var(--bg); border-bottom:1px solid var(--line);
+      color:var(--muted); font-size:12px;
+    }
+    .spend-pin.on { display:block; }
+    .spend-pin .pin-in {
+      max-width:1100px; margin:0 auto; padding:6px 14px; overflow:hidden;
+      display:flex; align-items:center; justify-content:space-between; gap:10px;
+    }
+    .spend-pin span { white-space:nowrap; }
+    .spend-pin b { color:var(--ink); font-size:14px; }
+    .spend-pin .pin-avg { display:flex; align-items:baseline; gap:6px; min-width:0; }
     .dash-top { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap; }
     .dash-avg { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin:2px 0 8px; }
     .dash-avg .delta { font-size:24px; font-weight:700; white-space:nowrap; }
     .dash-avg .fine { flex:1 1 100%; }
-    .dash-avg .short { display:none; }
-    .dash.is-stuck {
-      display:flex; align-items:center; justify-content:space-between;
-      gap:12px; padding:6px 12px;
-    }
-    .dash.is-stuck h1,
-    .dash.is-stuck .grain,
-    .dash.is-stuck .bars-scroller,
-    .dash.is-stuck .dash-kpis .opt,
-    .dash.is-stuck .dash-avg .long,
-    .dash.is-stuck .dash-avg .fine { display:none; }
-    .dash.is-stuck .dash-avg .short { display:inline; }
-    .dash.is-stuck .dash-kpis { margin:0; }
-    .dash.is-stuck .dash-kpis b { display:inline; font-size:15px; }
-    .dash.is-stuck .dash-avg { margin:0; flex-wrap:nowrap; }
-    .dash.is-stuck .dash-avg .delta { font-size:17px; }
     .grain, .chip-row, .msort {
       display:flex; gap:4px; flex-wrap:wrap; align-items:center;
     }
@@ -375,9 +370,9 @@
         flex:0 0 auto; padding:5px 8px; font-size:11px;
       }
       .filters form { display:flex; }
-      .dash-kpis { gap:10px; font-size:12px; }
+      .dash-kpis { gap:14px; font-size:12px; }
       .dash-kpis b { font-size:16px; display:block; }
-      .dash-kpis span { flex:1 1 30%; }
+      .dash-kpis span { flex:0 1 auto; white-space:nowrap; }
       .dash h1 { font-size:18px; margin-bottom:6px; }
       .dash-avg .delta { font-size:22px; }
       .trend { flex-direction:column; align-items:flex-start; gap:8px; padding:12px; }
@@ -540,13 +535,13 @@
       if(sc) sc.scrollLeft=sc.scrollWidth;
     })();
     (function(){
-      var dash=document.getElementById("spend-dash");
-      var anchor=document.getElementById("spend-anchor");
+      var pin=document.getElementById("spend-pin");
+      var avg=document.getElementById("spend-avg");
       var nav=document.querySelector("nav.topnav");
-      if(!dash||!anchor) return;
+      if(!pin||!avg) return;
       function sync(){
         var top=nav?nav.offsetHeight:56;
-        dash.classList.toggle("is-stuck", anchor.getBoundingClientRect().top < top);
+        pin.classList.toggle("on", avg.getBoundingClientRect().bottom < top);
       }
       sync();
       window.addEventListener("scroll", sync, {passive:true});
