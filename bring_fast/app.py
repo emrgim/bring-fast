@@ -743,7 +743,7 @@ def purchases_page(
             "dash_spend": total_spend,
             "period_avg": round(total_spend / periods, 2),
             "period_word": purchases.PERIOD_WORDS[grain],
-            "period_unit": purchases.PERIOD_UNITS[grain],
+            "period_unit": purchases.period_unit(grain, periods),
             "periods_text": purchases.format_periods(periods),
             "range_start": since or "",
             "range_end": until.isoformat(),
