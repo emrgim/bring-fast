@@ -289,7 +289,9 @@ def spend_home(
     focus_since, focus_until = purchases.focus_products_window(day, grain, since, until)
     top = purchases.list_products(user["id"], sort="spend", direction="desc", since=focus_since, until=focus_until)[:8]
     trend = purchases.price_trend(user["id"], since=since, until=until, grain=grain)
-    snap = purchases.spend_snapshot(user["id"], since=since, until=until, grain=grain)
+    snap = purchases.spend_snapshot(
+        user["id"], since=since, until=until, grain=grain, include_undated=(range_key == "all")
+    )
     _remember(request, user)
     return templates.TemplateResponse(
         request,
@@ -302,6 +304,7 @@ def spend_home(
             "days_json": json.dumps(days),
             "dash_spend": snap["total"],
             "dash_receipts": snap["receipts"],
+            "dash_receipts_total": snap["receipts_total"],
             "period_avg": snap["period_avg"],
             "period_word": snap["period_word"],
             "period_unit": snap["period_unit"],
@@ -608,7 +611,14 @@ def purchases_page(
             "days": days,
             "days_json": json.dumps(days),
             "dash_spend": sum(d["spend"] for d in raw_days),
-            "dash_receipts": sum(d["count"] for d in raw_days),
+            "dash_receipts": (
+                sum(d["count"] for d in raw_days)
+                if dept
+                else purchases.invoice_count(
+                    user["id"], since=since, until=until, include_undated=(range_key == "all")
+                )
+            ),
+            "dash_receipts_total": purchases.invoice_count(user["id"], include_undated=True),
             "dash_days": len(raw_days),
             "stats": purchases.purchase_stats(user["id"]),
             "sort": sort,
