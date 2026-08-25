@@ -367,11 +367,12 @@ def spend_home(
 
 
 @app.get("/stores", response_class=HTMLResponse)
-def stores_page(request: Request, welcome: int = 0, notice: str = "", edit: str = ""):
-    """`edit` names the one store whose credentials get real input fields.
+def stores_page(request: Request, welcome: int = 0, notice: str = ""):
+    """The list reads out what each store is and can do, and nothing more.
 
-    Every other saved store is printed as plain text, so opening the tab does not
-    put a login form on screen for the browser's password manager to jump on.
+    A store is changed inside its own page, so opening this tab never puts a
+    login form on screen for the browser's password manager to jump on, and a
+    stray tap cannot turn a store off.
     """
     user = current_user(request)
     if not user:
@@ -382,15 +383,45 @@ def stores_page(request: Request, welcome: int = 0, notice: str = "", edit: str 
         "dashboard.html",
         {
             "user": user,
-            "retailers": db.list_retailer_accounts(user["id"]),
-            "edit": edit if edit in {r["id"] for r in db.RETAILERS} else "",
+            "retailers": [
+                {**r, "caps": db.store_capabilities(r["id"])} for r in db.list_retailer_accounts(user["id"])
+            ],
             "mcp_url": mcp_url(request),
             "title": "Stores · Bring Fast",
             "notice": (
-                f"Welcome to Bring Fast, {user['email']}. Link Grandiose below to start."
+                f"Welcome to Bring Fast, {user['email']}. Open Grandiose below to link it."
                 if welcome
                 else notice
             ),
+            "tab": "stores",
+        },
+    )
+
+
+@app.get("/stores/{retailer}", response_class=HTMLResponse)
+def store_page(request: Request, retailer: str, notice: str = "", edit: int = 0):
+    """One store, and everywhere it can be changed.
+
+    A saved login is printed as plain text until `edit` asks for the fields, so
+    a password manager is only offered a form when the person wants one.
+    """
+    user = current_user(request)
+    if not user:
+        return RedirectResponse(f"/login?mode=signin&next=/stores/{retailer}", status_code=303)
+    store = next((r for r in db.list_retailer_accounts(user["id"]) if r["id"] == retailer), None)
+    if not store:
+        return RedirectResponse("/stores", status_code=303)
+    _remember(request, user)
+    return templates.TemplateResponse(
+        request,
+        "store.html",
+        {
+            "user": user,
+            "store": store,
+            "caps": db.store_capabilities(retailer),
+            "edit": bool(edit) or not store["login_email"],
+            "title": f"{store['name']} · Bring Fast",
+            "notice": notice,
             "tab": "stores",
         },
     )
@@ -566,15 +597,20 @@ def save_retailer(
     if retailer not in {r["id"] for r in db.RETAILERS}:
         return RedirectResponse("/", status_code=303)
     db.set_retailer_account(user["id"], retailer, email.strip(), password, address)
-    return RedirectResponse(f"/stores#store-{retailer}", status_code=303)
+    return RedirectResponse(f"/stores/{retailer}", status_code=303)
 
 
 @app.post("/retailers/{retailer}/clear")
 def clear_retailer(request: Request, retailer: str):
     user = current_user(request)
-    if user:
-        db.clear_retailer_account(user["id"], retailer)
-    return RedirectResponse("/", status_code=303)
+    if not user:
+        return RedirectResponse("/", status_code=303)
+    db.clear_retailer_account(user["id"], retailer)
+    store = db.store_meta(retailer)
+    if not store:
+        return RedirectResponse("/stores", status_code=303)
+    note = f"{store['name']}: login removed"
+    return RedirectResponse(f"/stores/{retailer}?" + urlencode({"notice": note}), status_code=303)
 
 
 @app.post("/retailers/{retailer}/check")
@@ -594,7 +630,7 @@ def check_retailer(request: Request, retailer: str):
         note = f"{store['name']}: login works" + (" (session reused)" if result.get("reused") else "")
     else:
         note = f"{store['name']}: {result.get('error') or 'login failed'}"
-    return RedirectResponse("/stores?" + urlencode({"notice": note}), status_code=303)
+    return RedirectResponse(f"/stores/{retailer}?" + urlencode({"notice": note}), status_code=303)
 
 
 @app.post("/retailers/{retailer}/toggle")
@@ -606,7 +642,7 @@ def toggle_retailer(request: Request, retailer: str):
     db.set_store_enabled(retailer, not db.is_store_enabled(retailer))
     on = db.is_store_enabled(retailer)
     note = f"{store['name']}: {'enabled' if on else 'disabled'}"
-    return RedirectResponse("/stores?" + urlencode({"notice": note}), status_code=303)
+    return RedirectResponse(f"/stores/{retailer}?" + urlencode({"notice": note}), status_code=303)
 
 
 @app.post("/rotate-token")
