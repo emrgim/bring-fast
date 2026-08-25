@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -91,6 +92,7 @@ def upsert_product_meta(product_key: str, meta: dict[str, Any]) -> None:
     )
     con.commit()
     con.close()
+    forget_shelf()
 
 
 def merge_product_keys(old_key: str, new_key: str) -> None:
@@ -107,6 +109,7 @@ def merge_product_keys(old_key: str, new_key: str) -> None:
     con.execute("DELETE FROM product_meta WHERE product_key=?", (old_key,))
     con.commit()
     con.close()
+    forget_shelf()
 
 
 def set_official_identity(
@@ -297,6 +300,7 @@ def upsert_invoice(user_id: int, parsed: dict[str, Any], *, gmail_id: str = "") 
         )
     con.commit()
     con.close()
+    forget_shelf()
     return invoice_id
 
 
@@ -631,6 +635,54 @@ def attach_likely(user_id: int, products: list[dict[str, Any]], *, today: date |
         p["likely"] = int(hab.get("score") or 0)
         p["likely_reason"] = hab.get("reason") or ""
     return products
+
+
+# A screenful, so the tab opens with something to read and the batches after it
+# are few enough that a high-latency connection is not spent on round trips.
+SHELF_BATCH = 24
+SHELF_BATCH_MAX = 60
+_SHELF_HOLD_S = 30.0
+_shelf_memo: dict[tuple[Any, ...], tuple[float, list[dict[str, Any]]]] = {}
+
+
+def forget_shelf() -> None:
+    """A new receipt makes every held shelf wrong."""
+    _shelf_memo.clear()
+
+
+def product_shelf(
+    user_id: int,
+    sort: str = "spend",
+    direction: str = "desc",
+    since: str | None = None,
+    until: date | None = None,
+    dept: str = "",
+) -> list[dict[str, Any]]:
+    """The whole shelf in display order, held for half a minute.
+
+    The tab reads the shelf a batch at a time and every batch is a request of
+    its own. Without this, each one would count the whole history again and
+    the last batch would cost as much as the first.
+    """
+    key = (user_id, sort, direction, since or "", until.isoformat() if until else "", dept or "")
+    now = time.monotonic()
+    held = _shelf_memo.get(key)
+    if held and now - held[0] < _SHELF_HOLD_S:
+        return held[1]
+    for stale in [k for k, (at, _) in _shelf_memo.items() if now - at >= _SHELF_HOLD_S]:
+        _shelf_memo.pop(stale, None)
+    shelf = list_products(user_id, sort=sort, direction=direction, since=since, until=until, dept=dept)
+    _shelf_memo[key] = (now, shelf)
+    return shelf
+
+
+def shelf_batch(shelf: list[dict[str, Any]], offset: int = 0, limit: int = SHELF_BATCH) -> dict[str, Any]:
+    """One batch of a shelf, and where the next one starts — 0 means the end."""
+    start = min(max(0, offset), len(shelf))
+    size = max(1, min(limit or SHELF_BATCH, SHELF_BATCH_MAX))
+    rows = shelf[start : start + size]
+    after = start + len(rows)
+    return {"rows": rows, "offset": start, "next": after if after < len(shelf) else 0, "total": len(shelf)}
 
 
 def product_purchases(user_id: int, key: str, since: str | None = None, until: date | None = None) -> dict[str, Any] | None:
@@ -981,6 +1033,37 @@ def mark_day_windows(
             not focus and bool(a and since_s == a and until_s == b)
         )
     return days
+
+
+def day_marks(days: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """What a tap on a bar has to answer with, and nothing more.
+
+    The bars themselves are already drawn in the page, so the window bounds,
+    the bar heights and the selected flag have no reason to travel again. Over
+    a few years of daily bars that repetition is most of the page.
+    """
+    out = []
+    for d in days:
+        day = str(d.get("date") or "")
+        label = str(d.get("label") or "")
+        mark: dict[str, Any] = {"date": day, "spend": round(float(d.get("spend") or 0), 2), "count": int(d.get("count") or 0)}
+        # The popup already falls back to the date, so a label that is the date
+        # is left out.
+        if label and label != day:
+            mark["label"] = label
+        invoices = [
+            {
+                "invoice_no": inv.get("invoice_no") or "",
+                "retailer": inv.get("retailer") or "",
+                "store": inv.get("store") or inv.get("retailer") or "",
+                "spend": round(float(inv.get("spend") or 0), 2),
+            }
+            for inv in (d.get("invoices") or [])
+        ]
+        if invoices:
+            mark["invoices"] = invoices
+        out.append(mark)
+    return out
 
 
 def focus_products_window(

@@ -1,0 +1,11 @@
+{# One batch of the shelf, asked for by the page after it is on screen.
+
+   Both shapes travel together because the batch does not know which way the
+   device is being held, and both are cheap: it is the same few words over and
+   over and it goes out compressed. Only the shape the layout is showing is put
+   into the page, so a phone asks for each product's picture once. #}
+{% import "_shelf_shapes.html" as shapes with context %}
+<div data-shelf-batch data-offset="{{ offset }}" data-next="{{ next }}" data-total="{{ total }}">
+  <template data-shelf-cards>{% for p in products %}{{ shapes.card(p, low) }}{% endfor %}</template>
+  <template data-shelf-rows>{% for p in products %}{{ shapes.row(p, low) }}{% endfor %}</template>
+</div>

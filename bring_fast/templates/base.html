@@ -550,9 +550,13 @@
     img.thumb.ok { background:#fff; animation:none; }
     @keyframes thumb-wait { to { background-position:-120% 0; } }
     @media (prefers-reduced-motion: reduce) { img.thumb { animation:none; } }
-    /* What is still on its way, for a list long enough to notice. */
+    /* What is still on its way, for a list long enough to notice. It is a line
+       of prose rather than a spinner: the products already on screen are read
+       while the rest keeps arriving. */
     .drip-rest { font-size:11px; letter-spacing:.06em; text-transform:uppercase; margin:10px 0 0; }
     .drip-rest.done { display:none; }
+    /* When a batch never arrives the same line becomes the way to ask again. */
+    .drip-rest.again { cursor:pointer; text-decoration:underline; text-underline-offset:2px; color:var(--ink); font-weight:700; }
     .switch { margin-top:18px; color:var(--muted); font-size:13px; }
     .upd {
       display:none; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;
@@ -731,86 +735,6 @@
       }
       sweep();
       window.addEventListener("load", sweep);
-    })();
-    (function(){
-      /* The buys tab can hold hundreds of products. The page arrives with the
-         first screenful drawn and the rest as plain text, and the rest is
-         poured in here: a batch whenever the browser is idle and the shots
-         already asked for have mostly landed. So a tap changes the page at
-         once, the pictures come one after another instead of all at once, and
-         a tap on another tab is never queued behind three hundred requests. */
-      var BATCH=18;
-      var ON_THE_WIRE=12;      /* shots still coming before the next batch waits */
-      var NUDGE_MS=1200;       /* a stalled shot must not stop the list */
-      var NEAR_END=1200;       /* scrolling this close to the end skips the wait */
-      var packs=[];
-      Array.prototype.forEach.call(document.querySelectorAll("script.drip[data-drip]"), function(store){
-        var into=document.querySelector(store.getAttribute("data-drip"));
-        if(!into) return;
-        var rows=store.textContent.split("<!--r-->");
-        var keep=[];
-        for(var i=0;i<rows.length;i++){ if(rows[i].replace(/\s/g,"")) keep.push(rows[i]); }
-        if(!keep.length) return;
-        packs.push({into:into, rows:keep, at:0, mark:document.querySelector(store.getAttribute("data-mark")||"")});
-        store.textContent="";
-      });
-      if(!packs.length) return;
-      var raw=window.requestIdleCallback || function(fn){ return setTimeout(fn, 32); };
-      var poured=Date.now();
-      var rush=false;
-      var queued=false;
-      function idle(fn){
-        if(queued) return;
-        queued=true;
-        raw(function(){ queued=false; fn(); }, {timeout:500});
-      }
-
-      function drawn(pack){
-        /* Only the list the layout is actually showing gets filled: the phone
-           list and the desktop table are the same products twice over. */
-        return pack.into.offsetParent!==null || pack.into.getClientRects().length>0;
-      }
-      function pour(pack){
-        var slice=pack.rows.slice(pack.at, pack.at+BATCH);
-        pack.at+=slice.length;
-        var html=slice.join("");
-        window.__bfShots.live+=(html.match(/<img/g)||[]).length;
-        pack.into.insertAdjacentHTML("beforeend", html);
-        poured=Date.now();
-        if(pack.at>=pack.rows.length){
-          pack.done=true;
-          pack.rows=[];
-          if(pack.mark) pack.mark.classList.add("done");
-        } else if(pack.mark){
-          pack.mark.textContent=(pack.rows.length-pack.at)+" more products loading…";
-        }
-      }
-      function tick(){
-        var left=false;
-        for(var i=0;i<packs.length;i++){
-          var pack=packs[i];
-          /* A list the layout is not showing is left alone until it is: on a
-             phone that is the desktop table, and turning the screen brings it
-             back here. */
-          if(pack.done || !drawn(pack)) continue;
-          left=true;
-          if(window.__bfShots.live<ON_THE_WIRE || rush || Date.now()-poured>NUDGE_MS) pour(pack);
-        }
-        rush=false;
-        if(left) idle(tick);
-      }
-      window.addEventListener("resize", function(){ idle(tick); }, {passive:true});
-      window.addEventListener("scroll", function(){
-        var bottom=document.documentElement.scrollHeight-window.scrollY-window.innerHeight;
-        if(bottom<NEAR_END){ rush=true; idle(tick); }
-      }, {passive:true});
-      /* Nothing is poured into a tab nobody is looking at. */
-      document.addEventListener("visibilitychange", function(){ if(!document.hidden) idle(tick); });
-      /* Pouring starts once the page itself has finished: a picture added while
-         the document is still loading holds the load event open, and the
-         browser would sit there spinning for as long as the shelf takes. */
-      if(document.readyState==="complete") idle(tick);
-      else window.addEventListener("load", function(){ idle(tick); });
     })();
     window.__bfSW=(function(){
       function ask(msg){

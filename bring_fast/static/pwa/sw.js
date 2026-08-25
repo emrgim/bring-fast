@@ -4,8 +4,10 @@
  * Offline, the last copy of a page is served and the client retries on a
  * ten minute cadence (BF_OFFLINE_REFRESH_MS) until the network is back.
  *
- * Nothing here is lazy: a page is saved with the pictures it needs, and the
- * tabs the app can reach are saved before they are asked for.
+ * A page is saved with the pictures it needs, and the tabs the app can reach
+ * are saved before they are asked for. The purchases shelf arrives in batches,
+ * so those are saved too — one after another, behind whatever the reader is
+ * doing, never as one flood of requests the open page has to compete with.
  */
 const VERSION = "bf-pwa-v6";
 const SHELL = VERSION + "-shell";
@@ -28,6 +30,12 @@ const IMAGE_CAP = 700;
 const SHOT_WARM = 12;
 const WARM_AT_ONCE = 3;
 const STAMP = "x-bf-cached-at";
+/* Where the purchases tab asks for the next batch of its shelf. */
+const SHELF_PATH = "/purchases/rows";
+/* How much of a shelf is saved before it is ever opened, and how many batches
+ * are kept: a filter tried once must not sit in the cache for good. */
+const SHELF_WARM = 5;
+const SHELF_CAP = 24;
 
 const PRECACHE = [
   OFFLINE_URL,
@@ -186,6 +194,37 @@ async function page(event) {
   }
 }
 
+function isShelf(pathname) {
+  return pathname === SHELF_PATH;
+}
+
+/* A batch is one slice of one shelf: the offset lives in the query, so unlike
+ * a page it is only ever answered with the exact batch that was asked for. */
+async function batch(event) {
+  const req = event.request;
+  const cache = await caches.open(PAGES);
+  const saved = await cache.match(req);
+  try {
+    const res = await fromNetwork(req, saved ? NET_TIMEOUT_MS : 0);
+    if (samePage(res)) event.waitUntil(savePage(req, res.clone()).then(() => trimShelf()));
+    return res;
+  } catch (e) {
+    if (saved) return saved;
+    /* Nothing saved and no network: the page keeps the products it has and
+     * offers to ask again, which reads better than a batch of error markup. */
+    return new Response("", { status: 504, headers: { "Content-Type": "text/html; charset=utf-8" } });
+  }
+}
+
+/* Batches of a filter tried once are dropped first; keys come back in the
+ * order they were saved. */
+async function trimShelf() {
+  const cache = await caches.open(PAGES);
+  const keys = (await cache.keys()).filter((req) => isShelf(new URL(req.url).pathname));
+  if (keys.length <= SHELF_CAP) return;
+  await Promise.all(keys.slice(0, keys.length - SHELF_CAP).map((req) => cache.delete(req)));
+}
+
 /* Sending a form is never answered from a cache — it either reaches the
  * server or the page says plainly that nothing was stored. */
 async function sent(event) {
@@ -285,6 +324,10 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(page(event));
     return;
   }
+  if (isShelf(url.pathname)) {
+    event.respondWith(batch(event));
+    return;
+  }
   if (
     url.pathname.startsWith("/static/") ||
     url.pathname.startsWith("/receipts/") ||
@@ -335,11 +378,54 @@ async function warmShots(html, base) {
   return saved;
 }
 
+function attr(html, name) {
+  const found = new RegExp(name + '="([^"]*)"').exec(html);
+  return found ? found[1].replace(/&amp;/g, "&") : "";
+}
+
+/* A tab that reads its shelf in batches is only readable offline if the
+ * batches were saved as well. They are followed one after another — a saved
+ * page must never cost a burst of requests the open page competes with. */
+async function warmShelf(html, base) {
+  const url = attr(html, "data-shelf");
+  if (!url) return 0;
+  const step = +attr(html, "data-batch") || 24;
+  let at = +attr(html, "data-next") || 0;
+  const pages = await caches.open(PAGES);
+  let saved = 0;
+  for (let i = 0; at && i < SHELF_WARM; i += 1) {
+    const href = new URL(url + "&offset=" + at + "&limit=" + step, base).href;
+    let res;
+    try {
+      res = await fetch(href, { credentials: "same-origin" });
+    } catch (e) {
+      break;
+    }
+    if (!samePage(res)) break;
+    const copy = res.clone();
+    await pages.put(new Request(href, { credentials: "same-origin" }), await stamped(res));
+    saved += 1;
+    let body = "";
+    try {
+      body = await copy.text();
+    } catch (e) {
+      break;
+    }
+    await warmShots(body, base);
+    at = +attr(body, "data-next") || 0;
+  }
+  if (saved) await trimShelf();
+  return saved;
+}
+
 async function savedWith(cache, url, res) {
   const copy = res.clone();
   await cache.put(new Request(url, { credentials: "same-origin" }), await stamped(res));
   try {
-    await warmShots(await copy.text(), new URL(url, self.location.origin).href);
+    const html = await copy.text();
+    const base = new URL(url, self.location.origin).href;
+    await warmShots(html, base);
+    await warmShelf(html, base);
   } catch (e) {}
 }
 
@@ -353,17 +439,16 @@ async function refreshPages(force) {
   const pages = await caches.open(PAGES);
   const keys = await pages.keys();
   let refreshed = 0;
-  await Promise.all(
-    keys.map((req) =>
-      fetch(req.url, { credentials: "same-origin" })
-        .then(async (res) => {
-          if (!samePage(res)) return;
-          await savedWith(pages, req.url, res);
-          refreshed += 1;
-        })
-        .catch(() => {})
-    )
-  );
+  /* One page at a time. Refreshing everything at once would put the whole
+   * saved app on the wire in front of the page the reader is looking at. */
+  for (const req of keys) {
+    try {
+      const res = await fetch(req.url, { credentials: "same-origin" });
+      if (!samePage(res)) continue;
+      await savedWith(pages, req.url, res);
+      refreshed += 1;
+    } catch (e) {}
+  }
   /* The offline screen, icons and fonts are only fetched when this worker
    * installs, so an app update would otherwise leave an old copy behind. */
   const shell = await caches.open(SHELL);
@@ -386,17 +471,16 @@ async function warmPages(urls, force) {
   lastWarm = now;
   const pages = await caches.open(PAGES);
   let warmed = 0;
-  await Promise.all(
-    (urls || []).map((url) =>
-      fetch(url, { credentials: "same-origin" })
-        .then(async (res) => {
-          if (!samePage(res)) return;
-          await savedWith(pages, url, res);
-          warmed += 1;
-        })
-        .catch(() => {})
-    )
-  );
+  /* One tab at a time, for the same reason a shelf is: the open page asked
+   * first and keeps the network to itself. */
+  for (const url of urls || []) {
+    try {
+      const res = await fetch(url, { credentials: "same-origin" });
+      if (!samePage(res)) continue;
+      await savedWith(pages, url, res);
+      warmed += 1;
+    } catch (e) {}
+  }
   return { warmed: warmed, offline: false };
 }
 

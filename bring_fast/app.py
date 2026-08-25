@@ -11,6 +11,7 @@ from urllib.parse import urlencode, urlsplit
 
 from fastapi import FastAPI, Form, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -62,6 +63,28 @@ app.add_middleware(
     max_age=SESSION_DAYS * 24 * 3600,
     https_only=PUBLIC_URL.startswith("https://"),
 )
+
+# A page of a thousand bars is the same forty characters over and over, and a
+# shelf of products is the same again: on a phone connection compressing the
+# app's own markup is the difference between a tab that opens and a tab that
+# arrives. Fonts, logos, product shots and receipt scans are already compressed
+# formats, and the MCP wire says no-transform, so those are handed on untouched.
+AS_SENT = ("/static/", "/receipts/", "/favicon.ico", "/apple-touch-icon.png", "/mcp")
+
+
+class CompressMarkup:
+    def __init__(self, app):
+        self.app = app
+        self.zipped = GZipMiddleware(app, minimum_size=1024)
+
+    async def __call__(self, scope, receive, send):
+        path = scope.get("path") or ""
+        if scope.get("type") != "http" or path.startswith(AS_SENT):
+            return await self.app(scope, receive, send)
+        return await self.zipped(scope, receive, send)
+
+
+app.add_middleware(CompressMarkup)
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 STATIC = Path(__file__).resolve().parent / "static"
 
@@ -347,7 +370,6 @@ def spend_home(
             "title": "Dashboard · Bring Fast",
             "tab": "dashboard",
             "days": days,
-            "days_json": json.dumps(days),
             "dash_spend": snap["total"],
             "period_avg": snap["period_avg"],
             "period_word": snap["period_word"],
@@ -653,6 +675,15 @@ def rotate(request: Request):
     return RedirectResponse("/stores", status_code=303)
 
 
+def _shelf_url(**params: Any) -> str:
+    """Where the tab asks for the next batch of its shelf.
+
+    Every filter the page resolved travels with it, so a batch is the same
+    shelf continued and not a second one under a different window.
+    """
+    return "/purchases/rows?" + urlencode({k: (v if v is not None else "") for k, v in params.items()})
+
+
 @app.get("/purchases", response_class=HTMLResponse)
 def purchases_page(
     request: Request,
@@ -685,6 +716,10 @@ def purchases_page(
     focus_since, focus_until = purchases.focus_products_window(day, grain, since, until)
     total_spend = sum(d["spend"] for d in raw_days)
     periods = purchases.period_span(since, until, grain)
+    shelf = purchases.product_shelf(
+        user["id"], sort=sort, direction=direction, since=focus_since, until=focus_until, dept=dept
+    )
+    first = purchases.shelf_batch(shelf, 0, purchases.SHELF_BATCH)
     _remember(request, user)
     return templates.TemplateResponse(
         request,
@@ -693,11 +728,18 @@ def purchases_page(
             "user": user,
             "title": "Purchases · Bring Fast",
             "tab": "purchases",
-            "products": purchases.list_products(
-                user["id"], sort=sort, direction=direction, since=focus_since, until=focus_until, dept=dept
+            "products": first["rows"],
+            "low": False,
+            "shelf_total": first["total"],
+            "shelf_next": first["next"],
+            "shelf_batch": purchases.SHELF_BATCH,
+            "shelf_url": _shelf_url(
+                sort=sort, dir=direction, range=range_key, grain=grain, dept=dept, day=day, start=start, end=end
             ),
             "days": days,
-            "days_json": json.dumps(days),
+            # Only what a tap on a bar reads: over years of daily bars the rest
+            # would weigh more than the products.
+            "days_json": json.dumps(purchases.day_marks(days)),
             "dash_spend": total_spend,
             "period_avg": round(total_spend / periods, 2),
             "period_word": purchases.PERIOD_WORDS[grain],
@@ -723,6 +765,57 @@ def purchases_page(
             "start": start,
             "end": end or until.isoformat(),
             "day": day,
+        },
+    )
+
+
+@app.get("/purchases/rows", response_class=HTMLResponse)
+def purchases_rows(
+    request: Request,
+    sort: str = "spend",
+    dir: str = "desc",
+    range: str = "all",
+    start: str = "",
+    end: str = "",
+    grain: str = "daily",
+    dept: str = "",
+    day: str = "",
+    offset: int = 0,
+    limit: int = purchases.SHELF_BATCH,
+):
+    """One batch of the purchases shelf, for the tab that is already on screen.
+
+    The board is drawn from the page itself; the products arrive here, a batch
+    at a time, so opening the tab never waits on the whole shelf.
+    """
+    user = current_user(request)
+    if not user:
+        return HTMLResponse("", status_code=401)
+    sort = sort if sort in purchases.SORTS else "spend"
+    direction = "asc" if dir == "asc" else "desc"
+    grain = grain if grain in purchases.GRAINS else "daily"
+    dept = purchases.normalize_dept(dept)
+    since, until, _range_key = purchases.resolve_window(user["id"], range, start, end)
+    focus_since, focus_until = purchases.focus_products_window(day, grain, since, until)
+    shelf = purchases.product_shelf(
+        user["id"], sort=sort, direction=direction, since=focus_since, until=focus_until, dept=dept
+    )
+    batch = purchases.shelf_batch(shelf, offset, limit)
+    return templates.TemplateResponse(
+        request,
+        "_shelf_batch.html",
+        {
+            "user": user,
+            "products": batch["rows"],
+            "offset": batch["offset"],
+            "next": batch["next"],
+            "total": batch["total"],
+            # A batch that arrived after the page never outranks what the
+            # reader asked for next.
+            "low": True,
+            "range": _range_key,
+            "start": start,
+            "end": end,
         },
     )
 
