@@ -20,7 +20,7 @@ def test_pwa_service_worker(client):
     assert sw.status_code == 200
     assert "javascript" in (sw.headers.get("content-type") or "")
     assert "skipWaiting" in sw.text
-    assert "bf-pwa-v5" in sw.text
+    assert "bf-pwa-v6" in sw.text
     assert sw.headers.get("cache-control", "").startswith("no-cache") or "no-cache" in (
         sw.headers.get("cache-control") or ""
     )
@@ -70,6 +70,14 @@ def test_service_worker_keeps_the_pictures_a_saved_page_needs(client):
     # collected too — otherwise a tab saved but never opened shows blanks.
     assert "warmShots" in sw
     assert "<img" in sw
+    # But only the shots that page draws, a few at a time: a shelf of hundreds
+    # warmed all at once in the background is what made a tap wait.
+    assert "SHOT_WARM = 12" in sw
+    assert "WARM_AT_ONCE = 3" in sw
+    assert "urls.length < SHOT_WARM" in sw
+    assert "pool(urls, WARM_AT_ONCE" in sw
+    # And the shelf a person did scroll through stays on the device.
+    assert "IMAGE_CAP = 700" in sw
 
 
 def test_service_worker_never_saves_a_page_it_was_redirected_to(client):

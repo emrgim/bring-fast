@@ -280,6 +280,9 @@
     .spend-pin span { white-space:nowrap; }
     .spend-pin b { color:var(--ink); font-size:14px; }
     .spend-pin .pin-avg { display:flex; align-items:baseline; gap:6px; min-width:0; }
+    /* On a narrow phone the average is the figure that matters; the total
+       steps aside rather than being cut in half. */
+    @media (max-width:400px) { .spend-pin .pin-spent { display:none; } }
     .dash-top { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap; }
     .dash-avg { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin:2px 0 8px; }
     .dash-avg .delta { font-size:24px; font-weight:700; white-space:nowrap; }
