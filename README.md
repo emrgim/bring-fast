@@ -25,6 +25,34 @@ when it belongs to you, and signs in again when it does not, so a shared browser
 profile never mixes two people's carts. Use **Check login** on a store card to
 test the saved credentials.
 
+## Offline
+
+The dashboard is a full offline app. Every page you open is kept on the device,
+so the same page opens again with no network — a page you never visited shows a
+short offline screen instead of a browser error.
+
+- **Online**: pages come from the server, so a change shows up at once.
+- **Offline**: the saved copy is served and the app retries every 10 minutes,
+  refreshing everything the moment the network answers again. A chip in the
+  header says `Offline · retry 9:47` so the countdown is never a mystery.
+- Signing out wipes the saved pages, so a shared device never shows the next
+  person your receipts.
+
+## Updates
+
+**Update** in the header appears when `origin/main` is ahead. Pressing it takes
+the page over: the update installs, the server restarts, and the page counts the
+restart down instead of going blank or dying on a reload.
+
+- The restart is deferred a couple of seconds (`BRINGFAST_RESTART_DELAY`) so the
+  browser always receives the response the countdown is built from.
+- The page reloads itself only once `/health` reports a new `boot` id — the new
+  server, not a dead port. A slow restart keeps the page and offers a reload.
+- Without a `fast-bring` service to restart, the update still lands and the page
+  says the restart is yours to make.
+- `deploy/fast-bring-update-check.timer` checks GitHub every 10 minutes; an
+  online page also checks when it loads and whenever the network comes back.
+
 ## Stores
 
 - [Carrefour UAE](https://www.carrefouruae.com/mafuae/en)
