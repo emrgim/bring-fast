@@ -193,6 +193,25 @@
     }
     .pill.on { background:var(--fill); color:var(--on-fill); border-color:var(--fill); }
     .pill.off { background:transparent; color:var(--muted); }
+    /* A whole store card is one tap, so nothing on the list page can be
+       changed by accident. */
+    .cardlink { display:block; color:inherit; text-decoration:none; }
+    .cardlink .go { margin-top:14px; font-size:12px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
+    .cardlink:hover { border-color:var(--ink); }
+    .caps { display:flex; flex-wrap:wrap; gap:6px; }
+    .cap {
+      font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
+      padding:3px 8px; border:1px solid var(--fill); color:var(--on-fill); background:var(--fill);
+    }
+    /* What a store cannot do is still worth reading, quietly. */
+    .cap.no { background:transparent; color:var(--muted); border:1px dashed var(--line); }
+    .crumb { margin:0 0 14px; font-size:12px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; }
+    .crumb a { color:var(--muted); text-decoration:none; }
+    .capsheet { margin:8px 0 18px; }
+    .capline { display:flex; gap:12px; align-items:baseline; padding:8px 0; border-bottom:1px solid var(--line); }
+    .capline dt { flex:0 0 96px; font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
+    .capline dd { margin:0; font-size:13px; color:var(--ink); }
+    .capline.no dt, .capline.no dd { color:var(--muted); }
     .danger { color:var(--ink); border-color:var(--line); text-decoration:underline; text-underline-offset:2px; }
     .user { color:var(--muted); font-size:13px; }
     .user a { color:var(--ink); }
@@ -280,6 +299,9 @@
     .spend-pin span { white-space:nowrap; }
     .spend-pin b { color:var(--ink); font-size:14px; }
     .spend-pin .pin-avg { display:flex; align-items:baseline; gap:6px; min-width:0; }
+    /* On the narrowest phones the average is the figure that matters; the
+       total steps aside rather than being cut in half. */
+    @media (max-width:360px) { .spend-pin .pin-spent { display:none; } }
     .dash-top { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap; }
     .dash-avg { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin:2px 0 8px; }
     .dash-avg .delta { font-size:24px; font-weight:700; white-space:nowrap; }
@@ -514,6 +536,23 @@
     table.data tr.rowlink:hover .off { color:var(--on-fill); }
     .thumb { width:48px; height:48px; border-radius:0; object-fit:contain; background:#fff; border:1px solid var(--line); }
     .thumb.empty { display:grid; place-items:center; color:var(--on-fill); font-weight:700; font-size:12px; background:var(--fill); }
+    /* A product shot comes from a shop, so it can take its time. Until it
+       lands the box is already the right size and says so with a sweep, and
+       the row never moves when the picture arrives. */
+    img.thumb {
+      background:
+        linear-gradient(100deg, transparent 20%, var(--sweep, rgba(17,17,17,.10)) 40%, transparent 60%)
+        var(--bg);
+      background-size:260% 100%; background-position:120% 0; background-repeat:no-repeat;
+      animation:thumb-wait 1.1s linear infinite;
+    }
+    :root[data-theme="dark"] img.thumb { --sweep: rgba(245,245,245,.12); }
+    img.thumb.ok { background:#fff; animation:none; }
+    @keyframes thumb-wait { to { background-position:-120% 0; } }
+    @media (prefers-reduced-motion: reduce) { img.thumb { animation:none; } }
+    /* What is still on its way, for a list long enough to notice. */
+    .drip-rest { font-size:11px; letter-spacing:.06em; text-transform:uppercase; margin:10px 0 0; }
+    .drip-rest.done { display:none; }
     .switch { margin-top:18px; color:var(--muted); font-size:13px; }
     .upd {
       display:none; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;
@@ -660,6 +699,118 @@
       sync();
       window.addEventListener("scroll", sync, {passive:true});
       window.addEventListener("resize", sync);
+    })();
+    (function(){
+      /* A product shot says when it has arrived, so its box can stop sweeping,
+         and says when it never will, so a letter takes its place. Both are
+         caught on the way up: rows poured in later are covered by the same two
+         listeners, and nothing has to be wired per row. */
+      function mark(img, ok){
+        if(ok){ img.classList.add("ok"); return; }
+        /* A shot the shop never sends leaves a letter, not a broken box. */
+        var letter=document.createElement("div");
+        letter.className="thumb empty";
+        letter.textContent=img.getAttribute("data-letter")||"";
+        if(img.parentNode) img.parentNode.replaceChild(letter, img);
+      }
+      function settle(e, ok){
+        var img=e.target;
+        if(!img || img.tagName!=="IMG" || img.className.indexOf("thumb")<0) return;
+        if(window.__bfShots.live>0) window.__bfShots.live--;
+        mark(img, ok);
+      }
+      window.__bfShots={live:0};
+      /* A picture's load never reaches window, so these listen on the document. */
+      document.addEventListener("load", function(e){ settle(e, true); }, true);
+      document.addEventListener("error", function(e){ settle(e, false); }, true);
+      /* Shots already on the device are done before this script runs. */
+      function sweep(){
+        Array.prototype.forEach.call(document.querySelectorAll("img.thumb:not(.ok)"), function(img){
+          if(img.complete) mark(img, img.naturalWidth>0);
+        });
+      }
+      sweep();
+      window.addEventListener("load", sweep);
+    })();
+    (function(){
+      /* The buys tab can hold hundreds of products. The page arrives with the
+         first screenful drawn and the rest as plain text, and the rest is
+         poured in here: a batch whenever the browser is idle and the shots
+         already asked for have mostly landed. So a tap changes the page at
+         once, the pictures come one after another instead of all at once, and
+         a tap on another tab is never queued behind three hundred requests. */
+      var BATCH=18;
+      var ON_THE_WIRE=12;      /* shots still coming before the next batch waits */
+      var NUDGE_MS=1200;       /* a stalled shot must not stop the list */
+      var NEAR_END=1200;       /* scrolling this close to the end skips the wait */
+      var packs=[];
+      Array.prototype.forEach.call(document.querySelectorAll("script.drip[data-drip]"), function(store){
+        var into=document.querySelector(store.getAttribute("data-drip"));
+        if(!into) return;
+        var rows=store.textContent.split("<!--r-->");
+        var keep=[];
+        for(var i=0;i<rows.length;i++){ if(rows[i].replace(/\s/g,"")) keep.push(rows[i]); }
+        if(!keep.length) return;
+        packs.push({into:into, rows:keep, at:0, mark:document.querySelector(store.getAttribute("data-mark")||"")});
+        store.textContent="";
+      });
+      if(!packs.length) return;
+      var raw=window.requestIdleCallback || function(fn){ return setTimeout(fn, 32); };
+      var poured=Date.now();
+      var rush=false;
+      var queued=false;
+      function idle(fn){
+        if(queued) return;
+        queued=true;
+        raw(function(){ queued=false; fn(); }, {timeout:500});
+      }
+
+      function drawn(pack){
+        /* Only the list the layout is actually showing gets filled: the phone
+           list and the desktop table are the same products twice over. */
+        return pack.into.offsetParent!==null || pack.into.getClientRects().length>0;
+      }
+      function pour(pack){
+        var slice=pack.rows.slice(pack.at, pack.at+BATCH);
+        pack.at+=slice.length;
+        var html=slice.join("");
+        window.__bfShots.live+=(html.match(/<img/g)||[]).length;
+        pack.into.insertAdjacentHTML("beforeend", html);
+        poured=Date.now();
+        if(pack.at>=pack.rows.length){
+          pack.done=true;
+          pack.rows=[];
+          if(pack.mark) pack.mark.classList.add("done");
+        } else if(pack.mark){
+          pack.mark.textContent=(pack.rows.length-pack.at)+" more products loading…";
+        }
+      }
+      function tick(){
+        var left=false;
+        for(var i=0;i<packs.length;i++){
+          var pack=packs[i];
+          /* A list the layout is not showing is left alone until it is: on a
+             phone that is the desktop table, and turning the screen brings it
+             back here. */
+          if(pack.done || !drawn(pack)) continue;
+          left=true;
+          if(window.__bfShots.live<ON_THE_WIRE || rush || Date.now()-poured>NUDGE_MS) pour(pack);
+        }
+        rush=false;
+        if(left) idle(tick);
+      }
+      window.addEventListener("resize", function(){ idle(tick); }, {passive:true});
+      window.addEventListener("scroll", function(){
+        var bottom=document.documentElement.scrollHeight-window.scrollY-window.innerHeight;
+        if(bottom<NEAR_END){ rush=true; idle(tick); }
+      }, {passive:true});
+      /* Nothing is poured into a tab nobody is looking at. */
+      document.addEventListener("visibilitychange", function(){ if(!document.hidden) idle(tick); });
+      /* Pouring starts once the page itself has finished: a picture added while
+         the document is still loading holds the load event open, and the
+         browser would sit there spinning for as long as the shelf takes. */
+      if(document.readyState==="complete") idle(tick);
+      else window.addEventListener("load", function(){ idle(tick); });
     })();
     window.__bfSW=(function(){
       function ask(msg){

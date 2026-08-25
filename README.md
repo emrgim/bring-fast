@@ -20,10 +20,10 @@ form creates the account — there is no separate registration page to find.
   to a login screen.
 - Authorization codes only go to a `redirect_uri` the client registered.
 
-Store logins live on the dashboard. Bring Fast reuses a live supermarket session
-when it belongs to you, and signs in again when it does not, so a shared browser
-profile never mixes two people's carts. Use **Check login** on a store card to
-test the saved credentials.
+Store logins live inside each store's own page. Bring Fast reuses a live
+supermarket session when it belongs to you, and signs in again when it does not,
+so a shared browser profile never mixes two people's carts. Use **Check login**
+on the store's page to test the saved credentials.
 
 ## Offline
 
@@ -63,8 +63,10 @@ and “Not now” sticks.
   the viewport rules. In a browser tab zoom is left alone: there a page is
   still a page. A receipt is the one screen that stays pinchable installed,
   because it is a scan of paper and the small print is the reason to open it.
-- Nothing is lazy-loaded. Every picture is requested with the page and carries
-  its own width and height, so a slow shop CDN cannot shove the rows around.
+- Nothing waits for a scroll. Every picture is asked for on its own, without an
+  interaction, and carries its own width and height, so a slow shop CDN cannot
+  shove the rows around. Until a shot lands its box sweeps in place; a shot the
+  shop never sends leaves the product's letter behind rather than a broken box.
 - The font is served by Bring Fast itself. No font CDN means nothing
   third-party blocks the first paint, and the app reads the same offline.
 - Safe areas on all four sides, so a notch in landscape and the iPhone home bar
@@ -74,6 +76,35 @@ and “Not now” sticks.
   to the bottom dock.
 - Fonts are immutable for a year, logos for a day, and a page is always
   revalidated — money figures are never read from a stale cache.
+
+## A long shelf
+
+An account with hundreds of products used to send every row twice — once as a
+phone card, once as a desktop table row — and ask for every shop picture at
+load. On a throttled phone that was 517 image requests and a page that took ten
+seconds to finish, which is why a tap sat there before anything moved.
+
+- The buys tab arrives with the first screenful drawn. The rest travels as inert
+  text the browser only tokenises: no row is laid out and no picture is asked
+  for until it is poured into the page.
+- Pouring starts once the page has finished loading and continues a batch at a
+  time, while the browser is idle and while the shots already asked for are
+  still arriving. Scrolling to the end skips the wait; a stalled shop cannot
+  stop the list; a line under the shelf says how many products are still coming.
+- Only the list the layout is showing is filled — the phone card list or the
+  desktop table, never both — so the same products are no longer fetched twice.
+- Every figure is still the whole shelf. The sort, the totals, the receipt count
+  and the period average are computed over all products on the server, exactly
+  as before; only the drawing is progressive.
+- Warming a page in the background saves the shots that page draws, three at a
+  time, instead of every shot it names all at once. The rest are saved as the
+  list fills them in, through the same cache.
+- The buys tab carries the same compact bar as home: scroll past the average and
+  it stays on a bar under the header, so the figure never leaves the screen.
+
+On a phone throttled to a quarter of its speed on a 3 Mbps link, the tab now
+answers in about 170 ms and finishes loading in about 400 ms, against ten
+seconds before.
 
 ## Updates
 
@@ -92,10 +123,30 @@ restart down instead of going blank or dying on a reload.
 
 ## Stores
 
-- [Carrefour UAE](https://www.carrefouruae.com/mafuae/en)
-- [Grandiose](https://www.grandiose.ae/)
-- [Waitrose UAE](https://www.waitrose.ae/en/)
-- [Spinneys UAE](https://www.spinneys.com/en-ae/)
+The **Stores** tab reads the stores out and changes none of them: a card per
+store saying whether it is on and what it can do, which opens that store. The
+switch, the login, the delivery address and **Check login** all live inside the
+store's own page, so opening the tab never puts a password field on screen and a
+stray tap cannot turn a store off.
+
+What a store can do is stated next to the registry that decides it
+(`db.RETAILERS`): a card shows a capability filled when it works and outlined
+when it does not.
+
+| | Search | Compare | Cart | Checkout | Receipts | Login |
+| --- | --- | --- | --- | --- | --- | --- |
+| [Grandiose](https://www.grandiose.ae/) | yes | yes | yes | yes | yes | yes |
+| [Union Coop](https://www.unioncoop.ae/) | yes | yes | yes | yes | — | — |
+| [Carrefour UAE](https://www.carrefouruae.com/mafuae/en) | yes | yes | — | — | yes | yes |
+| [Waitrose UAE](https://www.waitrose.ae/en/) | yes | yes | — | — | — | yes |
+| [Spinneys UAE](https://www.spinneys.com/en-ae/) | yes | yes | — | — | — | yes |
+| [MMI](https://www.mmihomedelivery.ae/) | yes | yes | — | — | yes | yes |
+| [African + Eastern](https://www.africaneasternonline.com/) | yes | yes | — | — | yes | yes |
+
+Search and price comparison work everywhere because they only read public pages.
+Cart and checkout are the Magento stores we have tested. Receipts means there is
+a parser for that store's invoices, and login means a saved store account, which
+is what receipts and baskets are read with.
 
 ## Run
 
@@ -148,7 +199,9 @@ Official checkout stays on each supermarket site.
 Login, refresh tokens, and per-user store sessions are covered in `tests/test_login.py`,
 `tests/test_oauth.py`, and `tests/test_store_login.py`. The installed app is covered in
 `tests/test_pwa.py`, `tests/test_offline_ui.py`, `tests/test_webapp_layout.py`, and
-`tests/test_content_loading.py`.
+`tests/test_content_loading.py`. A long shelf and the bar that carries its figure
+are covered in `tests/test_progressive_buys.py`, and the split between the store
+list and a store's own page in `tests/test_store_credentials.py`.
 
 ## Docker
 

@@ -27,6 +27,8 @@ RETAILERS = [
         "cart_url": "https://www.grandiose.ae/checkout/cart/",
         "checkout_url": "https://www.grandiose.ae/checkout/",
         "enabled": True,
+        "receipts": True,
+        "login": True,
         "shop": True,
     },
     {
@@ -38,6 +40,8 @@ RETAILERS = [
         "cart_url": "https://www.unioncoop.ae/checkout/cart/",
         "checkout_url": "https://www.unioncoop.ae/checkout/",
         "enabled": False,
+        "receipts": False,
+        "login": False,
         "shop": True,
     },
     {
@@ -49,6 +53,8 @@ RETAILERS = [
         "cart_url": "https://www.carrefouruae.com/mafuae/en",
         "checkout_url": "https://www.carrefouruae.com/mafuae/en/cart",
         "enabled": False,
+        "receipts": True,
+        "login": True,
         "shop": False,
     },
     {
@@ -60,6 +66,8 @@ RETAILERS = [
         "cart_url": "https://www.waitrose.ae/en/",
         "checkout_url": "https://www.waitrose.ae/en/checkout/",
         "enabled": False,
+        "receipts": False,
+        "login": True,
         "shop": False,
     },
     {
@@ -71,6 +79,8 @@ RETAILERS = [
         "cart_url": "https://www.spinneys.com/en-ae/",
         "checkout_url": "https://www.spinneys.com/en-ae/checkout/",
         "enabled": False,
+        "receipts": False,
+        "login": True,
         "shop": False,
     },
     {
@@ -82,6 +92,8 @@ RETAILERS = [
         "cart_url": "https://www.mmihomedelivery.ae/",
         "checkout_url": "https://www.mmihomedelivery.ae/",
         "enabled": False,
+        "receipts": True,
+        "login": True,
         "shop": False,
     },
     {
@@ -93,6 +105,8 @@ RETAILERS = [
         "cart_url": "https://www.africaneasternonline.com/",
         "checkout_url": "https://www.africaneasternonline.com/",
         "enabled": False,
+        "receipts": True,
+        "login": True,
         "shop": False,
     },
 ]
@@ -536,6 +550,39 @@ def list_retailer_accounts(user_id: int) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+"""What a store can do here, in the order the cards read it out.
+
+Search and price comparison work on every store because they only read public
+pages. Cart and checkout are Magento stores we have tested. Receipts is a
+parser for that store's invoices, and login is a saved store account, which is
+what receipts and carts are read with.
+"""
+CAPABILITIES = [
+    ("search", "Search"),
+    ("compare", "Compare"),
+    ("cart", "Cart"),
+    ("checkout", "Checkout"),
+    ("receipts", "Receipts"),
+    ("login", "Login"),
+]
+
+
+def store_capabilities(retailer: str) -> list[dict[str, Any]]:
+    for r in RETAILERS:
+        if r["id"] != retailer:
+            continue
+        can = {
+            "search": True,
+            "compare": True,
+            "cart": bool(r.get("shop")),
+            "checkout": bool(r.get("shop")),
+            "receipts": bool(r.get("receipts")),
+            "login": bool(r.get("login")),
+        }
+        return [{"key": key, "label": label, "on": can[key]} for key, label in CAPABILITIES]
+    return []
 
 
 def store_meta(retailer: str) -> dict[str, Any] | None:

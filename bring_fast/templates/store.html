@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block body %}
+<p class="crumb"><a href="/stores">← All stores</a></p>
+<div class="card store{% if not store.enabled %} is-off{% endif %}" style="--store: {{ store.color }}">
+  <div class="head">
+    <img class="logo" src="{{ store.logo }}" alt="{{ store.name }} logo" width="64" height="64" loading="eager" decoding="async"/>
+    <div>
+      <h1>{{ store.name }}
+        {% if store.enabled %}<span class="pill on">On</span>{% else %}<span class="pill off">Off</span>{% endif %}
+      </h1>
+      <div class="site"><a href="{{ store.url }}" target="_blank" rel="noopener">{{ store.url }}</a></div>
+    </div>
+  </div>
+
+  <p class="off">What this store can do</p>
+  <dl class="capsheet">
+    {% for c in caps %}
+    <div class="capline{% if not c.on %} no{% endif %}">
+      <dt>{{ c.label }}</dt>
+      <dd>
+        {% if c.key == 'search' %}Look up prices and products on {{ store.name }}.
+        {% elif c.key == 'compare' %}Put {{ store.name }}'s price next to what you paid.
+        {% elif c.key == 'cart' %}{% if c.on %}Fill a basket on {{ store.name }} from here.{% else %}No basket: not a Magento store we have tested.{% endif %}
+        {% elif c.key == 'checkout' %}{% if c.on %}Place the order on {{ store.name }}.{% else %}No orders from here.{% endif %}
+        {% elif c.key == 'receipts' %}{% if c.on %}Read {{ store.name }} invoices into your purchases.{% else %}No invoice reader for {{ store.name }} yet.{% endif %}
+        {% else %}{% if c.on %}Keep your {{ store.name }} login, so receipts and baskets are read as you.{% else %}No login wired for {{ store.name }} yet.{% endif %}
+        {% endif %}
+      </dd>
+    </div>
+    {% endfor %}
+  </dl>
+
+  <form method="post" action="/retailers/{{ store.id }}/toggle">
+    <p class="split">
+      <button class="{% if store.enabled %}ghost danger{% endif %}" type="submit">
+        {% if store.enabled %}Turn {{ store.name }} off{% else %}Turn {{ store.name }} on{% endif %}
+      </button>
+    </p>
+  </form>
+  <p class="off">
+    {% if store.enabled %}On: this store answers the app's tools and shows up in comparisons.
+    {% else %}Off: hidden from the app's tools until you turn it back on.{% endif %}
+  </p>
+</div>
+
+{% if store.login and store.enabled %}
+<div class="card" style="margin-top:16px">
+  <h2>Your {{ store.name }} login</h2>
+  {% if not edit %}
+  <dl class="saved">
+    <dt>Username / email on {{ store.name }}</dt>
+    <dd>{{ store.login_email }}</dd>
+    <dt>Password</dt>
+    <dd>{% if store.has_password %}Saved{% else %}Not saved yet{% endif %}</dd>
+    <dt>Delivery address for {{ store.name }}</dt>
+    <dd>{{ store.delivery_address or "Not set" }}</dd>
+  </dl>
+  <p class="split">
+    <a class="btn" href="/stores/{{ store.id }}?edit=1">Edit login</a>
+  </p>
+  {% else %}
+  {# The fields appear only when asked for, so a password manager is not
+     offered a form on every visit. #}
+  <form method="post" action="/retailers/{{ store.id }}" autocomplete="off">
+    <label for="email-{{ store.id }}">Username / email on {{ store.name }}</label>
+    <input id="email-{{ store.id }}" name="email" type="email" value="{{ store.login_email or '' }}" required
+           placeholder="your store login" autocomplete="off" autocapitalize="none" spellcheck="false"/>
+    <label for="password-{{ store.id }}">Password{% if store.has_password %} (leave blank to keep current){% endif %}</label>
+    <input id="password-{{ store.id }}" name="password" type="password" placeholder="store password" autocomplete="new-password"/>
+    <label for="address-{{ store.id }}">Delivery address for {{ store.name }}</label>
+    <input id="address-{{ store.id }}" name="address" type="text" value="{{ store.delivery_address or '' }}"
+           placeholder="Building, area, city" autocomplete="off"/>
+    <p class="split">
+      <button type="submit">Save {{ store.name }}</button>
+      {% if store.login_email %}<a class="btn ghost" href="/stores/{{ store.id }}">Cancel</a>{% endif %}
+    </p>
+  </form>
+  {% endif %}
+  {% if store.linked %}
+  <div class="split" style="margin-top:14px">
+    <form method="post" action="/retailers/{{ store.id }}/check"><button class="ghost" type="submit">Check login</button></form>
+    <form method="post" action="/retailers/{{ store.id }}/clear"><button class="ghost danger" type="submit">Remove login</button></form>
+  </div>
+  {% endif %}
+</div>
+{% elif store.login %}
+<p class="off">Turn {{ store.name }} on to keep a login for it.</p>
+{% else %}
+<p class="off">No login is wired for {{ store.name }} yet, so there is nothing to keep here.</p>
+{% endif %}
+{% endblock %}
