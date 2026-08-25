@@ -953,7 +953,7 @@ def spend_snapshot(
         "grain": grain,
         "periods": periods,
         "periods_text": format_periods(periods),
-        "period_unit": PERIOD_UNITS[grain],
+        "period_unit": period_unit(grain, periods),
         "period_word": PERIOD_WORDS[grain],
         "period_avg": round(total / periods, 2),
     }
@@ -1081,7 +1081,19 @@ def focus_products_window(
 
 GRAINS = ("daily", "weekly", "monthly", "yearly")
 PERIOD_UNITS = {"daily": "days", "weekly": "weeks", "monthly": "months", "yearly": "years"}
+PERIOD_UNIT = {"daily": "day", "weekly": "week", "monthly": "month", "yearly": "year"}
 PERIOD_WORDS = {"daily": "Daily", "weekly": "Weekly", "monthly": "Monthly", "yearly": "Yearly"}
+
+
+def period_unit(grain: str, n: float) -> str:
+    """`÷ 1 month`, not `÷ 1 months`.
+
+    The line under the average is read as a sentence, and a window one period
+    long is the most common one there is — it is what every fresh account sees.
+    A fractional count stays plural: 1.5 months is still months.
+    """
+    grain = grain if grain in GRAINS else "daily"
+    return PERIOD_UNIT[grain] if format_periods(n) == "1" else PERIOD_UNITS[grain]
 
 
 def period_span(since: str | None, until: date | None, grain: str = "daily") -> float:

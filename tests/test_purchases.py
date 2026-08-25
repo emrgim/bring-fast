@@ -628,7 +628,11 @@ def test_spend_snapshot_average_follows_grain(bf, client):
     assert snaps["monthly"]["period_avg"] == 30.5
     assert snaps["yearly"]["period_avg"] == 366.0
     assert snaps["weekly"]["period_avg"] > snaps["daily"]["period_avg"]
-    assert snaps["yearly"]["period_unit"] == "years"
+    # This window is exactly one year, so the unit beside the figure is singular.
+    assert snaps["yearly"]["periods"] == 1
+    assert snaps["yearly"]["period_unit"] == "year"
+    assert snaps["monthly"]["period_unit"] == "months"
+    assert snaps["daily"]["period_unit"] == "days"
 
     client.post("/login", data={"email": "grainavg@example.com", "password": "secret1", "intent": "signin"})
     daily_html = client.get("/dashboard?range=1y&grain=daily").text
