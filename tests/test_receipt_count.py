@@ -74,16 +74,15 @@ def test_snapshot_reports_range_and_total_receipts(bf):
     assert snap["receipts_total"] == 4
 
 
-def test_dashboard_says_how_many_receipts_the_range_hides(bf, client):
+def test_dashboard_leads_with_the_average_and_skips_the_kpi_row(bf, client):
+    """The only headline number on the dashboard is the per-grain average."""
     _seed(bf, "dash@example.com")
     client.post("/login", data={"email": "dash@example.com", "password": "secret1", "intent": "signin"})
 
-    ranged = client.get("/dashboard?range=1m&grain=monthly").text
-    assert "<b>2</b> of 4 receipts" in ranged
-
-    everything = client.get("/dashboard?range=all&grain=monthly").text
-    assert "<b>4</b> receipts" in everything
-    assert "of 4 receipts" not in everything
+    html = client.get("/dashboard?range=1m&grain=monthly").text
+    assert "receipts</span>" not in html
+    assert "spent</span>" not in html
+    assert "Monthly average this period" in html
 
 
 def test_purchases_page_counts_every_receipt_on_all(bf, client):

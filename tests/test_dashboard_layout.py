@@ -39,10 +39,10 @@ def test_spend_totals_stay_pinned_while_scrolling(bf, client):
     # Fixed, so collapsing never reflows the page behind it.
     assert ".spend-pin {\n      display:none; position:fixed" in html
     assert 'pin.classList.toggle("on"' in html
-    # The pinned bar carries the total and the selected grain's average.
+    # The pinned bar carries only the selected grain's average.
     pin = html[html.index('id="spend-pin"') : html.index('<div class="dash">')]
-    assert "spent" in pin
     assert "Monthly avg" in pin
+    assert "spent" not in pin
     assert "Weekly avg" not in pin
 
 
