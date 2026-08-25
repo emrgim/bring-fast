@@ -41,7 +41,7 @@
   <div class="trend {{ trend.direction }}">
   <div>
     <div class="who">Price trend</div>
-    <div class="delta">{% if trend.direction == 'none' %}—{% else %}{{ '%+.1f'|format(trend.avg_pct) }}%{% endif %}</div>
+    <div class="delta">{% if trend.direction == 'none' %}—{% elif trend.direction == 'up' %}↑ {{ '%+.1f'|format(trend.avg_pct) }}%{% elif trend.direction == 'down' %}↓ {{ '%+.1f'|format(trend.avg_pct) }}%{% else %}{{ '%+.1f'|format(trend.avg_pct) }}%{% endif %}</div>
   </div>
   <div class="who">
     {% if trend.direction == 'up' %}Prices are rising{% elif trend.direction == 'down' %}Prices are falling{% elif trend.direction == 'flat' %}Prices are stable{% else %}Need two buys on a product{% endif %}<br/>

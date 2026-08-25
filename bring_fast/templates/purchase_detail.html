@@ -32,7 +32,7 @@
       <div class="amt">
         {% if s.price %}AED {{ '%.2f'|format(s.price) }}
           {% if s.vs_paid is not none %}
-          <span class="vs {% if s.vs_paid>0 %}up{% elif s.vs_paid<0 %}down{% endif %}">{{ '%+.0f'|format(s.vs_paid) }}%</span>
+          <span class="vs {% if s.vs_paid>0 %}up{% elif s.vs_paid<0 %}down{% endif %}">{% if s.vs_paid>0 %}↑ {% elif s.vs_paid<0 %}↓ {% endif %}{{ '%+.0f'|format(s.vs_paid) }}%</span>
           {% endif %}
         {% elif s.error %}—{% else %}—{% endif %}
       </div>
@@ -63,8 +63,8 @@
 <div class="card">
   {% if product.series %}
     {% if product.delta is not none %}
-    <p class="delta {% if product.delta>0 %}up{% else %}down{% endif %}">
-      {% if product.delta>0 %}Up{% elif product.delta<0 %}Down{% else %}Flat{% endif %}
+    <p class="delta {% if product.delta>0 %}up{% elif product.delta<0 %}down{% endif %}">
+      {% if product.delta>0 %}↑ Up{% elif product.delta<0 %}↓ Down{% else %}Flat{% endif %}
       AED {{ '%.2f'|format(product.first_price) }} → AED {{ '%.2f'|format(product.last_price) }}
       ({{ '%+.1f'|format(product.delta_pct) }}%)
     </p>

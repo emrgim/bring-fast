@@ -1,5 +1,5 @@
 /* Bring Fast service worker — cache icons only; pages stay live. */
-const CACHE = "bf-pwa-v1";
+const CACHE = "bf-pwa-v2";
 const PRECACHE = [
   "/static/pwa/icon-192.png",
   "/static/pwa/icon-512.png",
