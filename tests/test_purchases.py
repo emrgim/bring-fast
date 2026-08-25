@@ -561,7 +561,7 @@ def test_price_trend_is_mean_of_product_changes(bf, client):
     client.post("/login", data={"email": "trend@example.com", "password": "secret1", "intent": "signin"})
     html = client.get("/dashboard?range=all&grain=monthly").text
     assert "Price trend" in html
-    assert "Daily average this period" in html
+    assert "Monthly average this period" in html
     assert "÷" in html
     assert "<svg" in html
     assert "data-theme-toggle" in html
@@ -600,6 +600,56 @@ def test_spend_snapshot_changes_with_range(bf):
     assert m_s["total"] == 20
     assert m_s["daily_avg"] != all_s["daily_avg"]
     assert m_s["daily_avg"] > all_s["daily_avg"]
+
+
+def test_spend_snapshot_average_follows_grain(bf, client):
+    from datetime import date
+
+    user = bf.db.create_user("grainavg@example.com", "secret1")
+    bf.purchases.upsert_invoice(
+        user["id"],
+        {
+            "retailer": "carrefour",
+            "invoice_no": "g1",
+            "invoice_date": "2026-01-10",
+            "items": [{"name": "Rice", "qty": 1, "unit_price": 366, "line_total": 366, "barcode": "1"}],
+        },
+    )
+    since, until = "2026-01-01", date(2026, 12, 31)
+    snaps = {
+        g: bf.purchases.spend_snapshot(user["id"], since=since, until=until, grain=g)
+        for g in bf.purchases.GRAINS
+    }
+    assert snaps["daily"]["periods"] == 365
+    assert snaps["weekly"]["periods"] == round(365 / 7, 4)
+    assert snaps["monthly"]["periods"] == 12
+    assert snaps["yearly"]["periods"] == 1
+    assert snaps["daily"]["period_avg"] == 1.0
+    assert snaps["monthly"]["period_avg"] == 30.5
+    assert snaps["yearly"]["period_avg"] == 366.0
+    assert snaps["weekly"]["period_avg"] > snaps["daily"]["period_avg"]
+    assert snaps["yearly"]["period_unit"] == "years"
+
+    client.post("/login", data={"email": "grainavg@example.com", "password": "secret1", "intent": "signin"})
+    daily_html = client.get("/dashboard?range=1y&grain=daily").text
+    yearly_html = client.get("/dashboard?range=1y&grain=yearly").text
+    assert "Daily average this period" in daily_html
+    assert "Yearly average this period" in yearly_html
+    assert daily_html != yearly_html
+
+
+def test_period_span_counts_partial_buckets(bf):
+    from datetime import date
+
+    span = bf.purchases.period_span
+    assert span("2026-01-01", date(2026, 1, 31), "monthly") == 1.0
+    assert span("2026-01-01", date(2026, 3, 31), "monthly") == 3.0
+    # Half of January plus all of February.
+    assert span("2026-01-17", date(2026, 2, 28), "monthly") == round(15 / 31 + 1, 4)
+    assert span("2026-01-01", date(2026, 1, 14), "weekly") == 2.0
+    assert span("2026-01-01", date(2026, 1, 14), "daily") == 14.0
+    assert bf.purchases.format_periods(3.0) == "3"
+    assert bf.purchases.format_periods(2.35) == "2.4"
 
 
 def test_receipt_view_without_pdf(bf, client):

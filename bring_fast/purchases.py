@@ -833,9 +833,15 @@ def daily_spend(
     return out
 
 
-def spend_snapshot(user_id: int, since: str | None = None, until: date | None = None) -> dict[str, Any]:
-    """Totals that move when the dashboard range (or new invoices) change."""
+def spend_snapshot(
+    user_id: int,
+    since: str | None = None,
+    until: date | None = None,
+    grain: str = "daily",
+) -> dict[str, Any]:
+    """Totals that move when the dashboard range, grain (or new invoices) change."""
     until = until or date.today()
+    grain = grain if grain in GRAINS else "daily"
     days = daily_spend(user_id, since=since, until=until)
     total = round(sum(d["spend"] for d in days), 2)
     receipts = sum(int(d.get("count") or 0) for d in days)
@@ -847,6 +853,7 @@ def spend_snapshot(user_id: int, since: str | None = None, until: date | None = 
     week_days = daily_spend(user_id, since=week_since, until=week_until)
     week_total = sum(d["spend"] for d in week_days)
     week_span = max(1, (week_until - (_parse_day(week_since) or week_until)).days + 1)
+    periods = period_span(since, until, grain)
     return {
         "total": total,
         "receipts": receipts,
@@ -855,6 +862,12 @@ def spend_snapshot(user_id: int, since: str | None = None, until: date | None = 
         "daily_avg": round(total / calendar_days, 2),
         "today": round(float(today), 2),
         "week_avg": round(week_total / week_span, 2),
+        "grain": grain,
+        "periods": periods,
+        "periods_text": format_periods(periods),
+        "period_unit": PERIOD_UNITS[grain],
+        "period_word": PERIOD_WORDS[grain],
+        "period_avg": round(total / periods, 2),
     }
 
 
@@ -948,6 +961,35 @@ def focus_products_window(
 
 
 GRAINS = ("daily", "weekly", "monthly", "yearly")
+PERIOD_UNITS = {"daily": "days", "weekly": "weeks", "monthly": "months", "yearly": "years"}
+PERIOD_WORDS = {"daily": "Daily", "weekly": "Weekly", "monthly": "Monthly", "yearly": "Yearly"}
+
+
+def period_span(since: str | None, until: date | None, grain: str = "daily") -> float:
+    """How many periods of this grain the window covers, edge buckets counted pro rata."""
+    until = until or date.today()
+    grain = grain if grain in GRAINS else "daily"
+    start = _parse_day(since) or until
+    if start > until:
+        start = until
+    if grain == "daily":
+        return float((until - start).days + 1)
+    total = 0.0
+    cur = start
+    while cur <= until:
+        key, _ = _grain_key(cur, grain)
+        a, b = bucket_span(key, grain)
+        b_start = _parse_day(a) or cur
+        b_end = _parse_day(b) or cur
+        length = max(1, (b_end - b_start).days + 1)
+        covered = (min(b_end, until) - max(b_start, start)).days + 1
+        total += max(0, covered) / length
+        cur = b_end + timedelta(days=1)
+    return round(total, 4) or 1.0
+
+
+def format_periods(n: float) -> str:
+    return str(int(round(n))) if abs(n - round(n)) < 0.05 else f"{n:.1f}"
 
 
 def _grain_key(day: date, grain: str) -> tuple[str, str]:
