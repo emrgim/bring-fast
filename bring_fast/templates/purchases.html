@@ -17,6 +17,14 @@
       {% endfor %}
     </div>
   </div>
+  <div class="dash-avg" id="spend-avg">
+    <span class="who">{{ period_word }} average this period</span>
+    <b class="delta">AED {{ '%.2f'|format(period_avg) }}</b>
+    <span class="who fine">
+      AED {{ '%.2f'|format(dash_spend) }} ÷ {{ periods_text }} {{ period_unit }}
+      · {{ range_start }} → {{ range_end }}
+    </span>
+  </div>
   <div class="bars-scroller">
   <div class="bars" id="spend-bars">
     {% for d in days %}

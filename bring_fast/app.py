@@ -597,6 +597,8 @@ def purchases_page(
         days = purchases.fill_daily_calendar(days, since, until)
     days = purchases.mark_day_windows(days, grain, since, until, day)
     focus_since, focus_until = purchases.focus_products_window(day, grain, since, until)
+    total_spend = sum(d["spend"] for d in raw_days)
+    periods = purchases.period_span(since, until, grain)
     _remember(request, user)
     return templates.TemplateResponse(
         request,
@@ -610,7 +612,13 @@ def purchases_page(
             ),
             "days": days,
             "days_json": json.dumps(days),
-            "dash_spend": sum(d["spend"] for d in raw_days),
+            "dash_spend": total_spend,
+            "period_avg": round(total_spend / periods, 2),
+            "period_word": purchases.PERIOD_WORDS[grain],
+            "period_unit": purchases.PERIOD_UNITS[grain],
+            "periods_text": purchases.format_periods(periods),
+            "range_start": since or "",
+            "range_end": until.isoformat(),
             "dash_receipts": (
                 sum(d["count"] for d in raw_days)
                 if dept
