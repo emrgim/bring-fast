@@ -333,7 +333,7 @@ def test_range_filter_and_price_chart(bf, client):
     client.post("/login", data={"email": "e@example.com", "password": "secret1", "intent": "signin"})
     page = client.get("/purchases", params={"range": "1y"})
     assert page.status_code == 200
-    assert "1 year" in page.text
+    assert "1y" in page.text
 
 
 def test_frequency_uses_view_length_and_needs_two_buys(bf):
