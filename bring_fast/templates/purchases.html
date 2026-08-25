@@ -1,5 +1,20 @@
 {% extends "base.html" %}
+{# The first screenful arrives as markup; the rest travels as inert text and is
+   poured in while the browser is idle. An account with hundreds of products
+   must not make a tap on this tab wait. #}
+{% set FIRST = 24 %}
+{% macro shot(p, px) %}{% if p.image_url %}<img class="thumb" src="{{ p.image_url }}" alt="" width="{{ px }}" height="{{ px }}" data-letter="{{ p.name[:1] }}" loading="eager" decoding="async" referrerpolicy="no-referrer"/>{% else %}<div class="thumb empty">{{ p.name[:1] }}</div>{% endif %}{% endmacro %}
+{% macro tail() %}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}{% endmacro %}
+{% macro card(p) %}<a class="mcard" href="/purchases/{{ p.key }}?range={{ range }}{{ tail() }}">{{ shot(p, 56) }}<div class="copy"><b>{{ p.name }}</b><div class="pair"><span>Frequency<b>{{ p.frequency }}{% if p.per_year %} · {{ p.per_year }}/yr{% endif %}</b></span><span>Likely<b>{{ p.likely or 0 }}</b></span></div></div><div class="amt">AED {{ '%.0f'|format(p.spend_total) }}<small>{{ p.times_bought }} buys</small></div></a>{% endmacro %}
+{% macro row(p) %}<tr class="rowlink" onclick="location.href='/purchases/{{ p.key }}?range={{ range }}{{ tail() }}'"><td>{{ shot(p, 48) }}</td><td>{{ p.name }}{% if p.receipt_name and p.receipt_name != p.name %}<div class="off">Receipt {{ p.receipt_name }}</div>{% endif %}</td><td>{{ p.times_bought }}</td><td>{{ '%.2f'|format(p.qty_total) }}</td><td>{{ p.frequency }}{% if p.per_year %} · {{ p.per_year }}/yr{% endif %}</td><td>{% if p.likely %}<b>{{ p.likely }}</b>{% else %}0{% endif %}</td><td>AED {{ '%.2f'|format(p.spend_total) }}</td></tr>{% endmacro %}
 {% block body %}
+{# Same bar as the home tab, so the figure stays on screen in both places. #}
+<div class="spend-pin" id="spend-pin" aria-hidden="true">
+  <div class="pin-in">
+    <span class="pin-avg">{{ period_word }} avg <b>AED {{ '%.2f'|format(period_avg) }}</b></span>
+    <span class="pin-spent">AED {{ '%.0f'|format(dash_spend) }} spent</span>
+  </div>
+</div>
 <div class="purchases-board">
 <div class="dash">
   <div class="dash-top">
@@ -67,26 +82,13 @@
   <a class="{% if sort=='times' %}on{% endif %}" href="/purchases?sort=times&dir=desc&range={{ range }}&grain={{ grain }}&dept={{ dept }}">Times</a>
   <a class="{% if sort=='name' %}on{% endif %}" href="/purchases?sort=name&dir=asc&range={{ range }}&grain={{ grain }}&dept={{ dept }}">Name</a>
 </div>
-<div class="mlist">
-  {% for p in products %}
-  <a class="mcard" href="/purchases/{{ p.key }}?range={{ range }}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}">
-    {% if p.image_url %}
-    <img class="thumb" src="{{ p.image_url }}" alt="" width="56" height="56" loading="eager" decoding="async" referrerpolicy="no-referrer"/>
-    {% else %}
-    <div class="thumb empty">{{ p.name[:1] }}</div>
-    {% endif %}
-    <div class="copy">
-      <b>{{ p.name }}</b>
-      <div class="pair">
-        <span>Frequency<b>{{ p.frequency }}{% if p.per_year %} · {{ p.per_year }}/yr{% endif %}</b></span>
-        <span>Likely<b>{{ p.likely or 0 }}</b></span>
-      </div>
-    </div>
-    <div class="amt">AED {{ '%.0f'|format(p.spend_total) }}<small>{{ p.times_bought }} buys</small></div>
-  </a>
-  {% else %}
-  <p class="off">No invoices in this range.</p>
+<div class="mlist" id="buy-cards">
+  {% for p in products[:FIRST] %}
+  {{ card(p) }}
   {% endfor %}
+  {% if not products %}
+  <p class="off">No invoices in this range.</p>
+  {% endif %}
 </div>
 <div class="table-wrap desk-table">
   <table class="data">
@@ -122,34 +124,26 @@
         </th>
       </tr>
     </thead>
-    <tbody>
-    {% for p in products %}
-      <tr class="rowlink" onclick="location.href='/purchases/{{ p.key }}?range={{ range }}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}'">
-        <td>
-          {% if p.image_url %}
-          <img class="thumb" src="{{ p.image_url }}" alt="" width="48" height="48" loading="eager" decoding="async" referrerpolicy="no-referrer"/>
-          {% else %}
-          <div class="thumb empty">{{ p.name[:1] }}</div>
-          {% endif %}
-        </td>
-        <td>
-          {{ p.name }}
-          {% if p.receipt_name and p.receipt_name != p.name %}
-          <div class="off">Receipt {{ p.receipt_name }}</div>
-          {% endif %}
-        </td>
-        <td>{{ p.times_bought }}</td>
-        <td>{{ '%.2f'|format(p.qty_total) }}</td>
-        <td>{{ p.frequency }}{% if p.per_year %} · {{ p.per_year }}/yr{% endif %}</td>
-        <td>{% if p.likely %}<b>{{ p.likely }}</b>{% else %}0{% endif %}</td>
-        <td>AED {{ '%.2f'|format(p.spend_total) }}</td>
-      </tr>
-    {% else %}
-      <tr><td colspan="7" class="off">No invoices in this range.</td></tr>
+    <tbody id="buy-rows">
+    {% for p in products[:FIRST] %}
+      {{ row(p) }}
     {% endfor %}
+    {% if not products %}
+      <tr><td colspan="7" class="off">No invoices in this range.</td></tr>
+    {% endif %}
     </tbody>
   </table>
 </div>
+{% if products|length > FIRST %}
+{# Text, not markup: the browser tokenises it and moves on, so none of these
+   rows is laid out and none of these pictures is asked for until the page is
+   already on screen. The count says what is still coming. #}
+<p class="drip-rest off" id="buy-rest" data-count="{{ products|length - FIRST }}">
+  {{ products|length - FIRST }} more products loading…
+</p>
+<script type="text/html" class="drip" data-drip="#buy-cards" data-mark="#buy-rest">{% for p in products[FIRST:] %}<!--r-->{{ card(p) }}{% endfor %}</script>
+<script type="text/html" class="drip" data-drip="#buy-rows" data-mark="#buy-rest">{% for p in products[FIRST:] %}<!--r-->{{ row(p) }}{% endfor %}</script>
+{% endif %}
 </div>
 <script>
 (function(){
