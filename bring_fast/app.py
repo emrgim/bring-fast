@@ -289,7 +289,7 @@ def spend_home(
     focus_since, focus_until = purchases.focus_products_window(day, grain, since, until)
     top = purchases.list_products(user["id"], sort="spend", direction="desc", since=focus_since, until=focus_until)[:8]
     trend = purchases.price_trend(user["id"], since=since, until=until, grain=grain)
-    snap = purchases.spend_snapshot(user["id"], since=since, until=until)
+    snap = purchases.spend_snapshot(user["id"], since=since, until=until, grain=grain)
     _remember(request, user)
     return templates.TemplateResponse(
         request,
@@ -304,6 +304,10 @@ def spend_home(
             "dash_receipts": snap["receipts"],
             "dash_days": snap["calendar_days"],
             "daily_avg": snap["daily_avg"],
+            "period_avg": snap["period_avg"],
+            "period_word": snap["period_word"],
+            "period_unit": snap["period_unit"],
+            "periods_text": snap["periods_text"],
             "calendar_days": snap["calendar_days"],
             "range_start": since or "",
             "range_end": until.isoformat(),

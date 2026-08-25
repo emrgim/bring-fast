@@ -30,11 +30,11 @@
 <div class="widgets">
   <div class="trend daily-avg">
     <div>
-      <div class="who">Daily average this period</div>
-      <div class="delta">AED {{ '%.2f'|format(daily_avg) }}</div>
+      <div class="who">{{ period_word }} average this period</div>
+      <div class="delta">AED {{ '%.2f'|format(period_avg) }}</div>
     </div>
     <div class="who">
-      AED {{ '%.2f'|format(dash_spend) }} ÷ {{ calendar_days }} days
+      AED {{ '%.2f'|format(dash_spend) }} ÷ {{ periods_text }} {{ period_unit }}
       · {{ range_start }} → {{ range_end }}
     </div>
   </div>
