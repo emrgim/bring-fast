@@ -9,7 +9,7 @@
  * so those are saved too — one after another, behind whatever the reader is
  * doing, never as one flood of requests the open page has to compete with.
  */
-const VERSION = "bf-pwa-v7";
+const VERSION = "bf-pwa-v8";
 const SHELL = VERSION + "-shell";
 const PAGES = VERSION + "-pages";
 const ASSETS = VERSION + "-assets";
@@ -78,14 +78,16 @@ const NOT_SAVED = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
 <title>Not saved · Bring Fast</title>
 <style>
+  *{scrollbar-width:none;-ms-overflow-style:none}
+  *::-webkit-scrollbar{display:none}
   html,body{margin:0;background:#fff;color:#111;font-family:ui-monospace,Menlo,Consolas,monospace}
   @media (prefers-color-scheme:dark){html,body{background:#0a0a0a;color:#f5f5f5}.b{border-color:#f5f5f5!important}}
   .w{max-width:520px;margin:0 auto;padding:14vh 16px 40px}
   h1{font-size:24px;margin:0 0 10px;text-transform:uppercase;letter-spacing:.02em}
   p{line-height:1.5;margin:0 0 16px}
   .b{border:1px solid #111;padding:12px 16px;font:inherit;font-weight:700;cursor:pointer;background:transparent;color:inherit;touch-action:manipulation}
-  @media (display-mode:standalone),(display-mode:fullscreen){html,body{touch-action:pan-x pan-y}}
-  :root.installed,:root.installed body{touch-action:pan-x pan-y}
+  @media (display-mode:standalone),(display-mode:fullscreen){html,body{touch-action:pan-x pan-y;overscroll-behavior:none}}
+  :root.installed,:root.installed body{touch-action:pan-x pan-y;overscroll-behavior:none}
 </style></head>
 <body><div class="w">
 <h1>Not saved</h1>
