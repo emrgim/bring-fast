@@ -33,3 +33,31 @@ def test_purchases_average_follows_the_grain(bf, client):
     assert "Weekly average this period" in weekly
     assert "AED 70.00</b>" in weekly
     assert "140.00 ÷ 2 weeks" in weekly
+
+
+def test_a_window_one_period_long_reads_as_one_period(bf, client):
+    _seed(bf, "one@example.com")
+    client.post("/login", data={"email": "one@example.com", "password": "secret1", "intent": "signin"})
+
+    # A single period is the most common window there is — it is what a fresh
+    # account sees — and it was reading "÷ 1 months".
+    exact = (
+        ("daily", "day", "2026-06-02", "2026-06-02"),
+        ("weekly", "week", "2026-06-01", "2026-06-07"),
+        ("monthly", "month", "2026-06-01", "2026-06-30"),
+        ("yearly", "year", "2026-01-01", "2026-12-31"),
+    )
+    for grain, unit, start, end in exact:
+        window = f"range=custom&start={start}&end={end}&grain={grain}"
+        html = client.get(f"/purchases?{window}").text
+        assert f"÷ 1 {unit}" in html, grain
+        assert f"÷ 1 {unit}s" not in html, grain
+        # The home tab reads the same figure out of the same snapshot.
+        assert f"÷ 1 {unit}" in client.get(f"/dashboard?{window}").text, grain
+
+    # A part period is still plural: 1.5 months is months.
+    assert bf.purchases.period_unit("monthly", 1.5) == "months"
+    assert bf.purchases.period_unit("weekly", 2) == "weeks"
+    # And a count that only rounds to one reads as one, because that is what the
+    # figure beside it says.
+    assert bf.purchases.period_unit("monthly", 1.02) == "month"

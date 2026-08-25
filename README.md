@@ -63,6 +63,16 @@ and “Not now” sticks.
   the viewport rules. In a browser tab zoom is left alone: there a page is
   still a page. A receipt is the one screen that stays pinchable installed,
   because it is a scan of paper and the small print is the reason to open it.
+- Installed, the app does not pull down. There is nothing behind it to reveal, so
+  a bounce at the top only ever dragged the whole app off the screen to show a
+  strip of nothing above its own header. In a browser tab the pull is left alone:
+  there it is the browser's, and it reloads.
+- No screen draws a scrollbar. A track down the side is furniture the browser
+  lends a document, and this is an app. Only the bar is gone — the page, the
+  spend bars and the desk table all still scroll, and reaching the end of one of
+  them is the end of it, not the start of a bounce that moves the page behind.
+  The bars used to reserve a gutter to hold their own 6px track; without it the
+  spend card is the height of its bars.
 - Switching tabs never waits on a shelf. **Buys** draws its board — spend,
   receipts, the bars — with the first two dozen products, and the rest of the
   shelf is not in the page at all: it is asked for a batch at a time once the
