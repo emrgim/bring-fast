@@ -1,10 +1,6 @@
 {% extends "base.html" %}
 {% block body %}
-<div class="spend-pin" id="spend-pin" aria-hidden="true">
-  <div class="pin-in">
-    <span class="pin-avg">{{ period_word }} avg <b>AED {{ '%.2f'|format(period_avg) }}</b></span>
-  </div>
-</div>
+{% include "spend_pin.html" %}
 <div class="dash">
   <div class="dash-top">
     <div>

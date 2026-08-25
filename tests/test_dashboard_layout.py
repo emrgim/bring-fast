@@ -46,6 +46,26 @@ def test_spend_totals_stay_pinned_while_scrolling(bf, client):
     assert "Weekly avg" not in pin
 
 
+def test_buys_pins_the_same_compact_bar_as_the_dashboard(bf, client):
+    _seed(bf, "buys@example.com")
+    client.post("/login", data={"email": "buys@example.com", "password": "secret1", "intent": "signin"})
+    dash = client.get("/dashboard?range=1m&grain=monthly").text
+    buys = client.get("/purchases?range=1m&grain=monthly").text
+
+    def compact_bar(html):
+        start = html.index('<div class="spend-pin"')
+        return html[start : html.index("</div>", html.index("</span>", start))]
+
+    assert 'id="spend-avg"' in buys
+    assert compact_bar(buys) == compact_bar(dash)
+    assert "Monthly avg" in compact_bar(buys)
+    # The bar carries the average alone: the purchases KPIs stay in the card.
+    assert "spent" not in compact_bar(buys)
+    assert "receipts" not in compact_bar(buys)
+    # It sits above the board, so the fixed bar covers the list and not the card it replaces.
+    assert buys.index('id="spend-pin"') < buys.index('class="purchases-board"')
+
+
 def test_mobile_kpis_keep_number_and_label_on_one_line(bf, client):
     """No stacked KPI numbers: "AED 2537" and "34" must never sit side by side unlabeled."""
     html = client.get("/login").text
