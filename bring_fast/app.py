@@ -41,6 +41,9 @@ def _session_secret() -> str:
 
 
 SECRET = _session_secret()
+# New value on every start, so a page can tell "the server answered again"
+# from "the updated server answered again" and reload at the right moment.
+BOOT_ID = secrets.token_hex(8)
 
 templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
 app = FastAPI(title="Bring Fast")
@@ -77,6 +80,16 @@ def pwa_service_worker():
     return FileResponse(
         STATIC / "pwa" / "sw.js",
         media_type="application/javascript",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@app.get("/offline", response_class=HTMLResponse)
+def pwa_offline():
+    """Precached last resort: shown when a page was never cached and the network is gone."""
+    return FileResponse(
+        STATIC / "pwa" / "offline.html",
+        media_type="text/html",
         headers={"Cache-Control": "no-cache"},
     )
 
@@ -244,23 +257,28 @@ def home(request: Request, next: str = "/", welcome: int = 0, notice: str = "", 
     return RedirectResponse(_last_url(user), status_code=303)
 
 
+def _live(payload: dict[str, Any], status_code: int = 200) -> JSONResponse:
+    """Update state is never worth caching — an offline client wants the truth or nothing."""
+    return JSONResponse(payload, status_code=status_code, headers={"Cache-Control": "no-store"})
+
+
 @app.get("/update/status")
 def update_status(request: Request, fetch: int = 0):
     user = current_user(request)
     if not user:
-        return JSONResponse({"ok": False, "error": "login required"}, status_code=401)
+        return _live({"ok": False, "error": "login required"}, status_code=401)
     saved = update.load_saved()
     if fetch or not saved:
-        return update.status(fetch=True)
-    return saved
+        return _live({**update.status(fetch=True), "boot": BOOT_ID})
+    return _live({**saved, "boot": BOOT_ID})
 
 
 @app.post("/update/apply")
 def update_apply(request: Request):
     user = current_user(request)
     if not user:
-        return JSONResponse({"ok": False, "error": "login required"}, status_code=401)
-    return update.apply()
+        return _live({"ok": False, "error": "login required"}, status_code=401)
+    return _live({**update.apply(), "boot": BOOT_ID})
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -742,6 +760,8 @@ def health(request: Request):
         "ok": True,
         "server": "Bring Fast",
         "version": __version__,
+        "boot": BOOT_ID,
+        "revision": (update.load_saved().get("local") or ""),
         "public_url": base,
         "mcp_url": f"{base}/mcp",
         "description": mcp_skill.DESCRIPTION,
