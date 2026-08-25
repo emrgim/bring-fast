@@ -11,6 +11,7 @@ from urllib.parse import urlencode, urlsplit
 
 from fastapi import FastAPI, Form, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -62,6 +63,28 @@ app.add_middleware(
     max_age=SESSION_DAYS * 24 * 3600,
     https_only=PUBLIC_URL.startswith("https://"),
 )
+
+# A page of a thousand bars is the same forty characters over and over, and a
+# shelf of products is the same again: on a phone connection compressing the
+# app's own markup is the difference between a tab that opens and a tab that
+# arrives. Fonts, logos, product shots and receipt scans are already compressed
+# formats, and the MCP wire says no-transform, so those are handed on untouched.
+AS_SENT = ("/static/", "/receipts/", "/favicon.ico", "/apple-touch-icon.png", "/mcp")
+
+
+class CompressMarkup:
+    def __init__(self, app):
+        self.app = app
+        self.zipped = GZipMiddleware(app, minimum_size=1024)
+
+    async def __call__(self, scope, receive, send):
+        path = scope.get("path") or ""
+        if scope.get("type") != "http" or path.startswith(AS_SENT):
+            return await self.app(scope, receive, send)
+        return await self.zipped(scope, receive, send)
+
+
+app.add_middleware(CompressMarkup)
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 STATIC = Path(__file__).resolve().parent / "static"
 

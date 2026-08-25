@@ -338,6 +338,32 @@ def test_the_dashboard_does_not_ship_a_popup_it_never_opens(bf, client):
     assert "spend-bars" in html
 
 
+def test_the_app_sends_its_markup_compressed(bf, client):
+    _signed_in(bf, client, "zip@example.com", count=30)
+
+    page = client.get("/purchases?range=all&grain=daily", headers={"accept-encoding": "gzip"})
+    assert page.headers.get("content-encoding") == "gzip"
+    plain = client.get("/purchases?range=all&grain=daily", headers={"accept-encoding": "identity"})
+    assert not plain.headers.get("content-encoding")
+    # Bars and rows are the same few characters over and over: on a phone
+    # connection this is most of what opening a tab costs.
+    assert int(page.headers["content-length"]) < len(plain.content) / 4
+
+    batch = client.get("/purchases/rows?range=all&grain=daily&offset=12&limit=12", headers={"accept-encoding": "gzip"})
+    assert batch.headers.get("content-encoding") == "gzip"
+
+    # Already compressed formats are handed on untouched, and the MCP wire says
+    # no-transform, so it is left exactly as it was written.
+    font = client.get("/static/fonts/ibm-plex-mono-400-latin.woff2", headers={"accept-encoding": "gzip"})
+    assert not font.headers.get("content-encoding")
+    mcp = client.post(
+        "/mcp",
+        headers={"accept-encoding": "gzip", "accept": "application/json"},
+        json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
+    )
+    assert not mcp.headers.get("content-encoding")
+
+
 def test_the_service_worker_saves_the_batches_too(client):
     sw = client.get("/sw.js").text
 
