@@ -65,6 +65,29 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 STATIC = Path(__file__).resolve().parent / "static"
 
+# A font subset is fixed for the life of its filename, so it is fetched once
+# and never asked about again. A page carries live money figures, so the
+# browser revalidates it every time — the service worker, not the HTTP cache,
+# is what answers when there is no network.
+FONT_CACHE = "public, max-age=31536000, immutable"
+ASSET_CACHE = "public, max-age=86400"
+PAGE_CACHE = "no-cache"
+
+
+@app.middleware("http")
+async def cache_policy(request: Request, call_next):
+    response = await call_next(request)
+    if response.headers.get("Cache-Control"):
+        return response
+    path = request.url.path
+    if path.startswith("/static/fonts/"):
+        response.headers["Cache-Control"] = FONT_CACHE
+    elif path.startswith("/static/"):
+        response.headers["Cache-Control"] = ASSET_CACHE
+    elif (response.headers.get("content-type") or "").startswith("text/html"):
+        response.headers["Cache-Control"] = PAGE_CACHE
+    return response
+
 
 @app.get("/manifest.webmanifest")
 def pwa_manifest():
