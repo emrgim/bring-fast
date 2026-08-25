@@ -303,8 +303,6 @@ def spend_home(
             "days": days,
             "days_json": json.dumps(days),
             "dash_spend": snap["total"],
-            "dash_receipts": snap["receipts"],
-            "dash_receipts_total": snap["receipts_total"],
             "period_avg": snap["period_avg"],
             "period_word": snap["period_word"],
             "period_unit": snap["period_unit"],

@@ -39,11 +39,19 @@ def test_spend_totals_stay_pinned_while_scrolling(bf, client):
     # Fixed, so collapsing never reflows the page behind it.
     assert ".spend-pin {\n      display:none; position:fixed" in html
     assert 'pin.classList.toggle("on"' in html
-    # The pinned bar carries the total and the selected grain's average.
+    # The pinned bar carries only the selected grain's average.
     pin = html[html.index('id="spend-pin"') : html.index('<div class="dash">')]
-    assert "spent" in pin
     assert "Monthly avg" in pin
+    assert "spent" not in pin
     assert "Weekly avg" not in pin
+
+
+def test_mobile_kpis_keep_number_and_label_on_one_line(bf, client):
+    """No stacked KPI numbers: "AED 2537" and "34" must never sit side by side unlabeled."""
+    html = client.get("/login").text
+
+    assert ".dash-kpis b { font-size:16px; display:block; }" not in html
+    assert ".dash-kpis span + span { border-left:1px solid var(--line); padding-left:12px; }" in html
 
 
 def test_mobile_header_pads_the_safe_area_only_at_the_top(bf, client):

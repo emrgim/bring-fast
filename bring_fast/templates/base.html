@@ -370,9 +370,10 @@
         flex:0 0 auto; padding:5px 8px; font-size:11px;
       }
       .filters form { display:flex; }
-      .dash-kpis { gap:14px; font-size:12px; }
-      .dash-kpis b { font-size:16px; display:block; }
+      /* Number and label stay on one line, so "AED 2537" and "34" never read as one figure. */
+      .dash-kpis { gap:12px; font-size:12px; }
       .dash-kpis span { flex:0 1 auto; white-space:nowrap; }
+      .dash-kpis span + span { border-left:1px solid var(--line); padding-left:12px; }
       .dash h1 { font-size:18px; margin-bottom:6px; }
       .dash-avg .delta { font-size:22px; }
       .trend { flex-direction:column; align-items:flex-start; gap:8px; padding:12px; }
