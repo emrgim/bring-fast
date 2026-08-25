@@ -39,11 +39,30 @@ def test_spend_totals_stay_pinned_while_scrolling(bf, client):
     # Fixed, so collapsing never reflows the page behind it.
     assert ".spend-pin {\n      display:none; position:fixed" in html
     assert 'pin.classList.toggle("on"' in html
-    # The pinned bar carries the total and the selected grain's average.
+    # The pinned bar carries only the selected grain's average.
     pin = html[html.index('id="spend-pin"') : html.index('<div class="dash">')]
-    assert "spent" in pin
     assert "Monthly avg" in pin
+    assert "spent" not in pin
     assert "Weekly avg" not in pin
+
+
+def test_mobile_kpis_keep_number_and_label_on_one_line(bf, client):
+    """No stacked KPI numbers: "AED 2537" and "34" must never sit side by side unlabeled."""
+    html = client.get("/login").text
+
+    assert ".dash-kpis b { font-size:16px; display:block; }" not in html
+    assert ".dash-kpis span + span { border-left:1px solid var(--line); padding-left:12px; }" in html
+
+
+def test_theme_toggle_lives_only_in_the_top_nav(bf, client):
+    _seed(bf, "toggle@example.com")
+    client.post("/login", data={"email": "toggle@example.com", "password": "secret1", "intent": "signin"})
+    html = client.get("/dashboard?range=1m&grain=monthly").text
+
+    # One toggle button (the JS also mentions the attribute in querySelectorAll).
+    assert html.count("data-theme-toggle>") == 1
+    dock = html[html.index('<footer class="dock"') : html.index("</footer>")]
+    assert "<button" not in dock
 
 
 def test_mobile_header_pads_the_safe_area_only_at_the_top(bf, client):

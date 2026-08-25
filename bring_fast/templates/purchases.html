@@ -8,7 +8,7 @@
       <div class="dash-kpis">
         <span><b>AED {{ '%.0f'|format(dash_spend) }}</b> spent</span>
         <span><b>{{ dash_days }}</b> days</span>
-        <span><b>{{ dash_receipts }}</b> receipts</span>
+        <span><b>{{ dash_receipts }}</b>{% if dash_receipts_total > dash_receipts %} of {{ dash_receipts_total }}{% endif %} receipts</span>
       </div>
     </div>
     <div class="grain">
@@ -16,6 +16,14 @@
       <a class="{% if grain==key %}on{% endif %}" href="/purchases?sort={{ sort }}&dir={{ dir }}&range={{ range }}&grain={{ key }}&dept={{ dept }}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}">{{ label }}</a>
       {% endfor %}
     </div>
+  </div>
+  <div class="dash-avg" id="spend-avg">
+    <span class="who">{{ period_word }} average this period</span>
+    <b class="delta">AED {{ '%.2f'|format(period_avg) }}</b>
+    <span class="who fine">
+      AED {{ '%.2f'|format(dash_spend) }} ÷ {{ periods_text }} {{ period_unit }}
+      · {{ range_start }} → {{ range_end }}
+    </span>
   </div>
   <div class="bars-scroller">
   <div class="bars" id="spend-bars">

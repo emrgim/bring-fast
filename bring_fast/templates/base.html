@@ -373,9 +373,10 @@
         flex:0 0 auto; padding:5px 8px; font-size:11px;
       }
       .filters form { display:flex; }
-      .dash-kpis { gap:14px; font-size:12px; }
-      .dash-kpis b { font-size:16px; display:block; }
+      /* Number and label stay on one line, so "AED 2537" and "34" never read as one figure. */
+      .dash-kpis { gap:12px; font-size:12px; }
       .dash-kpis span { flex:0 1 auto; white-space:nowrap; }
+      .dash-kpis span + span { border-left:1px solid var(--line); padding-left:12px; }
       .dash h1 { font-size:18px; margin-bottom:6px; }
       .dash-avg .delta { font-size:22px; }
       .trend { flex-direction:column; align-items:flex-start; gap:8px; padding:12px; }
@@ -423,11 +424,10 @@
         border:0; border-top:1px dashed var(--line);
         align-items:stretch; justify-content:space-around;
       }
-      .dock a, .dock button {
+      .dock a {
         flex:1; text-align:center; color:var(--muted); font-size:10px; font-weight:700;
         letter-spacing:.08em; text-transform:uppercase; padding:8px 4px; border-radius:0;
-        text-decoration:none; background:transparent; border:0; cursor:pointer; font-family:inherit;
-        min-height:44px;
+        text-decoration:none; min-height:44px;
       }
       .dock a.on { color:var(--on-fill); background:var(--fill); }
     }
@@ -465,6 +465,29 @@
     .upd button { width:auto; min-height:36px; padding:8px 14px; }
     .nav-right .upd-btn { display:none; padding:7px 10px; font-size:12px; width:auto; min-height:0; }
     .nav-right .upd-btn.on { display:inline-block; }
+    .net {
+      display:none; align-items:center; gap:6px; white-space:nowrap;
+      border:1px dashed var(--line); padding:5px 8px;
+      font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted);
+    }
+    .net.on { display:inline-flex; }
+    .net b { color:var(--ink); font-weight:700; }
+    .veil {
+      position:fixed; inset:0; z-index:300; display:none;
+      background:var(--bg); padding:16px;
+    }
+    .veil.on { display:grid; place-items:center; }
+    .veil .panel { width:min(420px,100%); border:1px solid var(--line); background:var(--card); padding:20px 18px; }
+    .veil .mark { margin:0 0 16px; }
+    .veil h2 { margin:0 0 6px; font-size:18px; font-weight:700; text-transform:uppercase; letter-spacing:.02em; }
+    .veil p { margin:0 0 14px; color:var(--muted); font-size:13px; line-height:1.5; }
+    .veil .count { font-size:44px; font-weight:700; line-height:1; margin:0 0 10px; font-variant-numeric:tabular-nums; }
+    .veil .count small { font-size:13px; font-weight:600; color:var(--muted); margin-left:6px; letter-spacing:.06em; text-transform:uppercase; }
+    .veil .track { height:6px; border:1px solid var(--line); margin:0 0 16px; }
+    .veil .track i { display:block; height:100%; width:0; background:var(--fill); transition:width .9s linear; }
+    .veil .step { font-size:12px; color:var(--muted); letter-spacing:.04em; text-transform:uppercase; }
+    .veil button { width:100%; margin-top:14px; display:none; }
+    .veil button.on { display:block; }
   </style>
 </head>
 <body>
@@ -482,12 +505,14 @@
             <a href="/stores" class="{% if tab == 'stores' %}on{% endif %}">Stores</a>
           </div>
           <div class="user">{{ user.email }} · <a href="/logout">Sign out</a></div>
+          <span class="net" id="net-chip" role="status" aria-live="polite"></span>
           <button class="ghost upd-btn" type="button" id="pwa-install">Install</button>
           <button class="ghost upd-btn" type="button" id="upd-nav">Update</button>
           <button class="ghost theme-toggle" type="button" data-theme-toggle>Dark</button>
         </div>
       {% else %}
         <div class="nav-right">
+          <span class="net" id="net-chip" role="status" aria-live="polite"></span>
           <button class="ghost upd-btn" type="button" id="pwa-install">Install</button>
           <button class="ghost theme-toggle" type="button" data-theme-toggle>Dark</button>
         </div>
@@ -501,6 +526,19 @@
       <button type="button" id="upd-go">Install update</button>
     </div>
     {% endif %}
+    {% if user %}
+    <div class="veil" id="upd-veil" role="dialog" aria-modal="true" aria-labelledby="upd-title">
+      <div class="panel">
+        <div class="mark">BF</div>
+        <h2 id="upd-title">Installing update</h2>
+        <p id="upd-note">Bring Fast is pulling the new code from GitHub.</p>
+        <div class="count" id="upd-count">—<small id="upd-unit"></small></div>
+        <div class="track"><i id="upd-fill"></i></div>
+        <div class="step" id="upd-step">Fetching…</div>
+        <button type="button" class="ghost" id="upd-reload">Reload now</button>
+      </div>
+    </div>
+    {% endif %}
     {% block body %}{% endblock %}
   </div>
   {% if user %}
@@ -508,7 +546,6 @@
     <a href="/dashboard" class="{% if tab == 'dashboard' %}on{% endif %}">Home</a>
     <a href="/purchases" class="{% if tab == 'purchases' %}on{% endif %}">Buys</a>
     <a href="/stores" class="{% if tab == 'stores' %}on{% endif %}">Stores</a>
-    <button type="button" data-theme-toggle>Dark</button>
   </footer>
   {% endif %}
   <script>
@@ -550,34 +587,256 @@
       window.addEventListener("scroll", sync, {passive:true});
       window.addEventListener("resize", sync);
     })();
+    window.__bfSW=(function(){
+      function ask(msg){
+        return new Promise(function(resolve){
+          if(!("serviceWorker" in navigator) || !navigator.serviceWorker.controller) return resolve(null);
+          var ch=new MessageChannel();
+          var settled=false;
+          ch.port1.onmessage=function(e){ settled=true; resolve(e.data); };
+          try { navigator.serviceWorker.controller.postMessage(msg, [ch.port2]); }
+          catch(e){ return resolve(null); }
+          setTimeout(function(){ if(!settled) resolve(null); }, 4000);
+        });
+      }
+      return {ask:ask};
+    })();
+    window.__bfNet=(function(){
+      /* Online, a check runs the moment it can. Offline, it retries on this
+         cadence until the network answers again. */
+      var OFFLINE_MS=600000;
+      var LIVE_AFTER_MS=60000;
+      var SIGNED_IN={% if user %}true{% else %}false{% endif %};
+      var chip=document.getElementById("net-chip");
+      var state="", due=0, wait=null, ticker=null, busy=false, lastTry=0;
+      var onData=null, lastData=null;
+      function isOnline(){ return navigator.onLine!==false; }
+      function clock(ms){
+        var s=Math.max(0, Math.round(ms/1000));
+        var m=Math.floor(s/60);
+        s=s%60;
+        return m+":"+(s<10?"0":"")+s;
+      }
+      function paint(){
+        if(!chip) return;
+        if(state!=="offline"){ chip.classList.remove("on"); chip.textContent=""; chip.removeAttribute("title"); return; }
+        chip.classList.add("on");
+        chip.innerHTML="<b>Offline</b> · retry "+clock(due-Date.now());
+      }
+      function stamp(){
+        window.__bfSW.ask({type:"bf-page-info", url:location.href}).then(function(info){
+          if(chip && info && info.cached && info.at) chip.setAttribute("title", "Saved copy from "+info.at);
+        });
+      }
+      function goOffline(){
+        state="offline";
+        due=Date.now()+OFFLINE_MS;
+        clearTimeout(wait);
+        wait=setTimeout(function(){ check(false); }, OFFLINE_MS);
+        if(!ticker) ticker=setInterval(paint, 1000);
+        paint();
+        stamp();
+      }
+      function goOnline(data){
+        var was=state;
+        state="online";
+        clearTimeout(wait); wait=null;
+        if(ticker){ clearInterval(ticker); ticker=null; }
+        paint();
+        /* Back on the network: saved pages are refreshed straight away. */
+        if(was!=="online") window.__bfSW.ask({type:"bf-refresh", force:true});
+        if(data) lastData=data;
+        if(onData && data) onData(data);
+      }
+      function stale(d){
+        if(!d || d.offline) return true;
+        var at=Date.parse(d.checked_at||"");
+        return !at || (Date.now()-at)>LIVE_AFTER_MS;
+      }
+      function check(live){
+        if(busy) return;
+        busy=true;
+        lastTry=Date.now();
+        var url=SIGNED_IN ? ("/update/status"+(live?"?fetch=1":"")) : "/health";
+        fetch(url, {credentials:"same-origin", cache:"no-store"}).then(function(r){
+          if(!r.ok && r.status!==401) throw new Error("unreachable");
+          return r.status===401 ? null : r.json();
+        }).then(function(d){
+          busy=false;
+          goOnline(d);
+          if(SIGNED_IN && !live && stale(d)) check(true);
+        }).catch(function(){
+          busy=false;
+          goOffline();
+        });
+      }
+      window.addEventListener("online", function(){ check(true); });
+      window.addEventListener("offline", goOffline);
+      document.addEventListener("visibilitychange", function(){
+        if(document.visibilityState!=="visible") return;
+        if(state==="offline" || Date.now()-lastTry>OFFLINE_MS/2) check(state==="offline");
+      });
+      if(isOnline()) check(false); else goOffline();
+      return {
+        check:check,
+        isOnline:isOnline,
+        offlineMs:OFFLINE_MS,
+        onData:function(fn){ onData=fn; if(lastData) fn(lastData); }
+      };
+    })();
     {% if user %}
     (function(){
       var bar=document.getElementById("upd-bar");
       var meta=document.getElementById("upd-meta");
       var nav=document.getElementById("upd-nav");
       var go=document.getElementById("upd-go");
+      var veil=document.getElementById("upd-veil");
+      var title=document.getElementById("upd-title");
+      var note=document.getElementById("upd-note");
+      var count=document.getElementById("upd-count");
+      var unit=document.getElementById("upd-unit");
+      var fill=document.getElementById("upd-fill");
+      var step=document.getElementById("upd-step");
+      var manual=document.getElementById("upd-reload");
+      var PATIENCE_MS=120000;
+      var running=false, ticker=null, poller=null;
       function paint(d){
         if(!d||!d.available){ if(bar) bar.classList.remove("on"); if(nav) nav.classList.remove("on"); return; }
         if(bar) bar.classList.add("on");
         if(nav) nav.classList.add("on");
         if(meta) meta.textContent=" · "+(d.behind||"?")+" commit(s) · "+(d.remote||"");
       }
-      function apply(){
-        if(go){ go.disabled=true; go.textContent="Updating…"; }
-        fetch("/update/apply", {method:"POST", credentials:"same-origin"}).then(function(r){ return r.json(); }).then(function(d){
-          if(d.applied){ location.reload(); return; }
-          if(go){ go.disabled=false; go.textContent="Install update"; }
-          if(d.error && bar) bar.querySelector("div").insertAdjacentHTML("beforeend", " · "+d.error);
-        }).catch(function(){ setTimeout(function(){ location.reload(); }, 2500); });
+      function open(){
+        if(!veil) return;
+        veil.classList.add("on");
+        document.documentElement.style.overflow="hidden";
       }
-      fetch("/update/status", {credentials:"same-origin"}).then(function(r){ return r.json(); }).then(paint).catch(function(){});
+      function close(){
+        if(!veil) return;
+        veil.classList.remove("on");
+        document.documentElement.style.overflow="";
+      }
+      function say(head, body, phase){
+        if(head && title) title.textContent=head;
+        if(body && note) note.textContent=body;
+        if(phase && step) step.textContent=phase;
+      }
+      function stop(){
+        if(ticker){ clearInterval(ticker); ticker=null; }
+        if(poller){ clearInterval(poller); poller=null; }
+      }
+      /* The page never goes blank: it counts the restart down and reloads
+         itself the moment the new server answers. */
+      function countdown(total){
+        var started=Date.now();
+        if(unit) unit.textContent="seconds";
+        function tick(){
+          var left=Math.max(0, total-Math.round((Date.now()-started)/1000));
+          if(count) count.textContent=left>0?String(left):"0";
+          if(fill) fill.style.width=Math.min(100, ((total-left)/total)*100)+"%";
+          if(left<=0){
+            if(unit) unit.textContent="";
+            if(count) count.textContent="…";
+            say(null, null, "Still restarting — holding this page");
+            if(manual) manual.classList.add("on");
+            if(ticker){ clearInterval(ticker); ticker=null; }
+          }
+        }
+        tick();
+        if(ticker) clearInterval(ticker);
+        ticker=setInterval(tick, 1000);
+      }
+      function boot(){
+        return fetch("/health", {cache:"no-store"}).then(function(r){ return r.json(); })
+          .then(function(d){ return d.boot||""; }).catch(function(){ return ""; });
+      }
+      function comeBack(before){
+        var deadline=Date.now()+PATIENCE_MS;
+        if(poller) clearInterval(poller);
+        poller=setInterval(function(){
+          if(Date.now()>deadline){
+            stop();
+            say("Restart is slow", "Bring Fast has not answered yet. The page is still here — reload when you are ready.", "Waiting for the server");
+            if(manual) manual.classList.add("on");
+            return;
+          }
+          boot().then(function(now){
+            if(!now || now===before) return;
+            stop();
+            if(count) count.textContent="0";
+            if(unit) unit.textContent="";
+            if(fill) fill.style.width="100%";
+            say("Updated", "The new version is running.", "Reloading this page…");
+            setTimeout(function(){ location.reload(); }, 600);
+          });
+        }, 1000);
+      }
+      function restart(before, d){
+        var ready=Math.max(3, Math.round(d.ready_in||10));
+        var quiet=Math.max(0, Math.round((d.restart_in||2)*1000));
+        say("Restarting Bring Fast", "Now on "+(d.local||"the new version")+". This page comes back on its own — nothing to press.", "Restarting…");
+        countdown(ready);
+        setTimeout(function(){ comeBack(before); }, quiet);
+      }
+      function fail(d){
+        stop();
+        close();
+        running=false;
+        if(go){ go.disabled=false; go.textContent="Install update"; }
+        if(bar){
+          bar.classList.add("on");
+          var line=bar.querySelector("div");
+          if(line) line.textContent=d && (d.error||d.message) ? String(d.error||d.message) : "Update did not apply.";
+        }
+      }
+      function apply(){
+        if(running) return;
+        running=true;
+        if(go){ go.disabled=true; go.textContent="Updating…"; }
+        open();
+        say("Installing update", "Bring Fast is pulling the new code from GitHub.", "Fetching…");
+        if(count) count.textContent="—";
+        if(unit) unit.textContent="";
+        if(fill) fill.style.width="8%";
+        if(manual) manual.classList.remove("on");
+        boot().then(function(before){
+          fetch("/update/apply", {method:"POST", credentials:"same-origin", cache:"no-store"})
+            .then(function(r){ return r.json(); })
+            .then(function(d){
+              if(!d.applied){ fail(d); return; }
+              if(!d.restarting){
+                say("Updated", d.message||"The new code is in place.", "Reloading this page…");
+                if(count) count.textContent="0";
+                if(fill) fill.style.width="100%";
+                setTimeout(function(){ location.reload(); }, 900);
+                return;
+              }
+              restart(before, d);
+            })
+            .catch(function(){
+              /* The restart can cut the reply off. That is not a failure —
+                 the update is on its way, so keep counting it down. */
+              restart(before, {ready_in:12, restart_in:1});
+            });
+        });
+      }
+      if(manual) manual.addEventListener("click", function(){ location.reload(); });
       if(go) go.addEventListener("click", apply);
       if(nav) nav.addEventListener("click", apply);
+      if(window.__bfNet) window.__bfNet.onData(paint);
     })();
     {% endif %}
     (function(){
       if("serviceWorker" in navigator){
-        navigator.serviceWorker.register("/sw.js", {scope:"/"}).catch(function(){});
+        navigator.serviceWorker.register("/sw.js", {scope:"/"}).then(function(reg){
+          /* Installed apps get the same ten minute offline cadence in the
+             background, when the browser allows it. */
+          if(!("periodicSync" in reg)) return;
+          navigator.permissions.query({name:"periodic-background-sync"}).then(function(p){
+            if(p.state!=="granted") return;
+            reg.periodicSync.register("bf-refresh", {minInterval:600000}).catch(function(){});
+          }).catch(function(){});
+        }).catch(function(){});
       }
       var btn=document.getElementById("pwa-install");
       var deferred=null;

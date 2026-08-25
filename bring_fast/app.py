@@ -41,6 +41,9 @@ def _session_secret() -> str:
 
 
 SECRET = _session_secret()
+# New value on every start, so a page can tell "the server answered again"
+# from "the updated server answered again" and reload at the right moment.
+BOOT_ID = secrets.token_hex(8)
 
 templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
 app = FastAPI(title="Bring Fast")
@@ -77,6 +80,16 @@ def pwa_service_worker():
     return FileResponse(
         STATIC / "pwa" / "sw.js",
         media_type="application/javascript",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@app.get("/offline", response_class=HTMLResponse)
+def pwa_offline():
+    """Precached last resort: shown when a page was never cached and the network is gone."""
+    return FileResponse(
+        STATIC / "pwa" / "offline.html",
+        media_type="text/html",
         headers={"Cache-Control": "no-cache"},
     )
 
@@ -244,23 +257,28 @@ def home(request: Request, next: str = "/", welcome: int = 0, notice: str = "", 
     return RedirectResponse(_last_url(user), status_code=303)
 
 
+def _live(payload: dict[str, Any], status_code: int = 200) -> JSONResponse:
+    """Update state is never worth caching — an offline client wants the truth or nothing."""
+    return JSONResponse(payload, status_code=status_code, headers={"Cache-Control": "no-store"})
+
+
 @app.get("/update/status")
 def update_status(request: Request, fetch: int = 0):
     user = current_user(request)
     if not user:
-        return JSONResponse({"ok": False, "error": "login required"}, status_code=401)
+        return _live({"ok": False, "error": "login required"}, status_code=401)
     saved = update.load_saved()
     if fetch or not saved:
-        return update.status(fetch=True)
-    return saved
+        return _live({**update.status(fetch=True), "boot": BOOT_ID})
+    return _live({**saved, "boot": BOOT_ID})
 
 
 @app.post("/update/apply")
 def update_apply(request: Request):
     user = current_user(request)
     if not user:
-        return JSONResponse({"ok": False, "error": "login required"}, status_code=401)
-    return update.apply()
+        return _live({"ok": False, "error": "login required"}, status_code=401)
+    return _live({**update.apply(), "boot": BOOT_ID})
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -289,7 +307,9 @@ def spend_home(
     focus_since, focus_until = purchases.focus_products_window(day, grain, since, until)
     top = purchases.list_products(user["id"], sort="spend", direction="desc", since=focus_since, until=focus_until)[:8]
     trend = purchases.price_trend(user["id"], since=since, until=until, grain=grain)
-    snap = purchases.spend_snapshot(user["id"], since=since, until=until, grain=grain)
+    snap = purchases.spend_snapshot(
+        user["id"], since=since, until=until, grain=grain, include_undated=(range_key == "all")
+    )
     _remember(request, user)
     return templates.TemplateResponse(
         request,
@@ -301,7 +321,6 @@ def spend_home(
             "days": days,
             "days_json": json.dumps(days),
             "dash_spend": snap["total"],
-            "dash_receipts": snap["receipts"],
             "period_avg": snap["period_avg"],
             "period_word": snap["period_word"],
             "period_unit": snap["period_unit"],
@@ -600,6 +619,8 @@ def purchases_page(
         days = purchases.fill_daily_calendar(days, since, until)
     days = purchases.mark_day_windows(days, grain, since, until, day)
     focus_since, focus_until = purchases.focus_products_window(day, grain, since, until)
+    total_spend = sum(d["spend"] for d in raw_days)
+    periods = purchases.period_span(since, until, grain)
     _remember(request, user)
     return templates.TemplateResponse(
         request,
@@ -613,8 +634,21 @@ def purchases_page(
             ),
             "days": days,
             "days_json": json.dumps(days),
-            "dash_spend": sum(d["spend"] for d in raw_days),
-            "dash_receipts": sum(d["count"] for d in raw_days),
+            "dash_spend": total_spend,
+            "period_avg": round(total_spend / periods, 2),
+            "period_word": purchases.PERIOD_WORDS[grain],
+            "period_unit": purchases.PERIOD_UNITS[grain],
+            "periods_text": purchases.format_periods(periods),
+            "range_start": since or "",
+            "range_end": until.isoformat(),
+            "dash_receipts": (
+                sum(d["count"] for d in raw_days)
+                if dept
+                else purchases.invoice_count(
+                    user["id"], since=since, until=until, include_undated=(range_key == "all")
+                )
+            ),
+            "dash_receipts_total": purchases.invoice_count(user["id"], include_undated=True),
             "dash_days": len(raw_days),
             "stats": purchases.purchase_stats(user["id"]),
             "sort": sort,
@@ -748,6 +782,8 @@ def health(request: Request):
         "ok": True,
         "server": "Bring Fast",
         "version": __version__,
+        "boot": BOOT_ID,
+        "revision": (update.load_saved().get("local") or ""),
         "public_url": base,
         "mcp_url": f"{base}/mcp",
         "description": mcp_skill.DESCRIPTION,

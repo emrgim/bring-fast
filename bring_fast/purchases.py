@@ -775,6 +775,39 @@ def purchase_stats(user_id: int) -> dict[str, Any]:
     return {"invoices": int(inv["n"] if inv else 0), "lines": int(items["n"] if items else 0)}
 
 
+def invoice_count(
+    user_id: int,
+    since: str | None = None,
+    until: date | None = None,
+    include_undated: bool = False,
+) -> int:
+    """Receipts in the window, counted straight off invoices.
+
+    No join to invoice_items, so receipts whose line items failed to parse
+    still count. Receipts with no parsed date can never sit inside a date
+    window; pass include_undated=True (the "all" range) to count them too.
+    """
+    con = db.connect()
+    where = "WHERE user_id=?"
+    args: list[Any] = [user_id]
+    clauses: list[str] = []
+    if since:
+        clauses.append("substr(invoice_date,1,10)>=?")
+        args.append(since)
+    if until:
+        clauses.append("substr(invoice_date,1,10)<=?")
+        args.append(until.isoformat())
+    if clauses:
+        cond = " AND ".join(clauses)
+        if include_undated:
+            where += f" AND (({cond}) OR invoice_date='')"
+        else:
+            where += f" AND {cond}"
+    row = con.execute(f"SELECT COUNT(*) n FROM invoices {where}", args).fetchone()
+    con.close()
+    return int(row["n"] if row else 0)
+
+
 def daily_spend(
     user_id: int,
     since: str | None = None,
@@ -838,13 +871,15 @@ def spend_snapshot(
     since: str | None = None,
     until: date | None = None,
     grain: str = "daily",
+    include_undated: bool = False,
 ) -> dict[str, Any]:
     """Totals that move when the dashboard range, grain (or new invoices) change."""
     until = until or date.today()
     grain = grain if grain in GRAINS else "daily"
     days = daily_spend(user_id, since=since, until=until)
     total = round(sum(d["spend"] for d in days), 2)
-    receipts = sum(int(d.get("count") or 0) for d in days)
+    receipts = invoice_count(user_id, since=since, until=until, include_undated=include_undated)
+    receipts_total = invoice_count(user_id, include_undated=True)
     span_start = _parse_day(since) or until
     calendar_days = max(1, (until - span_start).days + 1)
     today_key = until.isoformat()
@@ -857,6 +892,7 @@ def spend_snapshot(
     return {
         "total": total,
         "receipts": receipts,
+        "receipts_total": receipts_total,
         "shop_days": len(days),
         "calendar_days": calendar_days,
         "daily_avg": round(total / calendar_days, 2),
@@ -1454,7 +1490,10 @@ def spend_report(
         grain = "weekly" if key in ("1w", "2w", "1m") else "monthly"
     days = daily_spend(user_id, since=since, until=until, dept=dept)
     total = round(sum(d["spend"] for d in days), 2)
-    invoices = sum(int(d.get("count") or 0) for d in days)
+    if normalize_dept(dept):
+        invoices = sum(int(d.get("count") or 0) for d in days)
+    else:
+        invoices = invoice_count(user_id, since=since, until=until, include_undated=(key == "all"))
     first = first_invoice_date(user_id)
     span_start = _parse_day(since) or first or until
     span_days = max(1, (until - span_start).days + 1)
@@ -1479,6 +1518,7 @@ def spend_report(
         "until": until.isoformat(),
         "total": total,
         "invoices": invoices,
+        "invoices_total": invoice_count(user_id, include_undated=True),
         "days": span_days,
         "avg_per_week": round(total / (span_days / 7.0), 2),
         "avg_per_month": round(total / (span_days / 30.437), 2),
