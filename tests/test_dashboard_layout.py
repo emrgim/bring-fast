@@ -54,6 +54,17 @@ def test_mobile_kpis_keep_number_and_label_on_one_line(bf, client):
     assert ".dash-kpis span + span { border-left:1px solid var(--line); padding-left:12px; }" in html
 
 
+def test_theme_toggle_lives_only_in_the_top_nav(bf, client):
+    _seed(bf, "toggle@example.com")
+    client.post("/login", data={"email": "toggle@example.com", "password": "secret1", "intent": "signin"})
+    html = client.get("/dashboard?range=1m&grain=monthly").text
+
+    # One toggle button (the JS also mentions the attribute in querySelectorAll).
+    assert html.count("data-theme-toggle>") == 1
+    dock = html[html.index('<footer class="dock"') : html.index("</footer>")]
+    assert "<button" not in dock
+
+
 def test_mobile_header_pads_the_safe_area_only_at_the_top(bf, client):
     html = client.get("/login").text
 

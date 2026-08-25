@@ -421,11 +421,10 @@
         border:0; border-top:1px dashed var(--line);
         align-items:stretch; justify-content:space-around;
       }
-      .dock a, .dock button {
+      .dock a {
         flex:1; text-align:center; color:var(--muted); font-size:10px; font-weight:700;
         letter-spacing:.08em; text-transform:uppercase; padding:8px 4px; border-radius:0;
-        text-decoration:none; background:transparent; border:0; cursor:pointer; font-family:inherit;
-        min-height:44px;
+        text-decoration:none; min-height:44px;
       }
       .dock a.on { color:var(--on-fill); background:var(--fill); }
     }
@@ -506,7 +505,6 @@
     <a href="/dashboard" class="{% if tab == 'dashboard' %}on{% endif %}">Home</a>
     <a href="/purchases" class="{% if tab == 'purchases' %}on{% endif %}">Buys</a>
     <a href="/stores" class="{% if tab == 'stores' %}on{% endif %}">Stores</a>
-    <button type="button" data-theme-toggle>Dark</button>
   </footer>
   {% endif %}
   <script>
