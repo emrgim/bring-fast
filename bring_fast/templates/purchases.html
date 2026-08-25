@@ -67,27 +67,10 @@
   <a class="{% if sort=='times' %}on{% endif %}" href="/purchases?sort=times&dir=desc&range={{ range }}&grain={{ grain }}&dept={{ dept }}">Times</a>
   <a class="{% if sort=='name' %}on{% endif %}" href="/purchases?sort=name&dir=asc&range={{ range }}&grain={{ grain }}&dept={{ dept }}">Name</a>
 </div>
-<div class="mlist">
-  {% for p in products %}
-  <a class="mcard" href="/purchases/{{ p.key }}?range={{ range }}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}">
-    {% if p.image_url %}
-    <img class="thumb" src="{{ p.image_url }}" alt="" width="56" height="56" loading="eager" decoding="async" referrerpolicy="no-referrer"/>
-    {% else %}
-    <div class="thumb empty">{{ p.name[:1] }}</div>
-    {% endif %}
-    <div class="copy">
-      <b>{{ p.name }}</b>
-      <div class="pair">
-        <span>Frequency<b>{{ p.frequency }}{% if p.per_year %} · {{ p.per_year }}/yr{% endif %}</b></span>
-        <span>Likely<b>{{ p.likely or 0 }}</b></span>
-      </div>
-    </div>
-    <div class="amt">AED {{ '%.0f'|format(p.spend_total) }}<small>{{ p.times_bought }} buys</small></div>
-  </a>
-  {% else %}
-  <p class="off">No invoices in this range.</p>
-  {% endfor %}
+<div class="mlist" id="shelf-cards">
+  {% include "_shelf_cards.html" %}
 </div>
+{% if not shelf_total %}<p class="off">No invoices in this range.</p>{% endif %}
 <div class="table-wrap desk-table">
   <table class="data">
     <colgroup>
@@ -122,34 +105,21 @@
         </th>
       </tr>
     </thead>
-    <tbody>
-    {% for p in products %}
-      <tr class="rowlink" onclick="location.href='/purchases/{{ p.key }}?range={{ range }}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}'">
-        <td>
-          {% if p.image_url %}
-          <img class="thumb" src="{{ p.image_url }}" alt="" width="48" height="48" loading="eager" decoding="async" referrerpolicy="no-referrer"/>
-          {% else %}
-          <div class="thumb empty">{{ p.name[:1] }}</div>
-          {% endif %}
-        </td>
-        <td>
-          {{ p.name }}
-          {% if p.receipt_name and p.receipt_name != p.name %}
-          <div class="off">Receipt {{ p.receipt_name }}</div>
-          {% endif %}
-        </td>
-        <td>{{ p.times_bought }}</td>
-        <td>{{ '%.2f'|format(p.qty_total) }}</td>
-        <td>{{ p.frequency }}{% if p.per_year %} · {{ p.per_year }}/yr{% endif %}</td>
-        <td>{% if p.likely %}<b>{{ p.likely }}</b>{% else %}0{% endif %}</td>
-        <td>AED {{ '%.2f'|format(p.spend_total) }}</td>
-      </tr>
-    {% else %}
+    <tbody id="shelf-rows">
+    {% include "_shelf_rows.html" %}
+    {% if not shelf_total %}
       <tr><td colspan="7" class="off">No invoices in this range.</td></tr>
-    {% endfor %}
+    {% endif %}
     </tbody>
   </table>
 </div>
+{# The shelf keeps arriving after the page does. The line says where the app is
+   up to and carries the batch the loader asks for next, so a reader with no
+   JavaScript still gets the first batch and the count of the rest. #}
+<p class="shelf-note{% if shelf_next %} on{% endif %}" id="shelf-note" role="status" aria-live="polite"
+   data-shelf="{{ shelf_url }}" data-next="{{ shelf_next }}" data-total="{{ shelf_total }}" data-batch="{{ shelf_batch }}">
+  {% if shelf_next %}Loading the shelf · {{ shelf_next }} of {{ shelf_total }} products{% endif %}
+</p>
 </div>
 <script>
 (function(){
@@ -181,6 +151,136 @@
   }
   var selected = document.querySelector("#spend-bars .bar.on");
   if(selected) show(+selected.getAttribute("data-i"));
+})();
+(function(){
+  /* The shelf arrives a batch at a time, after the board is already on screen,
+     and a batch is only asked for once the pictures of the one before it have
+     landed. Leaving the tab stops it where it is: the next page's own request
+     must never queue behind a shelf of product shots. */
+  var note=document.getElementById("shelf-note");
+  var cards=document.getElementById("shelf-cards");
+  var rows=document.getElementById("shelf-rows");
+  if(!note||!cards) return;
+  var url=note.getAttribute("data-shelf")||"";
+  var step=+note.getAttribute("data-batch")||12;
+  var total=+note.getAttribute("data-total")||0;
+  var at=+note.getAttribute("data-next")||0;
+  var SHOT_MS=2500;
+  var TRIES=3;
+  var control=null, paused=false, busy=false, tries=0;
+  function say(text, again){
+    note.textContent=text||"";
+    note.classList.toggle("on", !!text);
+    note.classList.toggle("again", !!again);
+  }
+  function pause(){
+    paused=true;
+    if(control){ try { control.abort(); } catch(e){} control=null; }
+  }
+  function idle(fn){
+    if(window.requestIdleCallback) requestIdleCallback(fn, {timeout:1200});
+    else setTimeout(fn, 120);
+  }
+  function move(from, to){
+    var added=[];
+    if(!from||!to) return added;
+    while(from.firstElementChild){
+      to.appendChild(from.firstElementChild);
+      added.push(to.lastElementChild);
+    }
+    return added;
+  }
+  function shots(nodes){
+    var pics=[];
+    nodes.forEach(function(node){
+      Array.prototype.forEach.call(node.querySelectorAll("img"), function(img){ pics.push(img); });
+    });
+    return pics;
+  }
+  function landed(pics){
+    if(!pics.length) return Promise.resolve();
+    var each=pics.map(function(img){
+      if(img.complete) return Promise.resolve();
+      return new Promise(function(done){
+        img.addEventListener("load", done, {once:true});
+        img.addEventListener("error", done, {once:true});
+      });
+    });
+    /* A shop CDN that never answers must not hold the rest of the shelf back. */
+    return Promise.race([Promise.all(each), new Promise(function(done){ setTimeout(done, SHOT_MS); })]);
+  }
+  function put(html){
+    var doc=new DOMParser().parseFromString(html, "text/html");
+    var batch=doc.querySelector("[data-shelf-batch]");
+    if(!batch) throw new Error("no batch");
+    var added=move(batch.querySelector("[data-shelf-cards]"), cards);
+    added=added.concat(move(batch.querySelector("[data-shelf-rows]"), rows));
+    total=+batch.getAttribute("data-total")||total;
+    at=+batch.getAttribute("data-next")||0;
+    return shots(added);
+  }
+  function more(){
+    if(paused||busy||!at||!url) return;
+    busy=true;
+    control=("AbortController" in window)?new AbortController():null;
+    fetch(url+"&offset="+at+"&limit="+step, {
+      credentials:"same-origin",
+      signal:control?control.signal:undefined
+    }).then(function(r){
+      if(!r.ok) throw new Error("shelf "+r.status);
+      return r.text();
+    }).then(function(html){
+      control=null;
+      if(paused){ busy=false; return; }
+      var pics=put(html);
+      tries=0;
+      say(at?("Loading the shelf · "+at+" of "+total+" products"):"");
+      landed(pics).then(function(){
+        busy=false;
+        if(!paused && at) idle(more);
+      });
+    }).catch(function(){
+      control=null;
+      busy=false;
+      if(paused) return;
+      tries+=1;
+      if(tries<TRIES){ setTimeout(more, 1200*tries); return; }
+      /* Offline, or the server said no: the shelf so far stays readable and
+         the line becomes the way to ask for the rest. */
+      say("The rest of the shelf did not arrive · tap to try again", true);
+      note.addEventListener("click", function once(){
+        note.removeEventListener("click", once);
+        tries=0;
+        say("Loading the shelf · "+at+" of "+total+" products");
+        more();
+      }, {once:true});
+    });
+  }
+  function resume(){
+    if(document.visibilityState==="hidden") return;
+    paused=false;
+    tries=0;
+    if(at) idle(more);
+  }
+  /* A tap on any link is the reader leaving: the shelf gives the network back
+     before the next page is even asked for. */
+  document.addEventListener("click", function(e){
+    var node=e.target;
+    var link=(node && node.closest) ? node.closest("a[href]") : null;
+    if(link && !link.hasAttribute("data-receipt")) pause();
+  }, true);
+  window.addEventListener("pagehide", pause);
+  /* Coming back to a page the browser kept alive picks the shelf up where it
+     stopped; a fresh load starts it below instead. */
+  window.addEventListener("pageshow", function(e){ if(e.persisted) resume(); });
+  document.addEventListener("visibilitychange", function(){
+    if(document.visibilityState==="hidden") pause(); else resume();
+  });
+  /* Not before the page it belongs to has finished: the board and the first
+     batch are what the reader opened the tab for. */
+  if(!at) return;
+  if(document.readyState==="complete") idle(more);
+  else window.addEventListener("load", function(){ idle(more); });
 })();
 </script>
 <div class="sheet" id="receipt-sheet">

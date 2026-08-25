@@ -1,0 +1,6 @@
+{# One batch of the shelf, asked for by the page after it is on screen. Both
+   shapes travel together: the phone appends the cards, the desk the rows. #}
+<div data-shelf-batch data-offset="{{ offset }}" data-next="{{ next }}" data-total="{{ total }}">
+  <div data-shelf-cards>{% include "_shelf_cards.html" %}</div>
+  <table><tbody data-shelf-rows>{% include "_shelf_rows.html" %}</tbody></table>
+</div>

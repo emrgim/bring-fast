@@ -37,8 +37,8 @@ short offline screen instead of a browser error.
   header says `Offline · saved 09:12 · retry 9:47`, so both the countdown and
   the age of what you are reading are on screen.
 - Dashboard, Purchases and Stores are saved in the background once a page has
-  finished loading, so the first time the network drops there is already
-  something to read on all three.
+  finished loading — one tab at a time, so the page you are reading keeps the
+  network to itself.
 - Product shots are kept with the page that shows them, and the shell — offline
   screen, icons and font — is saved on install. A saved page looks like the app,
   not like a stylesheet that never arrived.
@@ -63,8 +63,24 @@ and “Not now” sticks.
   the viewport rules. In a browser tab zoom is left alone: there a page is
   still a page. A receipt is the one screen that stays pinchable installed,
   because it is a scan of paper and the small print is the reason to open it.
-- Nothing is lazy-loaded. Every picture is requested with the page and carries
-  its own width and height, so a slow shop CDN cannot shove the rows around.
+- Switching tabs never waits on a shelf. **Buys** draws its board — spend,
+  receipts, the bars — with the first twelve products, and the rest of the
+  shelf arrives batch after batch once the page is on screen. A line under the
+  list says `Loading the shelf · 24 of 400 products` and disappears at the end;
+  if a batch never arrives it becomes the way to ask for the rest again.
+  - A batch is asked for only when the pictures of the batch before it have
+    landed, and a shop CDN that never answers holds the shelf up for two and a
+    half seconds, not for ever.
+  - Tapping a link stops the shelf where it is and drops the batch in flight,
+    so the next tab's own request is never queued behind product shots. Leaving
+    the app pauses it; coming back picks it up.
+  - Every batch is saved on the device like a page, and warming a tab follows
+    the first five batches of its shelf, one after another. Offline the shelf
+    reads as far as it was saved.
+- A picture is never waiting for a scroll. Every one is requested because the
+  app asked for it, and carries its own width and height, so a slow shop CDN
+  cannot shove the rows around. Batches that arrive after the page ask at low
+  priority, so they never outrank what the reader opened next.
 - The font is served by Bring Fast itself. No font CDN means nothing
   third-party blocks the first paint, and the app reads the same offline.
 - Safe areas on all four sides, so a notch in landscape and the iPhone home bar
@@ -148,7 +164,8 @@ Official checkout stays on each supermarket site.
 Login, refresh tokens, and per-user store sessions are covered in `tests/test_login.py`,
 `tests/test_oauth.py`, and `tests/test_store_login.py`. The installed app is covered in
 `tests/test_pwa.py`, `tests/test_offline_ui.py`, `tests/test_webapp_layout.py`, and
-`tests/test_content_loading.py`.
+`tests/test_content_loading.py`. `tests/test_shelf_loading.py` covers the shelf
+arriving a batch at a time while the board is already on screen.
 
 ## Docker
 

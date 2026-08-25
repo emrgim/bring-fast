@@ -512,6 +512,11 @@
     table.data tr.rowlink { cursor:pointer; }
     table.data tr.rowlink:hover { background:var(--fill); color:var(--on-fill); }
     table.data tr.rowlink:hover .off { color:var(--on-fill); }
+    /* Where the shelf is up to. It is a line of prose, not a spinner: the
+       products already on screen are read while the rest keeps arriving. */
+    .shelf-note { display:none; margin:10px 0 0; color:var(--muted); font-size:12px; letter-spacing:.04em; }
+    .shelf-note.on { display:block; }
+    .shelf-note.again { cursor:pointer; text-decoration:underline; text-underline-offset:2px; color:var(--ink); font-weight:700; }
     .thumb { width:48px; height:48px; border-radius:0; object-fit:contain; background:#fff; border:1px solid var(--line); }
     .thumb.empty { display:grid; place-items:center; color:var(--on-fill); font-weight:700; font-size:12px; background:var(--fill); }
     .switch { margin-top:18px; color:var(--muted); font-size:13px; }

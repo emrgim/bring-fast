@@ -20,7 +20,7 @@ def test_pwa_service_worker(client):
     assert sw.status_code == 200
     assert "javascript" in (sw.headers.get("content-type") or "")
     assert "skipWaiting" in sw.text
-    assert "bf-pwa-v5" in sw.text
+    assert "bf-pwa-v6" in sw.text
     assert sw.headers.get("cache-control", "").startswith("no-cache") or "no-cache" in (
         sw.headers.get("cache-control") or ""
     )
