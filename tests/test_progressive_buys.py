@@ -119,6 +119,11 @@ def test_the_page_pours_the_rest_in_when_the_browser_is_idle(bf, client):
     assert "NEAR_END" in html
     # Nothing is poured into the list the layout is not showing.
     assert "offsetParent!==null" in html
+    # And nothing is poured until the page itself is done: a picture added
+    # while the document is loading holds the load event open, which left the
+    # browser spinning for as long as the whole shelf took.
+    assert 'if(document.readyState==="complete") idle(tick);' in html
+    assert 'else window.addEventListener("load", function(){ idle(tick); });' in html
 
 
 def test_a_product_shot_sweeps_until_it_lands_and_leaves_a_letter_if_it_never_does(bf, client):
