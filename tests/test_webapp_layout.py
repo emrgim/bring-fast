@@ -50,12 +50,47 @@ def _installed_block(html):
 
 
 def test_the_installed_app_does_not_rubber_band(bf, client):
-    block = _installed_block(client.get("/login").text)
+    html = client.get("/login").text
+    block = _installed_block(html)
 
-    assert "overscroll-behavior-y:contain" in block
+    # `contain` only keeps the bounce from reaching the browser; the app still
+    # dragged off the screen to show a strip of nothing above its own header.
+    # Installed there is nothing behind the app to pull down to, so: none.
+    assert "overscroll-behavior:none" in block
+    assert "overscroll-behavior-y:contain" not in html
     assert "env(safe-area-inset-top)" in block
     # Nothing offers to install an app that is already installed.
     assert "#pwa-install, #ios-install { display:none !important; }" in block
+    # Home-screen Safari that predates the display-mode query gets it too.
+    assert ":root.installed, :root.installed body { touch-action:pan-x pan-y; overscroll-behavior:none; }" in html
+
+
+def test_no_screen_in_the_app_draws_a_scrollbar(bf, client):
+    _signed_in(bf, client, "bar@example.com")
+
+    for path in ("/login", "/dashboard", "/purchases", "/stores"):
+        html = client.get(path).text
+        assert "scrollbar-width:none" in html, path
+        assert "*::-webkit-scrollbar { display:none; }" in html, path
+
+    html = client.get("/purchases").text
+    # The bars kept a 6px track and reserved a gutter to hold it. Both are gone,
+    # so the card is the height of its bars.
+    assert "scrollbar-gutter" not in html
+    assert ".bars-scroller::-webkit-scrollbar" not in html
+    # Scrolling itself is untouched — the rows and the bars still scroll, they
+    # just do not chain out into the page when they run out.
+    assert "overflow-x:auto" in html
+    assert html.count("overscroll-behavior:contain") >= 3
+
+
+def test_the_saved_app_has_no_scrollbar_offline_either(client):
+    for path in ("/offline", "/sw.js"):
+        text = client.get(path).text
+        assert "scrollbar-width:none" in text, path
+        assert "-webkit-scrollbar{display:none}" in text or "-webkit-scrollbar { display:none; }" in text, path
+        assert "overscroll-behavior:none" in text, path
+        assert "overscroll-behavior-y:contain" not in text, path
 
 
 def test_the_installed_app_cannot_be_pinched(bf, client):
