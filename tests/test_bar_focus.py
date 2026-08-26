@@ -188,3 +188,31 @@ def test_the_focused_bar_ticks_so_the_filter_is_visible(bf, client):
     buys = client.get(f"/purchases?{WINDOW}&grain=daily&day=2026-08-10").text
     assert 'class="dash is-focus"' in buys
     assert ".dash.is-focus .bar.on i" in buys
+
+
+def test_custom_date_fields_tick_when_they_are_the_filter(bf, client):
+    _seed(bf, "dates@example.com")
+    _sign_in(client, "dates@example.com")
+
+    custom = client.get(f"/dashboard?{WINDOW}&grain=monthly").text
+    head = custom[custom.index('<header class="app-head">') : custom.index("</header>")]
+    # The two date fields are the selected range, not a chip.
+    assert 'action="/dashboard" class="on"' in head
+    assert 'class="on" href="/dashboard?range=' not in head
+    assert ".filters form.on input[type=date]" in custom
+    assert "animation: range-tick 1.8s steps(2, end) infinite" in custom
+    assert "@keyframes range-tick" in custom
+    assert (
+        "@media (prefers-reduced-motion: reduce) {\n"
+        "      .filters form.on input[type=date] { animation:none; }\n"
+        "    }"
+    ) in custom
+
+    preset = client.get("/dashboard?range=1m&grain=monthly").text
+    preset_head = preset[preset.index('<header class="app-head">') : preset.index("</header>")]
+    assert 'action="/dashboard" class="on"' not in preset_head
+    assert 'action="/dashboard"' in preset_head
+
+    buys = client.get(f"/purchases?{WINDOW}&grain=monthly").text
+    assert 'action="/purchases" class="on"' in buys
+    assert 'action="/purchases" class="on"' not in client.get("/purchases?range=all&grain=monthly").text

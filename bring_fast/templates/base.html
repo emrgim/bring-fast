@@ -459,6 +459,20 @@
       width:auto; max-width:11.5em; padding:3px 6px; font-size:11px; height:26px;
       line-height:1.2; min-height:0;
     }
+    /* A custom window is the filter. The two date fields invert and
+       tick so the reader can still see which bounds are holding the
+       page, after the eye has moved on to the card. Filled, then
+       outlined, then filled — the same metronome as a focused bar. */
+    .filters form.on input[type=date] {
+      color:var(--on-fill); background:var(--fill); border-color:var(--fill);
+      animation: range-tick 1.8s steps(2, end) infinite;
+    }
+    @keyframes range-tick {
+      50% { background:var(--bg); color:var(--ink); border-color:var(--ink); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .filters form.on input[type=date] { animation:none; }
+    }
     .chart { width:100%; height:auto; min-height:180px; display:block; color:var(--ink); }
     .buy { display:grid; grid-template-columns: 1fr auto; gap:4px 12px; padding:12px 0; border-top:1px dashed var(--line); }
     .buy:first-child { border-top:0; }
