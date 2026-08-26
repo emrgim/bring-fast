@@ -70,11 +70,12 @@ def test_date_fields_do_not_collapse_to_a_sliver(bf, client):
     html = client.get("/purchases").text
     phone = html[html.index("@media (max-width:720px)") :]
 
-    assert "min-width:12ch" in html
-    assert "flex:0 0 auto" in html[html.index(".filters input[type=date]") :]
-    assert "min-width:14ch" in phone
+    assert "min-width:12em" in html
+    assert "flex:0 0 12em" in html[html.index(".filters input[type=date]") :]
+    assert "min-width:12em" in phone
     assert "::-webkit-date-and-time-value" in html
     assert "::-webkit-datetime-edit" in html
+    assert "::-webkit-calendar-picker-indicator" in html
 
 
 def test_taps_land_at_once_and_never_zoom(bf, client):
