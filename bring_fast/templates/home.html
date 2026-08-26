@@ -1,4 +1,20 @@
 {% extends "base.html" %}
+{% block under_nav %}
+<div class="filters">
+  <div class="chip-row" aria-label="Range">
+    {% for key, label, title in [('1w','1w','1 week'),('1m','1m','1 month'),('3m','3m','3 months'),('1y','1y','1 year'),('all','All','All')] %}
+    <a class="{% if range==key %}on{% endif %}" href="/dashboard?range={{ key }}&grain={{ grain }}" title="{{ title }}">{{ label }}</a>
+    {% endfor %}
+    <form method="get" action="/dashboard">
+      <input type="hidden" name="grain" value="{{ grain }}"/>
+      <input type="hidden" name="range" value="custom"/>
+      <input type="date" name="start" value="{{ start }}"/>
+      <input type="date" name="end" value="{{ end }}"/>
+      <button type="submit">Apply</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
 {% block body %}
 <div class="spend-pin" id="spend-pin" aria-hidden="true">
   <div class="pin-in">
@@ -50,21 +66,6 @@
 {% if trend.chart_svg %}
 <div class="card" style="margin:14px 0 0;padding:12px 10px 4px">{{ trend.chart_svg|safe }}</div>
 {% endif %}
-
-<div class="filters">
-  <div class="chip-row" aria-label="Range">
-    {% for key, label, title in [('1w','1w','1 week'),('1m','1m','1 month'),('3m','3m','3 months'),('1y','1y','1 year'),('all','All','All')] %}
-    <a class="{% if range==key %}on{% endif %}" href="/dashboard?range={{ key }}&grain={{ grain }}" title="{{ title }}">{{ label }}</a>
-    {% endfor %}
-    <form method="get" action="/dashboard">
-      <input type="hidden" name="grain" value="{{ grain }}"/>
-      <input type="hidden" name="range" value="custom"/>
-      <input type="date" name="start" value="{{ start }}"/>
-      <input type="date" name="end" value="{{ end }}"/>
-      <button type="submit">Apply</button>
-    </form>
-  </div>
-</div>
 
 <div class="mlist">
   {% for p in products %}

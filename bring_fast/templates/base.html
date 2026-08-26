@@ -125,12 +125,23 @@
     a { color:var(--ink); text-decoration:underline; text-underline-offset:2px; }
     a:hover { text-decoration-thickness:2px; }
     .wrap { position:relative; z-index:1; max-width:1100px; margin:0 auto; padding:16px 14px 90px; }
-    nav {
+    /* Title bar plus the page's own chrome (the range filter on Home) stick as
+       one piece, so the filter sits directly under “Bring Fast” and never
+       scrolls away behind the spend card. */
+    .app-head {
       position:sticky; top:0; z-index:40;
+      margin:0 -14px 18px;
+      background:var(--bg);
+    }
+    nav {
       display:flex; justify-content:space-between; align-items:center;
-      margin:0 -14px 18px; padding:10px 14px;
+      margin:0; padding:10px 14px;
       background:var(--bg);
       border-bottom:1px dashed var(--line);
+    }
+    .app-head .filters {
+      margin:0; padding:8px 14px;
+      border-bottom:1px solid var(--line);
     }
     nav.is-compact .brand span, nav.is-compact .user { display:none; }
     nav.is-compact .mark { width:32px; height:32px; font-size:13px; }
@@ -396,10 +407,12 @@
       html { -webkit-text-size-adjust:100%; }
       body { padding-bottom: calc(72px + env(safe-area-inset-bottom)); }
       .wrap { padding:10px 12px calc(88px + env(safe-area-inset-bottom)); }
+      .app-head { margin:0 -12px 8px; }
       nav.topnav {
-        margin:0 -12px 8px; padding:8px 12px;
+        margin:0; padding:8px 12px;
         padding-top: max(8px, env(safe-area-inset-top));
       }
+      .app-head .filters { margin:0; padding:8px 0; }
       nav.topnav .tabs { display:none !important; }
       /* The dock carries the tabs on a phone, but signing out has to stay
          reachable: the address is the only thing that goes. */
@@ -613,6 +626,7 @@
 </head>
 <body>
   <div class="wrap">
+    <header class="app-head">
     <nav class="topnav">
       <a class="brand" href="/">
         <div class="mark">BF</div>
@@ -637,6 +651,8 @@
         </div>
       {% endif %}
     </nav>
+    {% block under_nav %}{% endblock %}
+    </header>
     <p class="net" id="net-chip" role="status" aria-live="polite"></p>
     {% if error %}<p class="err">{{ error }}</p>{% endif %}
     {% if notice %}<p class="notice">{{ notice }}</p>{% endif %}
@@ -685,10 +701,12 @@
     })();
     (function(){
       var nav=document.querySelector("nav.topnav");
+      var head=document.querySelector(".app-head");
       if(!nav) return;
       function sync(){
         nav.classList.toggle("is-compact", window.scrollY>24);
-        document.documentElement.style.setProperty("--sticky-top", nav.offsetHeight+"px");
+        var box=head||nav;
+        document.documentElement.style.setProperty("--sticky-top", box.offsetHeight+"px");
       }
       sync();
       window.addEventListener("scroll", sync, {passive:true});
@@ -702,9 +720,10 @@
       var pin=document.getElementById("spend-pin");
       var avg=document.getElementById("spend-avg");
       var nav=document.querySelector("nav.topnav");
+      var head=document.querySelector(".app-head");
       if(!pin||!avg) return;
       function sync(){
-        var top=nav?nav.offsetHeight:56;
+        var top=(head||nav)?(head||nav).offsetHeight:56;
         pin.classList.toggle("on", avg.getBoundingClientRect().bottom < top);
       }
       sync();
