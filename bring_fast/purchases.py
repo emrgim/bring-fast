@@ -428,6 +428,47 @@ SORTS = {
 }
 
 
+def normalize_stores(raw: str | list[str] | None) -> list[str]:
+    """Known retailer ids, in the order they were asked for. Unknown values drop."""
+    if not raw:
+        return []
+    parts: list[str] = []
+    if isinstance(raw, (list, tuple)):
+        for item in raw:
+            parts.extend(str(item or "").split(","))
+    else:
+        parts.extend(str(raw).split(","))
+    known = {r["id"] for r in db.RETAILERS}
+    out: list[str] = []
+    for part in parts:
+        rid = part.strip().lower()
+        if rid in known and rid not in out:
+            out.append(rid)
+    return out
+
+
+def store_query(stores: list[str] | None) -> str:
+    return ",".join(stores or [])
+
+
+def _store_sql(stores: list[str] | None, column: str = "i.retailer") -> tuple[str, list[str]]:
+    if not stores:
+        return "", []
+    return f" AND {column} IN ({','.join('?' * len(stores))})", list(stores)
+
+
+def user_stores(user_id: int) -> list[dict[str, str]]:
+    """Retailers this user has invoices from, in the Stores-tab order."""
+    con = db.connect()
+    rows = con.execute(
+        "SELECT DISTINCT retailer FROM invoices WHERE user_id=? AND ifnull(retailer,'')!=''",
+        (user_id,),
+    ).fetchall()
+    con.close()
+    have = {r["retailer"] for r in rows}
+    return [{"id": r["id"], "name": r["name"]} for r in db.RETAILERS if r["id"] in have]
+
+
 def _frequency_days(label: str) -> int:
     if label == "same day":
         return 0
@@ -538,7 +579,9 @@ def list_products(
     since: str | None = None,
     until: date | None = None,
     dept: str = "",
+    stores: list[str] | None = None,
 ) -> list[dict[str, Any]]:
+    stores = normalize_stores(stores)
     con = db.connect()
     where = "WHERE i.user_id=?"
     args: list[Any] = [user_id]
@@ -548,6 +591,9 @@ def list_products(
     if until:
         where += " AND i.invoice_date<=?"
         args.append(until.isoformat())
+    extra, extra_args = _store_sql(stores)
+    where += extra
+    args.extend(extra_args)
     rows = con.execute(
         f"""
         SELECT it.product_key,
@@ -661,6 +707,7 @@ def product_shelf(
     since: str | None = None,
     until: date | None = None,
     dept: str = "",
+    stores: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """The whole shelf in display order, held for half a minute.
 
@@ -668,14 +715,25 @@ def product_shelf(
     its own. Without this, each one would count the whole history again and
     the last batch would cost as much as the first.
     """
-    key = (user_id, sort, direction, since or "", until.isoformat() if until else "", dept or "")
+    stores = normalize_stores(stores)
+    key = (
+        user_id,
+        sort,
+        direction,
+        since or "",
+        until.isoformat() if until else "",
+        dept or "",
+        tuple(stores),
+    )
     now = time.monotonic()
     held = _shelf_memo.get(key)
     if held and now - held[0] < _SHELF_HOLD_S:
         return held[1]
     for stale in [k for k, (at, _) in _shelf_memo.items() if now - at >= _SHELF_HOLD_S]:
         _shelf_memo.pop(stale, None)
-    shelf = list_products(user_id, sort=sort, direction=direction, since=since, until=until, dept=dept)
+    shelf = list_products(
+        user_id, sort=sort, direction=direction, since=since, until=until, dept=dept, stores=stores
+    )
     _shelf_memo[key] = (now, shelf)
     return shelf
 
@@ -836,6 +894,7 @@ def invoice_count(
     since: str | None = None,
     until: date | None = None,
     include_undated: bool = False,
+    stores: list[str] | None = None,
 ) -> int:
     """Receipts in the window, counted straight off invoices.
 
@@ -843,9 +902,13 @@ def invoice_count(
     still count. Receipts with no parsed date can never sit inside a date
     window; pass include_undated=True (the "all" range) to count them too.
     """
+    stores = normalize_stores(stores)
     con = db.connect()
     where = "WHERE user_id=?"
     args: list[Any] = [user_id]
+    extra, extra_args = _store_sql(stores, "retailer")
+    where += extra
+    args.extend(extra_args)
     clauses: list[str] = []
     if since:
         clauses.append("substr(invoice_date,1,10)>=?")
@@ -869,7 +932,9 @@ def daily_spend(
     since: str | None = None,
     until: date | None = None,
     dept: str = "",
+    stores: list[str] | None = None,
 ) -> list[dict[str, Any]]:
+    stores = normalize_stores(stores)
     con = db.connect()
     where = "WHERE i.user_id=?"
     args: list[Any] = [user_id]
@@ -879,6 +944,9 @@ def daily_spend(
     if until:
         where += " AND i.invoice_date<=?"
         args.append(until.isoformat())
+    extra, extra_args = _store_sql(stores)
+    where += extra
+    args.extend(extra_args)
     rows = con.execute(
         f"""
         SELECT i.invoice_date, i.retailer, i.store_name, i.invoice_no, it.name, it.line_total

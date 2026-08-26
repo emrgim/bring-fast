@@ -688,6 +688,13 @@ def _shelf_url(**params: Any) -> str:
     return "/purchases/rows?" + urlencode({k: (v if v is not None else "") for k, v in params.items()})
 
 
+def _request_stores(request: Request, store: str = "") -> list[str]:
+    raw = list(request.query_params.getlist("store"))
+    if store and store not in raw:
+        raw.append(store)
+    return purchases.normalize_stores(raw)
+
+
 @app.get("/purchases", response_class=HTMLResponse)
 def purchases_page(
     request: Request,
@@ -699,6 +706,7 @@ def purchases_page(
     grain: str = "daily",
     dept: str = "",
     day: str = "",
+    store: str = "",
 ):
     user = current_user(request)
     if not user:
@@ -711,8 +719,10 @@ def purchases_page(
     direction = "asc" if dir == "asc" else "desc"
     grain = grain if grain in purchases.GRAINS else "daily"
     dept = purchases.normalize_dept(dept)
+    stores = _request_stores(request, store)
+    store_q = purchases.store_query(stores)
     since, until, range_key = purchases.resolve_window(user["id"], range, start, end)
-    raw_days = purchases.daily_spend(user["id"], since=since, until=until, dept=dept)
+    raw_days = purchases.daily_spend(user["id"], since=since, until=until, dept=dept, stores=stores)
     days = purchases.bucket_series(raw_days, grain)
     if grain == "daily":
         days = purchases.fill_daily_calendar(days, since, until)
@@ -728,7 +738,13 @@ def purchases_page(
     total_spend = sum(d["spend"] for d in card_days)
     periods = purchases.period_span(focus_since, focus_until, grain)
     shelf = purchases.product_shelf(
-        user["id"], sort=sort, direction=direction, since=focus_since, until=focus_until, dept=dept
+        user["id"],
+        sort=sort,
+        direction=direction,
+        since=focus_since,
+        until=focus_until,
+        dept=dept,
+        stores=stores,
     )
     first = purchases.shelf_batch(shelf, 0, purchases.SHELF_BATCH)
     _remember(request, user)
@@ -745,7 +761,15 @@ def purchases_page(
             "shelf_next": first["next"],
             "shelf_batch": purchases.SHELF_BATCH,
             "shelf_url": _shelf_url(
-                sort=sort, dir=direction, range=range_key, grain=grain, dept=dept, day=day, start=start, end=end
+                sort=sort,
+                dir=direction,
+                range=range_key,
+                grain=grain,
+                dept=dept,
+                day=day,
+                start=start,
+                end=end,
+                store=store_q,
             ),
             "days": days,
             # Only what a tap on a bar reads: over years of daily bars the rest
@@ -766,6 +790,7 @@ def purchases_page(
                     since=focus_since,
                     until=focus_until,
                     include_undated=(range_key == "all" and not day),
+                    stores=stores,
                 )
             ),
             "dash_receipts_total": purchases.invoice_count(user["id"], include_undated=True),
@@ -775,6 +800,10 @@ def purchases_page(
             "range": range_key,
             "grain": grain,
             "dept": dept,
+            "stores": stores,
+            "store_q": store_q,
+            "store_tail": f"&store={store_q}" if store_q else "",
+            "store_options": purchases.user_stores(user["id"]),
             "start": start,
             "end": end or until.isoformat(),
             "day": day,
@@ -793,6 +822,7 @@ def purchases_rows(
     grain: str = "daily",
     dept: str = "",
     day: str = "",
+    store: str = "",
     offset: int = 0,
     limit: int = purchases.SHELF_BATCH,
 ):
@@ -808,10 +838,17 @@ def purchases_rows(
     direction = "asc" if dir == "asc" else "desc"
     grain = grain if grain in purchases.GRAINS else "daily"
     dept = purchases.normalize_dept(dept)
+    stores = _request_stores(request, store)
     since, until, _range_key = purchases.resolve_window(user["id"], range, start, end)
     focus_since, focus_until = purchases.focus_products_window(day, grain, since, until)
     shelf = purchases.product_shelf(
-        user["id"], sort=sort, direction=direction, since=focus_since, until=focus_until, dept=dept
+        user["id"],
+        sort=sort,
+        direction=direction,
+        since=focus_since,
+        until=focus_until,
+        dept=dept,
+        stores=stores,
     )
     batch = purchases.shelf_batch(shelf, offset, limit)
     return templates.TemplateResponse(
