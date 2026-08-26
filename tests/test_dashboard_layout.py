@@ -69,6 +69,22 @@ def test_range_filter_sits_under_the_title_bar(bf, client):
     assert html.count('class="filters"') == 1
 
 
+def test_buys_range_filter_sits_under_the_title_bar(bf, client):
+    _seed(bf, "buysfilter@example.com")
+    client.post("/login", data={"email": "buysfilter@example.com", "password": "secret1", "intent": "signin"})
+    html = client.get("/purchases?range=all&grain=monthly").text
+
+    # Same chrome as Home: department + range sit under “Bring Fast”, not
+    # after the Purchases spend card.
+    head = html[html.index('<header class="app-head">') : html.index("</header>")]
+    assert 'class="filters"' in head
+    assert 'aria-label="Department"' in head
+    assert 'aria-label="Range"' in head
+    assert ">Edible<" in head
+    assert html.index("</header>") < html.index('<div class="purchases-board">')
+    assert html.count('class="filters"') == 1
+
+
 def test_theme_toggle_lives_only_in_the_top_nav(bf, client):
     _seed(bf, "toggle@example.com")
     client.post("/login", data={"email": "toggle@example.com", "password": "secret1", "intent": "signin"})
