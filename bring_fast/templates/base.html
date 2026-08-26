@@ -470,9 +470,23 @@
     }
     .pop {
       display:none; margin-top:8px; padding-top:8px; border-top:1px dashed var(--line); font-size:13px;
+      min-width:0;
     }
-    .pop.open { display:block; }
-    .pop .row { display:flex; justify-content:space-between; gap:10px; padding:5px 0; }
+    .pop.open {
+      display:block;
+      /* A year can hold hundreds of slips. Without a cap they bury the
+         product shelf, so Buys reads as a receipt list. */
+      max-height:min(30vh, 16em);
+      overflow-x:hidden;
+      overflow-y:auto;
+      overscroll-behavior:contain;
+    }
+    .pop .row {
+      display:flex; justify-content:space-between; align-items:baseline; gap:10px;
+      padding:5px 0; min-width:0;
+    }
+    .pop .row > span:first-child { min-width:0; flex:1 1 auto; overflow-wrap:anywhere; }
+    .pop .row .amt { flex:0 0 auto; white-space:nowrap; }
     .filters { display:flex; flex-direction:column; gap:6px; margin:0 0 12px; }
     .filters form { display:flex; gap:4px; align-items:center; flex-wrap:nowrap; flex:0 0 auto; }
     /* An empty date field on iOS has no intrinsic width once appearance is
@@ -637,8 +651,11 @@
         bottom:0; border-left:0; border-top:1px solid var(--line); border-radius:0;
         padding-bottom:env(safe-area-inset-bottom);
       }
+      /* Home and Buys both draw the chart. Buys used to hide it on a phone,
+         from before a tap on a bar focused the card: the year still opened
+         its receipts, so All + Yearly read as a 2025-only view with no bar
+         left to clear. */
       .bars-scroller { display:block; }
-      .purchases-board .bars-scroller { display:none; }
       .dock {
         display:flex; position:fixed; left:0; right:0;
         top:auto !important; bottom:0; height:auto;

@@ -182,7 +182,7 @@
       var no = String(inv.invoice_no||"");
       var label = "#"+no.slice(-10);
       var link = '<a href="/receipts/'+inv.retailer+'/'+encodeURIComponent(no)+'" data-receipt="/receipts/'+inv.retailer+'/'+encodeURIComponent(no)+'">'+label+"</a>";
-      html += '<div class="row"><span>'+link+" · "+(inv.store||inv.retailer)+'</span><span>AED '+Number(inv.spend||0).toFixed(2)+"</span></div>";
+      html += '<div class="row"><span>'+link+" · "+(inv.store||inv.retailer)+'</span><span class="amt">AED '+Number(inv.spend||0).toFixed(2)+"</span></div>";
     });
     pop.innerHTML = html;
     pop.classList.add("open");
