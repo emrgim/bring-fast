@@ -440,6 +440,19 @@
       background:var(--ink);
     }
     .bar.on i { box-shadow: inset 0 0 0 2px var(--bg); outline:1px solid var(--ink); }
+    /* A focused bar is the filter. It ticks so the reader can still
+       see which bucket is holding the rest of the page, after the
+       widget has inverted and the eye has moved on. Solid, then
+       hollow, then solid — slowly, like a metronome. */
+    .dash.is-focus .bar.on i {
+      animation: focus-tick 1.8s steps(2, end) infinite;
+    }
+    @keyframes focus-tick {
+      50% { background: var(--bg); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .dash.is-focus .bar.on i { animation: none; }
+    }
     .pop {
       display:none; margin-top:8px; padding-top:8px; border-top:1px dashed var(--line); font-size:13px;
     }

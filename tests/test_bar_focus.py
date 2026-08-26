@@ -165,3 +165,26 @@ def test_the_focused_widget_inverts_against_the_theme(bf, client):
     # Only the widget inverts. The header that holds the range chips does not.
     head = html[html.index('<header class="app-head">') : html.index("</header>")]
     assert "is-focus" not in head
+
+
+def test_the_focused_bar_ticks_so_the_filter_is_visible(bf, client):
+    _seed(bf, "tick@example.com")
+    _sign_in(client, "tick@example.com")
+
+    html = client.get(f"/dashboard?{WINDOW}&grain=daily&day=2026-08-10").text
+    # Only the tapped bar ticks, and only while the widget is inverted.
+    # Grain chips, range chips and an unfocused selected bar stay still.
+    selected = html[html.index(".bar.on i {") : html.index(".dash.is-focus .bar.on i")]
+    assert "animation:" not in selected
+    rule = html[html.index(".dash.is-focus .bar.on i") : html.index("@keyframes focus-tick")]
+    assert "animation: focus-tick 1.8s steps(2, end) infinite" in rule
+    assert "50% { background: var(--bg); }" in html[html.index("@keyframes focus-tick") :]
+    # Reduced motion keeps the outline and drops the tick.
+    assert (
+        "@media (prefers-reduced-motion: reduce) {\n"
+        "      .dash.is-focus .bar.on i { animation: none; }\n"
+        "    }"
+    ) in html
+    buys = client.get(f"/purchases?{WINDOW}&grain=daily&day=2026-08-10").text
+    assert 'class="dash is-focus"' in buys
+    assert ".dash.is-focus .bar.on i" in buys
