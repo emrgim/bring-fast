@@ -64,6 +64,20 @@ def test_date_fields_do_not_zoom_the_page_on_ios(bf, client):
     assert ".filters input[type=date] { font-size:16px;" in html
 
 
+def test_date_fields_do_not_collapse_to_a_sliver(bf, client):
+    """An empty iOS date field has no intrinsic width and becomes a thin box."""
+    _signed_in(bf, client, "calendar@example.com")
+    html = client.get("/purchases").text
+    phone = html[html.index("@media (max-width:720px)") :]
+
+    assert "min-width:12em" in html
+    assert "flex:0 0 12em" in html[html.index(".filters input[type=date]") :]
+    assert "min-width:12em" in phone
+    assert "::-webkit-date-and-time-value" in html
+    assert "::-webkit-datetime-edit" in html
+    assert "::-webkit-calendar-picker-indicator" in html
+
+
 def test_taps_land_at_once_and_never_zoom(bf, client):
     html = client.get("/login").text
 

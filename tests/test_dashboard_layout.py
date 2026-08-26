@@ -69,6 +69,20 @@ def test_range_filter_sits_under_the_title_bar(bf, client):
     assert html.count('class="filters"') == 1
 
 
+def test_buys_date_fields_show_the_window_when_all_is_selected(bf, client):
+    """Buys used to leave start empty on All, so the first field collapsed."""
+    _seed(bf, "calfields@example.com")
+    client.post("/login", data={"email": "calfields@example.com", "password": "secret1", "intent": "signin"})
+    html = client.get("/purchases?range=all&grain=daily").text
+
+    assert 'name="start" value="2026-08-10"' in html
+    assert 'name="end" value="' in html
+    home = client.get("/dashboard?range=all&grain=daily").text
+    assert 'name="start" value="2026-08-10"' in home
+    detail = client.get("/purchases/ean:1?range=all").text
+    assert 'name="start" value="2026-08-10"' in detail
+
+
 def test_buys_range_filter_sits_under_the_title_bar(bf, client):
     _seed(bf, "buysfilter@example.com")
     client.post("/login", data={"email": "buysfilter@example.com", "password": "secret1", "intent": "signin"})

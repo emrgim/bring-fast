@@ -817,7 +817,7 @@ def purchases_page(
             "store_q": store_q,
             "store_tail": f"&store={store_q}" if store_q else "",
             "store_options": purchases.user_stores(user["id"]),
-            "start": start,
+            "start": start or (since or ""),
             "end": end or until.isoformat(),
             "day": day,
         },
@@ -904,7 +904,7 @@ def purchase_detail(request: Request, key: str, range: str = "all", start: str =
             "product": product,
             "compare": compare.compare_board(user["id"], key, product.get("last_price")),
             "range": range_key,
-            "start": start,
+            "start": start or (since or ""),
             "end": end or until.isoformat(),
         },
     )

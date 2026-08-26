@@ -475,9 +475,21 @@
     .pop .row { display:flex; justify-content:space-between; gap:10px; padding:5px 0; }
     .filters { display:flex; flex-direction:column; gap:6px; margin:0 0 12px; }
     .filters form { display:flex; gap:4px; align-items:center; flex-wrap:nowrap; flex:0 0 auto; }
+    /* An empty date field on iOS has no intrinsic width once appearance is
+       stripped, and collapses to a sliver beside the end date. Chrome then
+       draws a calendar glyph that clips “08/11/2023” down to “/11/2023”.
+       A fixed em width holds the long iOS form (Aug 11, 2023) and the
+       short Chrome form; the row scrolls sideways, so it fits. */
     .filters input[type=date] {
-      width:auto; max-width:11.5em; padding:3px 6px; font-size:11px; height:26px;
-      line-height:1.2; min-height:0;
+      width:12em; min-width:12em; max-width:12em; padding:3px 6px; font-size:11px; height:26px;
+      line-height:1.2; min-height:0; flex:0 0 12em;
+    }
+    .filters input[type=date]::-webkit-datetime-edit,
+    .filters input[type=date]::-webkit-date-and-time-value {
+      text-align:left;
+    }
+    .filters input[type=date]::-webkit-calendar-picker-indicator {
+      opacity:0; width:0; padding:0; margin:0;
     }
     /* A custom window is the filter. The two date fields invert and
        tick so the reader can still see which bounds are holding the
@@ -568,7 +580,7 @@
       .filters form { display:flex; }
       /* Under 16px iOS zooms the whole page the moment a field takes focus,
          and never zooms back out. The row scrolls sideways, so it fits. */
-      .filters input[type=date] { font-size:16px; height:36px; max-width:none; padding:4px 8px; }
+      .filters input[type=date] { font-size:16px; height:36px; width:12em; min-width:12em; max-width:12em; padding:4px 8px; flex:0 0 12em; }
       /* Number and label stay on one line, so "AED 2537" and "34" never read as one figure. */
       .dash-kpis { gap:12px; font-size:12px; }
       .dash-kpis span { flex:0 1 auto; white-space:nowrap; }
