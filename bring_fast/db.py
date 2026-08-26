@@ -303,9 +303,13 @@ def connect() -> sqlite3.Connection:
         """CREATE TABLE IF NOT EXISTS user_prefs (
             user_id INTEGER PRIMARY KEY,
             last_path TEXT,
-            last_query TEXT
+            last_query TEXT,
+            tab_queries TEXT
         )"""
     )
+    prefs_cols = {r[1] for r in con.execute("PRAGMA table_info(user_prefs)").fetchall()}
+    if "tab_queries" not in prefs_cols:
+        con.execute("ALTER TABLE user_prefs ADD COLUMN tab_queries TEXT")
     con.execute(
         """CREATE TABLE IF NOT EXISTS catalog_prices (
             id INTEGER PRIMARY KEY,
@@ -837,13 +841,43 @@ def get_oauth_client(client_id: str) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+_TAB_PATHS = ("/dashboard", "/purchases")
+
+
+def _tab_queries(row: sqlite3.Row | None) -> dict[str, str]:
+    raw = (row["tab_queries"] if row else "") or ""
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k): str(v or "") for k, v in data.items()}
+
+
 def set_last_view(user_id: int, path: str, query: str = "") -> None:
     con = connect()
-    con.execute(
-        """INSERT INTO user_prefs(user_id, last_path, last_query) VALUES (?,?,?)
-           ON CONFLICT(user_id) DO UPDATE SET last_path=excluded.last_path, last_query=excluded.last_query""",
-        (user_id, path, query or ""),
-    )
+    query = query or ""
+    if path in _TAB_PATHS:
+        row = con.execute("SELECT tab_queries FROM user_prefs WHERE user_id=?", (user_id,)).fetchone()
+        tabs = _tab_queries(row)
+        tabs[path] = query
+        con.execute(
+            """INSERT INTO user_prefs(user_id, last_path, last_query, tab_queries) VALUES (?,?,?,?)
+               ON CONFLICT(user_id) DO UPDATE SET
+                 last_path=excluded.last_path,
+                 last_query=excluded.last_query,
+                 tab_queries=excluded.tab_queries""",
+            (user_id, path, query, json.dumps(tabs)),
+        )
+    else:
+        con.execute(
+            """INSERT INTO user_prefs(user_id, last_path, last_query) VALUES (?,?,?)
+               ON CONFLICT(user_id) DO UPDATE SET last_path=excluded.last_path, last_query=excluded.last_query""",
+            (user_id, path, query),
+        )
     con.commit()
     con.close()
 
@@ -853,3 +887,10 @@ def get_last_view(user_id: int) -> dict[str, str] | None:
     row = con.execute("SELECT last_path, last_query FROM user_prefs WHERE user_id=?", (user_id,)).fetchone()
     con.close()
     return {"path": row["last_path"] or "", "query": row["last_query"] or ""} if row else None
+
+
+def get_tab_query(user_id: int, path: str) -> str:
+    con = connect()
+    row = con.execute("SELECT tab_queries FROM user_prefs WHERE user_id=?", (user_id,)).fetchone()
+    con.close()
+    return _tab_queries(row).get(path) or ""

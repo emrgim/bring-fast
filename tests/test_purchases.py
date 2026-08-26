@@ -576,6 +576,55 @@ def test_purchases_view_is_restored(bf, client):
     assert "purchases" in home.headers["location"]
 
 
+def test_dashboard_filters_survive_a_visit_to_purchases(bf, client):
+    bf.db.create_user("keephome@example.com", "secret1")
+    client.post("/login", data={"email": "keephome@example.com", "password": "secret1", "intent": "signin"})
+    client.get("/dashboard", params={"range": "1y", "grain": "yearly"})
+    client.get("/purchases", params={"sort": "times", "dir": "desc"})
+    r = client.get("/dashboard", follow_redirects=False)
+    assert r.status_code == 303
+    loc = r.headers["location"]
+    assert "range=1y" in loc
+    assert "grain=yearly" in loc
+
+
+def test_purchases_filters_survive_a_visit_to_dashboard(bf, client):
+    _two_stores(bf, "keepbuys@example.com")
+    client.post("/login", data={"email": "keepbuys@example.com", "password": "secret1", "intent": "signin"})
+    client.get("/purchases", params={"sort": "frequency", "dir": "desc", "store": "carrefour"})
+    client.get("/dashboard", params={"range": "1m", "grain": "monthly"})
+    r = client.get("/purchases", follow_redirects=False)
+    assert r.status_code == 303
+    loc = r.headers["location"]
+    assert "sort=frequency" in loc
+    assert "carrefour" in loc
+
+
+def test_product_detail_does_not_replace_purchases_filters(bf, client):
+    user = bf.db.create_user("keepdetail@example.com", "secret1")
+    bf.purchases.upsert_invoice(
+        user["id"],
+        {
+            "retailer": "carrefour",
+            "invoice_no": "d1",
+            "invoice_date": "2026-08-10",
+            "items": [{"name": "Milk", "qty": 1, "unit_price": 10, "line_total": 10, "barcode": "keep1"}],
+        },
+    )
+    client.post("/login", data={"email": "keepdetail@example.com", "password": "secret1", "intent": "signin"})
+    client.get("/purchases", params={"sort": "frequency", "dir": "desc", "range": "1y", "grain": "monthly"})
+    detail = client.get("/purchases/ean:keep1")
+    assert detail.status_code == 200
+    r = client.get("/purchases", follow_redirects=False)
+    assert r.status_code == 303
+    loc = r.headers["location"]
+    assert "sort=frequency" in loc
+    assert "range=1y" in loc
+    home = client.get("/", follow_redirects=False)
+    assert home.status_code == 303
+    assert "ean:keep1" in home.headers["location"]
+
+
 def test_price_trend_is_mean_of_product_changes(bf, client):
     user = bf.db.create_user("trend@example.com", "secret1")
     bf.purchases.upsert_invoice(

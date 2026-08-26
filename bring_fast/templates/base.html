@@ -1242,6 +1242,14 @@
     })();
     {% if user %}
     (function(){
+      /* Mirror of the last remembered page, so an offline launch of `/`
+         can still open it when the service worker has not copied /__resume. */
+      var path=location.pathname;
+      var tabs=["/dashboard","/purchases","/stores"];
+      if(!tabs.some(function(p){ return path===p || path.indexOf(p+"/")===0; })) return;
+      try { localStorage.setItem("bf-last-url", path+location.search); } catch(e){}
+    })();
+    (function(){
       /* Every tab is saved on the device before it is asked for, so going
          offline on the dashboard still leaves purchases and stores readable. */
       var TABS=["/dashboard","/purchases","/stores"];
