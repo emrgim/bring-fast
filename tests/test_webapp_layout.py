@@ -6,6 +6,35 @@ def _signed_in(bf, client, email="app@example.com"):
     client.post("/login", data={"email": email, "password": "secret1", "intent": "signin"})
 
 
+def test_the_phone_card_puts_spend_on_the_title_row(bf, client):
+    user = bf.db.create_user("cardrow@example.com", "secret1")
+    bf.purchases.upsert_invoice(
+        user["id"],
+        {
+            "retailer": "carrefour",
+            "invoice_no": "card1",
+            "invoice_date": "2026-08-10",
+            "items": [{"name": "Heineken Cans 50 cl", "qty": 1, "unit_price": 15, "line_total": 15, "barcode": "111"}],
+        },
+    )
+    client.post("/login", data={"email": "cardrow@example.com", "password": "secret1", "intent": "signin"})
+    html = client.get("/dashboard").text
+    card = html[html.index('class="mcard"') : html.index("</div></div>", html.index('class="mcard"'))]
+    # Title and spend share a row. Frequency and likely sit under it,
+    # so the price is no longer a third column squeezing the pair.
+    assert 'class="mcard-top"' in card
+    assert card.index('class="mcard-top"') < card.index('class="amt mcard-go"')
+    assert card.index('class="amt mcard-go"') < card.index('class="pair"')
+    assert card.index("</b></a><a class=\"amt") < card.index('class="pair"')
+    phone = html[html.index("@media (max-width:720px)") :]
+    top = phone[phone.index(".mcard-top {") : phone.index(".pair {")]
+    assert "display:flex" in top
+    assert "align-items:flex-start" in top
+    assert ".mcard { display:flex; gap:12px; align-items:center;" not in phone
+    buys = client.get("/purchases").text
+    assert 'class="mcard-top"' in buys
+
+
 def test_signing_out_stays_reachable_on_a_phone(bf, client):
     _signed_in(bf, client)
     html = client.get("/dashboard").text
