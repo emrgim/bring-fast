@@ -358,9 +358,9 @@ def spend_home(
     if not user:
         return RedirectResponse("/login?mode=signin&next=/dashboard", status_code=303)
     if not request.query_params:
-        rec = db.get_last_view(user["id"])
-        if rec and rec.get("path") == "/dashboard" and rec.get("query"):
-            return RedirectResponse("/dashboard?" + rec["query"], status_code=303)
+        q = db.get_tab_query(user["id"], "/dashboard")
+        if q:
+            return RedirectResponse("/dashboard?" + q, status_code=303)
     grain = grain if grain in purchases.GRAINS else "monthly"
     since, until, range_key = purchases.resolve_window(user["id"], range, start, end)
     raw_days = purchases.daily_spend(user["id"], since=since, until=until)
@@ -725,9 +725,9 @@ def purchases_page(
     if not user:
         return RedirectResponse("/login?mode=signin&next=/purchases", status_code=303)
     if not request.query_params:
-        rec = db.get_last_view(user["id"])
-        if rec and rec.get("path") == "/purchases" and rec.get("query"):
-            return RedirectResponse("/purchases?" + rec["query"], status_code=303)
+        q = db.get_tab_query(user["id"], "/purchases")
+        if q:
+            return RedirectResponse("/purchases?" + q, status_code=303)
     sort = sort if sort in purchases.SORTS else "spend"
     direction = "asc" if dir == "asc" else "desc"
     grain = grain if grain in purchases.GRAINS else "daily"

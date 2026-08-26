@@ -4,7 +4,7 @@ def test_pwa_manifest_and_icons(client):
     assert "manifest" in (man.headers.get("content-type") or "")
     data = man.json()
     assert data["display"] == "standalone"
-    assert data["start_url"] == "/dashboard"
+    assert data["start_url"] == "/"
     assert data["name"] == "Bring Fast"
     assert data["background_color"] == "#ffffff"
     assert data["theme_color"] == "#ffffff"
@@ -20,7 +20,9 @@ def test_pwa_service_worker(client):
     assert sw.status_code == 200
     assert "javascript" in (sw.headers.get("content-type") or "")
     assert "skipWaiting" in sw.text
-    assert "bf-pwa-v7" in sw.text
+    assert "bf-pwa-v8" in sw.text
+    assert "/__resume" in sw.text
+    assert 'RESUME = "/__resume"' in sw.text
     assert sw.headers.get("cache-control", "").startswith("no-cache") or "no-cache" in (
         sw.headers.get("cache-control") or ""
     )
@@ -124,6 +126,8 @@ def test_offline_fallback_page(client):
     # Reaching it inside the installed app must not turn the zoom back on.
     assert "user-scalable=no" in r.text
     assert "touch-action:pan-x pan-y" in r.text
+    # `/` is never cached; offline launch jumps to the last remembered page.
+    assert "bf-last-url" in r.text
 
 
 def test_health_marks_each_boot_so_a_restart_is_visible(client):
@@ -167,3 +171,11 @@ def test_pwa_apple_icon_and_head(client):
     offline = client.get("/offline").text
     assert 't==="light"||t==="dark"||t==="auto"' in offline
     assert "prefers-color-scheme" in offline
+
+
+def test_signed_in_pages_remember_the_last_url(bf, client):
+    assert "bf-last-url" not in client.get("/login").text
+    bf.db.create_user("resume@example.com", "secret1")
+    client.post("/login", data={"email": "resume@example.com", "password": "secret1", "intent": "signin"})
+    html = client.get("/dashboard?range=1m&grain=monthly").text
+    assert 'localStorage.setItem("bf-last-url"' in html

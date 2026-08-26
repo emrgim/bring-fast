@@ -9,12 +9,16 @@
  * so those are saved too — one after another, behind whatever the reader is
  * doing, never as one flood of requests the open page has to compete with.
  */
-const VERSION = "bf-pwa-v7";
+const VERSION = "bf-pwa-v8";
 const SHELL = VERSION + "-shell";
 const PAGES = VERSION + "-pages";
 const ASSETS = VERSION + "-assets";
 const IMAGES = VERSION + "-images";
 const OFFLINE_URL = "/offline";
+/* Last remembered page, so opening `/` offline still shows where the
+ * reader left off. `/` itself is a redirect and is never cached. */
+const RESUME = "/__resume";
+const REMEMBER = ["/dashboard", "/purchases", "/stores"];
 const OFFLINE_REFRESH_MS = 600000;
 const NET_TIMEOUT_MS = 6000;
 const REFRESH_FLOOR_MS = 30000;
@@ -169,14 +173,30 @@ function fromNetwork(req, ms) {
   return ms ? Promise.race([hit, timeout(ms)]) : hit;
 }
 
+function isRemembered(pathname) {
+  return REMEMBER.some((p) => pathname === p || pathname.startsWith(p + "/"));
+}
+
 async function savePage(req, copy) {
   const cache = await caches.open(PAGES);
-  await cache.put(req, await stamped(copy));
+  const body = await stamped(copy);
+  const path = new URL(req.url).pathname;
+  if (path !== RESUME && isRemembered(path)) {
+    await cache.put(new Request(self.location.origin + RESUME), body.clone());
+  }
+  await cache.put(req, body);
 }
 
 async function cachedPage(req) {
   const cache = await caches.open(PAGES);
-  return (await cache.match(req)) || (await cache.match(req, { ignoreSearch: true }));
+  const hit = (await cache.match(req)) || (await cache.match(req, { ignoreSearch: true }));
+  if (hit) return hit;
+  try {
+    if (new URL(req.url).pathname === "/") {
+      return await cache.match(self.location.origin + RESUME);
+    }
+  } catch (e) {}
+  return undefined;
 }
 
 /* A page the device already saw wins over an error screen, every time. */

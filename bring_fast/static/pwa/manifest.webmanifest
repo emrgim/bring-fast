@@ -3,7 +3,7 @@
   "name": "Bring Fast",
   "short_name": "Bring Fast",
   "description": "Grocery spend, receipts and live supermarket prices.",
-  "start_url": "/dashboard",
+  "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui", "browser"],

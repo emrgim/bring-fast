@@ -122,6 +122,17 @@
       });
     })();
     (function(){
+      /* `/` is a redirect online and is never cached. Offline, this screen
+         is what a launch lands on — jump to the last remembered page if
+         the service worker has not copied /__resume yet. */
+      if(location.pathname!=="/") return;
+      var last="";
+      try { last=localStorage.getItem("bf-last-url")||""; } catch(e){}
+      if(!last || last.charAt(0)!=="/" || last.indexOf("//")===0) return;
+      if(last==="/" || last.indexOf("/login")===0) return;
+      location.replace(last);
+    })();
+    (function(){
       var RETRY_MS=600000;
       var IDLE="No connection · retrying every 10 minutes";
       var state=document.getElementById("state");
