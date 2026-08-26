@@ -28,11 +28,17 @@ def test_purchases_average_follows_the_grain(bf, client):
     assert "Daily average this period" in daily
     assert "AED 10.00</b>" in daily
     assert "140.00 ÷ 14 days" in daily
+    assert "<b>14</b> days" in daily
+    assert "<b>2</b> days" not in daily
 
     weekly = client.get(f"/purchases?{WINDOW}&grain=weekly").text
     assert "Weekly average this period" in weekly
     assert "AED 70.00</b>" in weekly
     assert "140.00 ÷ 2 weeks" in weekly
+    # Two receipts on two days is not the period. The headline and the
+    # working use the same calendar span.
+    assert "<b>2</b> weeks" in weekly
+    assert "<b>2</b> days" not in weekly
 
 
 def test_a_window_one_period_long_reads_as_one_period(bf, client):
@@ -52,6 +58,7 @@ def test_a_window_one_period_long_reads_as_one_period(bf, client):
         html = client.get(f"/purchases?{window}").text
         assert f"÷ 1 {unit}" in html, grain
         assert f"÷ 1 {unit}s" not in html, grain
+        assert f"<b>1</b> {unit}" in html, grain
         # The home tab reads the same figure out of the same snapshot.
         assert f"÷ 1 {unit}" in client.get(f"/dashboard?{window}").text, grain
 

@@ -755,7 +755,6 @@ def purchases_page(
                 )
             ),
             "dash_receipts_total": purchases.invoice_count(user["id"], include_undated=True),
-            "dash_days": len(raw_days),
             "stats": purchases.purchase_stats(user["id"]),
             "sort": sort,
             "dir": direction,
