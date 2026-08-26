@@ -133,6 +133,23 @@ RETAILERS = [
         "login": False,
         "shop": False,
     },
+    {
+        # Counter food, not a supermarket: the menu is per restaurant and
+        # changes, so there is no catalog to search. McDonald's is here so
+        # emailed order receipts have a store to land on.
+        "id": "mcdonalds",
+        "name": "McDonald's",
+        "url": "https://www.mcdonalds.com/ae/en-ae.html",
+        "logo": "/static/logos/mcdonalds.svg",
+        "color": "#da291c",
+        "cart_url": "https://www.mcdonalds.com/ae/en-ae.html",
+        "checkout_url": "https://www.mcdonalds.com/ae/en-ae.html",
+        "enabled": False,
+        "search": False,
+        "receipts": True,
+        "login": False,
+        "shop": False,
+    },
 ]
 
 

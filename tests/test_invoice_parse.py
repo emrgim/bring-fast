@@ -5,6 +5,8 @@ from bring_fast.invoice_parse import (
     parse_carrefour_text,
     parse_grandiose_confirmation_html,
     parse_grandiose_text,
+    parse_mcdonalds_html,
+    parse_mcdonalds_text,
     parse_mmi_text,
 )
 from bring_fast.sku_lookup import _human_cat
@@ -306,6 +308,80 @@ def test_careem_invoice_lands_in_purchases(bf):
         "Chicken Shawarma Wrap",
         "Mixed Grill Platter",
         "Hummus Beiruty",
+    }
+
+
+MCD_HTML = """
+<div>We got your order, here's your receipt.</div>
+<div>Restaurant Number:</div><div>1840105</div>
+<div>Restaurant Name:</div><div>ENOC 1039 Dubai Production City</div>
+<div>Order Id:</div><div>0786</div>
+<div>Delivery Date:</div><div>05/04/26 17:06</div>
+<table>
+ <tr><th>Qty</th><th>Item Detail</th><th>Item Cost</th></tr>
+ <tr><td>1</td><td>Double Cheeseburger Large Meal</td><td>AED 29.00</td></tr>
+ <tr><td>&nbsp;</td><td>1 Double Cheeseburger</td><td></td></tr>
+ <tr><td>&nbsp;</td><td>NO Pickles</td><td></td></tr>
+ <tr><td>&nbsp;</td><td>1 Large Fries</td><td></td></tr>
+ <tr><td>&nbsp;</td><td>1 Large Coca-Cola Zero Sugar</td><td></td></tr>
+ <tr><td>1</td><td>Cheeseburger</td><td>AED 8.00</td></tr>
+ <tr><td colspan="2">Sub Total</td><td>AED 37.00</td></tr>
+ <tr><td colspan="2">Delivery Fee</td><td>AED 8.50</td></tr>
+ <tr><td colspan="2">Total (includes 5% VAT)</td><td>AED 45.50</td></tr>
+</table>
+"""
+
+
+def test_parse_mcdonalds_keeps_priced_rows_and_drops_meal_parts():
+    out = parse_mcdonalds_html(MCD_HTML, source="mail")
+    assert out["retailer"] == "mcdonalds"
+    assert out["invoice_no"] == "1840105-0786-20260405"
+    assert out["order_no"] == "0786"
+    assert out["invoice_date"] == "2026-04-05"
+    assert out["store_name"] == "McDonald's · ENOC 1039 Dubai Production City"
+    assert [(i["name"], i["qty"], i["line_total"]) for i in out["items"]] == [
+        ("Double Cheeseburger Large Meal", 1.0, 29.0),
+        ("Cheeseburger", 1.0, 8.0),
+    ]
+    assert all(i["barcode"] == "" for i in out["items"])
+
+
+def test_parse_mcdonalds_payment_notification_has_no_invented_lines():
+    text = """
+We got your order, here's your receipt.
+Restaurant Name:
+MeAisem City Centre
+Order Id:
+9974
+Date:
+16/08/26 14:31
+Amount:
+47.00 AED
+"""
+    out = parse_mcdonalds_text(text)
+    assert out["retailer"] == "mcdonalds"
+    assert out["invoice_no"] == "mcd-9974-20260816"
+    assert out["invoice_date"] == "2026-08-16"
+    assert out["store_name"] == "McDonald's · MeAisem City Centre"
+    assert out["items"] == []
+
+
+def test_mcdonalds_invoice_lands_in_purchases(bf):
+    from datetime import date
+
+    user = bf.db.create_user("mcd@example.com", "secret1")
+    parsed = parse_mcdonalds_html(MCD_HTML, source="mail")
+    invoice_id = bf.purchases.upsert_invoice(user["id"], parsed, gmail_id="mcd-mail-1")
+
+    assert invoice_id is not None
+    orders = bf.purchases.orders_report(
+        user["id"], range_key="all", include_items=True, today=date(2026, 12, 31)
+    )
+    order = next(o for o in orders["orders"] if o["invoice_no"] == "1840105-0786-20260405")
+    assert order["store"] == "McDonald's · ENOC 1039 Dubai Production City"
+    assert {i["name"] for i in order["items"]} == {
+        "Double Cheeseburger Large Meal",
+        "Cheeseburger",
     }
 
 

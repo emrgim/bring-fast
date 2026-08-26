@@ -46,18 +46,19 @@ def test_a_receipts_only_store_says_it_is_there_for_its_invoices(bf, client):
     _sign_in(client)
     page = client.get("/stores").text
 
-    card = page.split('id="store-careem"')[1].split("</a>")[0]
-    assert 'class="cap no">Search' in card
-    assert 'class="cap no">Compare' in card
-    assert 'class="cap no">Cart' in card
-    assert 'class="cap no">Login' in card
-    assert 'class="cap">Receipts' in card
+    for store_id in ("careem", "mcdonalds"):
+        card = page.split(f'id="store-{store_id}"')[1].split("</a>")[0]
+        assert 'class="cap no">Search' in card
+        assert 'class="cap no">Compare' in card
+        assert 'class="cap no">Cart' in card
+        assert 'class="cap no">Login' in card
+        assert 'class="cap">Receipts' in card
 
-    store = client.get("/stores/careem").text
-    # No catalog and no login: the page says why, and offers no form.
-    assert "No catalog to look up" in store
-    assert "invoices arrive by mail" in store
-    assert 'type="password"' not in store
+        store = client.get(f"/stores/{store_id}").text
+        # No catalog and no login: the page says why, and offers no form.
+        assert "No catalog to look up" in store
+        assert "invoices arrive by mail" in store
+        assert 'type="password"' not in store
 
 
 def test_a_saved_login_is_printed_inside_the_store_and_offers_edit(bf, client):

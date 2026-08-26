@@ -260,6 +260,8 @@ def parse_invoice_pdf(path: str | Path) -> dict[str, Any]:
     # Before the Carrefour arm: a Careem invoice is also headed "Tax Invoice".
     if "careem" in low:
         return parse_careem_text(text, source=p.name)
+    if "mcdonald" in low:
+        return parse_mcdonalds_text(text, source=p.name)
     if "majid al futtaim" in low or "carrefour" in low or "tax invoice" in low:
         return parse_carrefour_text(text, source=p.name)
     raise ValueError(f"unrecognized invoice: {p.name}")
@@ -634,3 +636,107 @@ def parse_grandiose_confirmation_html(html: str, *, source: str = "", date: str 
         "source": source,
         "items": kept,
     }
+
+
+"""McDonald's UAE app receipts.
+
+The live mail from DoNotReply@mcdonalds.com is HTML, not a PDF. Delivery
+orders print a Qty / Item Detail / Item Cost table: the meal or à-la-carte
+row carries AED, then the meal's pieces and the 'NO Pickles' customizations
+sit on their own rows with no price. Payment notifications only have the
+restaurant, order id and a total — no line items to invent.
+"""
+_MCD_DATE = re.compile(r"(\d{1,2})/(\d{1,2})/(\d{2,4})")
+_MCD_QTY = re.compile(r"^(\d{1,2})$")
+_MCD_MONEY = re.compile(r"^(?:AED\s*)?(\d{1,6}\.\d{2})(?:\s*AED)?$", re.I)
+_MCD_SUMMARY = re.compile(r"^(sub\s*total|delivery fee|total\b)", re.I)
+
+
+def _mcdonalds_html_to_text(html: str) -> str:
+    text = html_lib.unescape(html)
+    text = re.sub(r"<(script|style)[\s\S]*?</\1>", " ", text, flags=re.I)
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
+    text = re.sub(r"</(p|tr|td|th|div|h\d|li)>", "\n", text, flags=re.I)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    return text
+
+
+def _mcdonalds_field(lines: list[str], label: str) -> str:
+    want = label.lower().rstrip(":")
+    for i, line in enumerate(lines):
+        if line.lower().rstrip(":") == want and i + 1 < len(lines):
+            return lines[i + 1]
+    return ""
+
+
+def _mcdonalds_date(raw: str) -> str:
+    m = _MCD_DATE.search(raw or "")
+    if not m:
+        return ""
+    day, month, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if year < 100:
+        year += 2000
+    try:
+        return datetime(year, month, day).date().isoformat()
+    except ValueError:
+        return ""
+
+
+def parse_mcdonalds_text(text: str, *, source: str = "", date: str = "") -> dict[str, Any]:
+    lines = [re.sub(r"\s+", " ", ln).strip() for ln in text.splitlines()]
+    lines = [ln for ln in lines if ln]
+    rest_no = _mcdonalds_field(lines, "Restaurant Number")
+    place = _mcdonalds_field(lines, "Restaurant Name")
+    order = _mcdonalds_field(lines, "Order Id")
+    date_raw = _mcdonalds_field(lines, "Delivery Date") or _mcdonalds_field(lines, "Date")
+    invoice_date = _mcdonalds_date(date_raw) or (date[:10] if date else "")
+    start = 0
+    for i, line in enumerate(lines):
+        if line.lower() == "item cost":
+            start = i + 1
+            break
+    items: list[dict[str, Any]] = []
+    i = start
+    while i < len(lines):
+        line = lines[i]
+        if _MCD_SUMMARY.match(line):
+            break
+        if _MCD_QTY.match(line) and i + 1 < len(lines):
+            name = lines[i + 1]
+            qty = float(line)
+            j = i + 2
+            price = None
+            if j < len(lines) and _MCD_MONEY.match(lines[j]):
+                price = float(_MCD_MONEY.match(lines[j]).group(1))
+                j += 1
+            if price and price > 0 and not _MCD_SUMMARY.match(name) and not _skip(name):
+                items.append(
+                    {
+                        "name": name,
+                        "qty": qty,
+                        "unit_price": round(price / qty, 2),
+                        "line_total": price,
+                        "barcode": "",
+                    }
+                )
+            i = j
+            continue
+        i += 1
+    stamp = invoice_date.replace("-", "") if invoice_date else "nodate"
+    invoice_no = ""
+    if order:
+        invoice_no = f"{rest_no or 'mcd'}-{order}-{stamp}"
+    return {
+        "retailer": "mcdonalds",
+        "store_name": f"McDonald's · {place}" if place else "McDonald's",
+        "invoice_no": invoice_no,
+        "order_no": order,
+        "invoice_date": invoice_date,
+        "source": source,
+        "items": items,
+    }
+
+
+def parse_mcdonalds_html(html: str, *, source: str = "", date: str = "") -> dict[str, Any]:
+    return parse_mcdonalds_text(_mcdonalds_html_to_text(html), source=source, date=date)

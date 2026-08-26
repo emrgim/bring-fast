@@ -111,12 +111,16 @@ def test_a_receipts_only_store_is_never_offered_a_search_tool(bf):
     assert "careem_search" not in names
     assert "careem_cart" not in names
     assert "careem_checkout" not in names
+    assert "mcdonalds_search" not in names
+    assert "mcdonalds_cart" not in names
+    assert "mcdonalds_checkout" not in names
 
     snap = json.loads(bf._call_tool(user, "bf_whoami", {}))
-    careem = next(s for s in snap["stores"] if s["store_id"] == "careem")
-    assert careem["capabilities"] == ["receipts"]
-    assert careem["tools"] == []
-    assert careem["receipts_only"] is True
+    for store_id in ("careem", "mcdonalds"):
+        store = next(s for s in snap["stores"] if s["store_id"] == store_id)
+        assert store["capabilities"] == ["receipts"]
+        assert store["tools"] == []
+        assert store["receipts_only"] is True
     assert "receipts-only" in snap["note"].lower()
 
 
@@ -148,4 +152,5 @@ def test_searching_every_store_skips_the_one_with_no_catalog(bf, monkeypatch):
     out = json.loads(bf._call_tool(user, "bf_search", {"query": "shawarma"}))
     asked = {block["retailer"] for block in out["stores"]}
     assert "careem" not in asked
+    assert "mcdonalds" not in asked
     assert "grandiose" in asked

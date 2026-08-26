@@ -22,6 +22,7 @@ def test_retailers_have_logos_and_urls():
         "mmi",
         "africaneastern",
         "careem",
+        "mcdonalds",
     }
     assert {r["id"] for r in db.RETAILERS if r.get("enabled")} == {"grandiose"}
     assert {r["id"] for r in db.RETAILERS if r.get("shop")} == {"grandiose", "unioncoop"}
@@ -42,7 +43,9 @@ def test_a_store_that_can_be_searched_has_something_to_search_it_with():
 def test_a_receipts_only_store_is_left_out_of_search():
     assert db.store_can_search("grandiose") is True
     assert db.store_can_search("careem") is False
+    assert db.store_can_search("mcdonalds") is False
     assert "careem" not in catalog.SEARCHERS
+    assert "mcdonalds" not in catalog.SEARCHERS
     caps = {c["key"]: c["on"] for c in db.store_capabilities("careem")}
     assert caps == {
         "search": False,
@@ -52,6 +55,7 @@ def test_a_receipts_only_store_is_left_out_of_search():
         "receipts": True,
         "login": False,
     }
+    assert {c["key"]: c["on"] for c in db.store_capabilities("mcdonalds")} == caps
 
 
 def test_catalog_unknown_retailer():
