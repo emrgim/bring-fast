@@ -54,6 +54,21 @@ def test_mobile_kpis_keep_number_and_label_on_one_line(bf, client):
     assert ".dash-kpis span + span { border-left:1px solid var(--line); padding-left:12px; }" in html
 
 
+def test_range_filter_sits_under_the_title_bar(bf, client):
+    _seed(bf, "filterbar@example.com")
+    client.post("/login", data={"email": "filterbar@example.com", "password": "secret1", "intent": "signin"})
+    html = client.get("/dashboard?range=all&grain=monthly").text
+
+    # The 1w/1m/3m/1y/All row is header chrome: immediately under “Bring Fast”,
+    # not after the spend card and the price-trend widgets.
+    head = html[html.index('<header class="app-head">') : html.index("</header>")]
+    assert 'class="filters"' in head
+    assert 'aria-label="Range"' in head
+    assert ">All<" in head
+    assert html.index("</header>") < html.index('<div class="dash">')
+    assert html.count('class="filters"') == 1
+
+
 def test_theme_toggle_lives_only_in_the_top_nav(bf, client):
     _seed(bf, "toggle@example.com")
     client.post("/login", data={"email": "toggle@example.com", "password": "secret1", "intent": "signin"})
