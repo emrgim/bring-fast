@@ -192,6 +192,7 @@ def _safe_next(target: str) -> str:
 
 
 _REMEMBER = ("/dashboard", "/purchases", "/stores")
+_WINDOW_KEYS = ("range", "grain", "start", "end", "day")
 
 
 def _remember(request: Request, user: dict[str, Any] | None) -> None:
@@ -201,6 +202,53 @@ def _remember(request: Request, user: dict[str, Any] | None) -> None:
     if not any(path == p or path.startswith(p + "/") for p in _REMEMBER):
         return
     db.set_last_view(user["id"], path, str(request.url.query or ""))
+
+
+def _window_query(range_key: str, grain: str, start: str = "", end: str = "", day: str = "") -> str:
+    pairs = [("range", range_key), ("grain", grain)]
+    if range_key == "custom":
+        if start:
+            pairs.append(("start", start))
+        if end:
+            pairs.append(("end", end))
+    if day:
+        pairs.append(("day", day))
+    return urlencode(pairs)
+
+
+def _remember_dashboard(user: dict[str, Any], request: Request, range_key: str, grain: str, start: str, end: str, day: str) -> None:
+    q = str(request.url.query or "")
+    if "range" not in request.query_params and "grain" not in request.query_params:
+        q = _window_query(range_key, grain, start, end, day)
+    db.set_last_view(user["id"], "/dashboard", q)
+
+
+def _remember_purchases(
+    user: dict[str, Any],
+    request: Request,
+    range_key: str,
+    grain: str,
+    start: str,
+    end: str,
+    day: str,
+    sort: str,
+    direction: str,
+    dept: str,
+    store_q: str,
+) -> None:
+    rest = [("sort", sort), ("dir", direction)]
+    if dept:
+        rest.append(("dept", dept))
+    if store_q:
+        rest.append(("store", store_q))
+    has_window = any(key in request.query_params for key in _WINDOW_KEYS)
+    extra = urlencode(rest)
+    if has_window or not db.get_tab_query(user["id"], "/dashboard"):
+        win = _window_query(range_key, grain, start, end, day)
+        q = win + (("&" + extra) if extra else "")
+    else:
+        q = extra
+    db.set_last_view(user["id"], "/purchases", q)
 
 
 def _last_url(user: dict[str, Any]) -> str:
@@ -369,16 +417,25 @@ def spend_home(
         days = purchases.fill_daily_calendar(days, since, until)
     days = purchases.mark_day_windows(days, grain, since, until, day)
     focus_since, focus_until = purchases.focus_products_window(day, grain, since, until)
-    top = purchases.list_products(user["id"], sort="spend", direction="desc", since=focus_since, until=focus_until)[:8]
-    trend = purchases.price_trend(user["id"], since=focus_since, until=focus_until, grain=grain)
-    snap = purchases.spend_snapshot(
+    focus_end = (focus_until or until).isoformat()
+    card_days = [
+        d
+        for d in raw_days
+        if (not focus_since or (d.get("date") or "") >= focus_since)
+        and (d.get("date") or "") <= focus_end
+    ]
+    total_spend = sum(d["spend"] for d in card_days)
+    periods = purchases.period_span(focus_since, focus_until, grain)
+    top = purchases.list_products(
         user["id"],
+        sort="spend",
+        direction="desc",
         since=focus_since,
         until=focus_until,
-        grain=grain,
-        include_undated=(range_key == "all" and not day),
+        limit=8,
     )
-    _remember(request, user)
+    trend = purchases.price_trend(user["id"], since=focus_since, until=focus_until, grain=grain)
+    _remember_dashboard(user, request, range_key, grain, start, end, day)
     return templates.TemplateResponse(
         request,
         "home.html",
@@ -387,13 +444,13 @@ def spend_home(
             "title": "Dashboard · Bring Fast",
             "tab": "dashboard",
             "days": days,
-            "dash_spend": snap["total"],
-            "period_avg": snap["period_avg"],
-            "period_word": snap["period_word"],
-            "period_unit": snap["period_unit"],
-            "periods_text": snap["periods_text"],
+            "dash_spend": total_spend,
+            "period_avg": round(total_spend / periods, 2),
+            "period_word": purchases.PERIOD_WORDS[grain],
+            "period_unit": purchases.period_unit(grain, periods),
+            "periods_text": purchases.format_periods(periods),
             "range_start": focus_since or "",
-            "range_end": (focus_until or until).isoformat(),
+            "range_end": focus_end,
             "products": top,
             "trend": trend,
             "grain": grain,
@@ -760,7 +817,19 @@ def purchases_page(
         stores=stores,
     )
     first = purchases.shelf_batch(shelf, 0, purchases.SHELF_BATCH)
-    _remember(request, user)
+    _remember_purchases(
+        user,
+        request,
+        range_key,
+        grain,
+        start,
+        end,
+        day,
+        sort,
+        direction,
+        dept,
+        store_q,
+    )
     return templates.TemplateResponse(
         request,
         "purchases.html",
@@ -807,7 +876,6 @@ def purchases_page(
                 )
             ),
             "dash_receipts_total": purchases.invoice_count(user["id"], include_undated=True),
-            "stats": purchases.purchase_stats(user["id"]),
             "sort": sort,
             "dir": direction,
             "range": range_key,

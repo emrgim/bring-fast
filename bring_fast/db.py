@@ -4,9 +4,11 @@ import json
 import os
 import secrets
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlencode
 
 import hashlib
 import hmac
@@ -64,7 +66,7 @@ RETAILERS = [
         "id": "waitrose",
         "name": "Waitrose UAE",
         "url": "https://www.waitrose.ae/en/",
-        "logo": "/static/logos/waitrose.png",
+        "logo": "/static/logos/waitrose.svg",
         "color": "#007a33",
         "cart_url": "https://www.waitrose.ae/en/",
         "checkout_url": "https://www.waitrose.ae/en/checkout/",
@@ -167,11 +169,36 @@ def _fernet() -> Fernet:
     return Fernet(key_file.read_bytes())
 
 
+_schema_lock = threading.Lock()
+_schema_ready: set[str] = set()
+
+
 def connect() -> sqlite3.Connection:
+    """Open the database. Schema work runs once per file, not on every query.
+
+    Every page used to CREATE TABLE / PRAGMA table_info / seed store_flags on
+    the way in — that is why a tab with a handful of SELECTs still felt slow.
+    """
     root = data_dir()
     root.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(root / "bringfast.db")
+    path = root / "bringfast.db"
+    key = str(path)
+    con = sqlite3.connect(path, timeout=5.0)
     con.row_factory = sqlite3.Row
+    con.execute("PRAGMA busy_timeout=5000")
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA synchronous=NORMAL")
+    con.execute("PRAGMA foreign_keys=ON")
+    con.execute("PRAGMA temp_store=MEMORY")
+    if key not in _schema_ready:
+        with _schema_lock:
+            if key not in _schema_ready:
+                _init_schema(con)
+                _schema_ready.add(key)
+    return con
+
+
+def _init_schema(con: sqlite3.Connection) -> None:
     con.execute(
         """CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY,
@@ -338,10 +365,32 @@ def connect() -> sqlite3.Connection:
         )"""
     )
     con.execute(
+        """CREATE TABLE IF NOT EXISTS forecast_exclusions (
+            user_id INTEGER NOT NULL,
+            product_key TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, product_key)
+        )"""
+    )
+    con.execute(
+        """CREATE TABLE IF NOT EXISTS forecast_votes (
+            user_id INTEGER NOT NULL,
+            product_key TEXT NOT NULL,
+            vote TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, product_key)
+        )"""
+    )
+    con.execute(
         "CREATE INDEX IF NOT EXISTS idx_catalog_prices_lookup ON catalog_prices(user_id, product_key, retailer, fetched_at)"
     )
+    con.execute("CREATE INDEX IF NOT EXISTS idx_invoices_user_date ON invoices(user_id, invoice_date)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_invoices_user_retailer ON invoices(user_id, retailer)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice ON invoice_items(invoice_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_invoice_items_product ON invoice_items(product_key)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_product_aliases_canonical ON product_aliases(canonical_key)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_product_meta_ean ON product_meta(official_ean)")
     con.commit()
-    return con
 
 
 def create_user(email: str, password: str) -> dict[str, Any]:
@@ -842,6 +891,7 @@ def get_oauth_client(client_id: str) -> dict[str, Any] | None:
 
 
 _TAB_PATHS = ("/dashboard", "/purchases")
+_WINDOW_KEYS = ("range", "grain", "start", "end", "day")
 
 
 def _tab_queries(row: sqlite3.Row | None) -> dict[str, str]:
@@ -857,22 +907,67 @@ def _tab_queries(row: sqlite3.Row | None) -> dict[str, str]:
     return {str(k): str(v or "") for k, v in data.items()}
 
 
-def set_last_view(user_id: int, path: str, query: str = "") -> None:
+def _split_query(query: str) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    window: list[tuple[str, str]] = []
+    rest: list[tuple[str, str]] = []
+    for key, val in parse_qsl(query or "", keep_blank_values=True):
+        (window if key in _WINDOW_KEYS else rest).append((key, val))
+    return window, rest
+
+
+def _merge_query(*parts: str) -> str:
+    seen: set[str] = set()
+    out: list[tuple[str, str]] = []
+    for part in parts:
+        for key, val in parse_qsl(part or "", keep_blank_values=True):
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append((key, val))
+    return urlencode(out)
+
+
+def set_last_view(user_id: int, path: str, query: str = "") -> bool:
+    """Remember the tab. A reload of the same view is a no-op, not a write."""
     con = connect()
     query = query or ""
+    row = con.execute(
+        "SELECT last_path, last_query, tab_queries FROM user_prefs WHERE user_id=?",
+        (user_id,),
+    ).fetchone()
     if path in _TAB_PATHS:
-        row = con.execute("SELECT tab_queries FROM user_prefs WHERE user_id=?", (user_id,)).fetchone()
         tabs = _tab_queries(row)
-        tabs[path] = query
+        window, rest = _split_query(query)
+        if window:
+            tabs["window"] = urlencode(window)
+        if path == "/purchases":
+            tabs[path] = urlencode(rest)
+        resume = (
+            _merge_query(tabs.get("window") or "", tabs.get(path) or "")
+            if path == "/purchases"
+            else (tabs.get("window") or query)
+        )
+        blob = json.dumps(tabs)
+        if (
+            row
+            and (row["last_path"] or "") == path
+            and (row["last_query"] or "") == resume
+            and (row["tab_queries"] or "") == blob
+        ):
+            con.close()
+            return False
         con.execute(
             """INSERT INTO user_prefs(user_id, last_path, last_query, tab_queries) VALUES (?,?,?,?)
                ON CONFLICT(user_id) DO UPDATE SET
                  last_path=excluded.last_path,
                  last_query=excluded.last_query,
                  tab_queries=excluded.tab_queries""",
-            (user_id, path, query, json.dumps(tabs)),
+            (user_id, path, resume, blob),
         )
     else:
+        if row and (row["last_path"] or "") == path and (row["last_query"] or "") == query:
+            con.close()
+            return False
         con.execute(
             """INSERT INTO user_prefs(user_id, last_path, last_query) VALUES (?,?,?)
                ON CONFLICT(user_id) DO UPDATE SET last_path=excluded.last_path, last_query=excluded.last_query""",
@@ -880,6 +975,7 @@ def set_last_view(user_id: int, path: str, query: str = "") -> None:
         )
     con.commit()
     con.close()
+    return True
 
 
 def get_last_view(user_id: int) -> dict[str, str] | None:
@@ -893,4 +989,8 @@ def get_tab_query(user_id: int, path: str) -> str:
     con = connect()
     row = con.execute("SELECT tab_queries FROM user_prefs WHERE user_id=?", (user_id,)).fetchone()
     con.close()
-    return _tab_queries(row).get(path) or ""
+    tabs = _tab_queries(row)
+    window = tabs.get("window") or ""
+    if path == "/purchases":
+        return _merge_query(window, tabs.get(path) or "")
+    return window

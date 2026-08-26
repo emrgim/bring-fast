@@ -80,25 +80,8 @@ def pack_reason(name: str) -> str | None:
     return None
 
 
-_EXCLUSIONS_SQL = """CREATE TABLE IF NOT EXISTS forecast_exclusions (
-    user_id INTEGER NOT NULL,
-    product_key TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    PRIMARY KEY (user_id, product_key)
-)"""
-
-_VOTES_SQL = """CREATE TABLE IF NOT EXISTS forecast_votes (
-    user_id INTEGER NOT NULL,
-    product_key TEXT NOT NULL,
-    vote TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    PRIMARY KEY (user_id, product_key)
-)"""
-
-
 def load_exclusions(user_id: int) -> set[str]:
     con = db.connect()
-    con.execute(_EXCLUSIONS_SQL)
     rows = con.execute("SELECT product_key FROM forecast_exclusions WHERE user_id=?", (user_id,)).fetchall()
     con.close()
     return {r["product_key"] for r in rows}
@@ -106,7 +89,6 @@ def load_exclusions(user_id: int) -> set[str]:
 
 def set_exclusion(user_id: int, product_key: str, *, on: bool = True) -> None:
     con = db.connect()
-    con.execute(_EXCLUSIONS_SQL)
     if on:
         con.execute(
             "INSERT OR REPLACE INTO forecast_exclusions(user_id, product_key, created_at) VALUES (?,?,?)",
@@ -120,7 +102,6 @@ def set_exclusion(user_id: int, product_key: str, *, on: bool = True) -> None:
 
 def load_votes(user_id: int) -> dict[str, str]:
     con = db.connect()
-    con.execute(_VOTES_SQL)
     rows = con.execute("SELECT product_key, vote FROM forecast_votes WHERE user_id=?", (user_id,)).fetchall()
     con.close()
     return {r["product_key"]: r["vote"] for r in rows if r["vote"] in ("up", "down")}
@@ -131,7 +112,6 @@ def set_vote(user_id: int, product_key: str, vote: str = "") -> str:
     if vote not in ("up", "down"):
         vote = ""
     con = db.connect()
-    con.execute(_VOTES_SQL)
     if vote:
         con.execute(
             "INSERT OR REPLACE INTO forecast_votes(user_id, product_key, vote, updated_at) VALUES (?,?,?,?)",
@@ -162,7 +142,13 @@ def apply_vote(row: dict[str, Any], vote: str = "") -> dict[str, Any]:
     return row
 
 
-def buy_history(user_id: int, *, since: str | None = None, until: date | None = None) -> dict[str, dict[str, Any]]:
+def buy_history(
+    user_id: int,
+    *,
+    since: str | None = None,
+    until: date | None = None,
+    keys: list[str] | None = None,
+) -> dict[str, dict[str, Any]]:
     con = db.connect()
     where = "WHERE i.user_id=?"
     args: list[Any] = [user_id]
@@ -172,6 +158,16 @@ def buy_history(user_id: int, *, since: str | None = None, until: date | None = 
     if until:
         where += " AND i.invoice_date<=?"
         args.append(until.isoformat())
+    if keys is not None:
+        wanted = [k for k in keys if k]
+        if not wanted:
+            con.close()
+            return {}
+        # Stay under SQLite's bound-variable cap. A huge shelf falls back to
+        # the unfiltered scan rather than failing the tab.
+        if len(wanted) <= 800:
+            where += " AND it.product_key IN (" + ",".join("?" * len(wanted)) + ")"
+            args.extend(wanted)
     rows = con.execute(
         f"""
         SELECT it.product_key,
