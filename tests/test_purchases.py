@@ -42,6 +42,60 @@ def test_purchases_tab_lists_parsed_invoice(bf, client):
     assert "Barcode" in detail.text
     assert "5000112668209" in detail.text
     assert "data-receipt" in detail.text or "Receipt" in client.get("/purchases/ean:5000112668209").text
+    assert 'aria-label="More likely to buy"' in page.text
+    assert 'aria-label="Less likely to buy"' in page.text
+    assert 'aria-label="More likely to buy"' in detail.text
+
+
+def test_likely_thumbs_change_the_score_and_toggle_off(bf, client):
+    user = bf.db.create_user("vote@example.com", "secret1")
+    bf.purchases.upsert_invoice(
+        user["id"],
+        {
+            "retailer": "carrefour",
+            "store_name": "Carrefour",
+            "invoice_no": "v1",
+            "invoice_date": "2026-08-23",
+            "items": [
+                {
+                    "name": "White Bread",
+                    "qty": 1,
+                    "unit_price": 4,
+                    "line_total": 4,
+                    "barcode": "b1",
+                }
+            ],
+        },
+    )
+    client.post("/login", data={"email": "vote@example.com", "password": "secret1", "intent": "signin"})
+    key = "ean:b1"
+    first = client.get("/purchases")
+    assert ">0<" in first.text or "Likely" in first.text
+    # Warm the shelf memo, then a vote must drop it so the new score shows.
+    bf.purchases.product_shelf(user["id"])
+    up = client.post(f"/purchases/{key}/vote", data={"vote": "up", "next": "/purchases"}, follow_redirects=True)
+    assert up.status_code == 200
+    assert bf.forecast.load_votes(user["id"]).get(key) == "up"
+    assert 'aria-pressed="true"' in up.text
+    assert "55" in up.text
+    home = client.get("/dashboard")
+    assert 'aria-label="More likely to buy"' in home.text
+    assert "55" in home.text
+    detail = client.get(f"/purchases/{key}")
+    assert "likely" in detail.text
+    assert "55" in detail.text
+    assert 'aria-pressed="true"' in detail.text
+    assert 'class="likely-line"' in detail.text
+    assert "<div class=\"lead\">" in detail.text
+    again = client.post(f"/purchases/{key}/vote", data={"vote": "up", "next": "/purchases"}, follow_redirects=True)
+    assert bf.forecast.load_votes(user["id"]).get(key, "") == ""
+    down = client.post(
+        f"/purchases/{key}/vote",
+        data={"vote": "down", "next": "/purchases"},
+        follow_redirects=True,
+    )
+    assert bf.forecast.load_votes(user["id"]).get(key) == "down"
+    assert 'aria-pressed="true"' in down.text
 
 
 def test_official_title_does_not_replace_receipt_name(bf, client):

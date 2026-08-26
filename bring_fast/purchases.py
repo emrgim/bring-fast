@@ -617,12 +617,15 @@ def attach_likely(user_id: int, products: list[dict[str, Any]], *, today: date |
     from bring_fast import forecast as fc
 
     today = today or date.today()
+    blocked = fc.load_exclusions(user_id)
+    votes = fc.load_votes(user_id)
     classified = {}
     for rec in fc.buy_history(user_id, until=today).values():
         classified[rec["key"]] = fc.classify(
             rec,
             today=today,
-            excluded=False,
+            excluded=rec["key"] in blocked,
+            vote=votes.get(rec["key"], ""),
             min_buys=fc.DEFAULTS["min_buys"],
             max_interval_days=fc.DEFAULTS["max_interval_days"],
             max_cv=fc.DEFAULTS["max_cv"],
@@ -634,6 +637,7 @@ def attach_likely(user_id: int, products: list[dict[str, Any]], *, today: date |
         hab = classified.get(p.get("key") or "") or {}
         p["likely"] = int(hab.get("score") or 0)
         p["likely_reason"] = hab.get("reason") or ""
+        p["likely_vote"] = hab.get("vote") or ""
     return products
 
 
@@ -753,7 +757,7 @@ def product_purchases(user_id: int, key: str, since: str | None = None, until: d
     receipt = head["name"] or ""
     official = (meta.get("official_name") or "").strip()
     display = official or receipt
-    return {
+    out = {
         "key": key,
         "name": display,
         "receipt_name": receipt,
@@ -1412,6 +1416,7 @@ def _public_product(p: dict[str, Any]) -> dict[str, Any]:
         "days_since": p.get("days_since"),
         "likely": int(p.get("likely") or p.get("score") or 0),
         "likely_reason": p.get("likely_reason") or p.get("reason"),
+        "likely_vote": p.get("likely_vote") or p.get("vote") or "",
         "score": p.get("score"),
         "reason": p.get("reason"),
         "first_buy": p.get("first_buy") or "",
@@ -1480,11 +1485,13 @@ def shopping_list(
     skip_bits = ("plastic bag", "shopping bag", "plast shopping", "t shirt hndl bag")
     extra = {e.strip().lower() for e in (exclude or []) if e and str(e).strip()}
     blocked = fc.load_exclusions(user_id)
+    votes = fc.load_votes(user_id)
     classified = {
         rec["key"]: fc.classify(
             rec,
             today=today,
             excluded=rec["key"] in blocked or rec["key"].lower() in extra or (rec.get("official_name") or rec.get("receipt_name") or "").lower() in extra,
+            vote=votes.get(rec["key"], ""),
             min_buys=int(min_buys) if min_buys is not None else fc.DEFAULTS["min_buys"],
             max_interval_days=fc.DEFAULTS["max_interval_days"],
             max_cv=fc.DEFAULTS["max_cv"],
@@ -1510,8 +1517,11 @@ def shopping_list(
         if p.get("key") in blocked or (p.get("key") or "").lower() in extra or name in extra:
             continue
         hab = classified.get(p["key"]) or {}
+        if hab.get("vote") == "down":
+            continue
         p["likely"] = int(hab.get("score") or 0)
         p["likely_reason"] = hab.get("reason") or "unknown"
+        p["likely_vote"] = hab.get("vote") or ""
         p["score"] = p["likely"]
         p["reason"] = p["likely_reason"]
         p["weighted_interval_days"] = hab.get("weighted_interval_days")

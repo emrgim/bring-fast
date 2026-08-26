@@ -67,3 +67,50 @@ def test_three_buys_still_get_a_score(bf):
     hit = next(p for p in rows if "milk" in p["name"].lower())
     assert hit["score"] >= 20
     assert hit["times_bought"] == 3
+
+
+def test_thumbs_up_raises_a_weak_staple_onto_the_list(bf):
+    user = bf.db.create_user("thumbup@example.com", "secret1")
+    item = {
+        "name": "S.Pellegrino Sparkling Natural Mineral Water, 500ml",
+        "qty": 1,
+        "unit_price": 3.5,
+        "line_total": 3.5,
+        "barcode": "8002270015223",
+    }
+    for i, day in enumerate(("2026-05-01", "2026-05-20", "2026-06-10", "2026-07-01", "2026-07-25")):
+        _buy(bf, user["id"], f"S{i}", day, [item])
+    today = date(2026, 8, 24)
+    before = next(p for p in forecast.forecast(user["id"], today=today, include_excluded=True) if "pellegrino" in p["name"].lower())
+    assert before["include"] is False
+    assert before["score"] < 25
+    forecast.set_vote(user["id"], before["key"], "up")
+    after = next(p for p in forecast.forecast(user["id"], today=today) if "pellegrino" in p["name"].lower())
+    assert after["include"] is True
+    assert after["score"] >= 55
+    assert after["vote"] == "up"
+    assert after["reason"] == "occasional_small_pack"
+    on_list = [p for p in shopping_list(user["id"], horizon_days=30, today=today) if "pellegrino" in p["name"].lower()]
+    assert on_list
+    assert on_list[0]["likely"] >= 55
+    assert on_list[0]["likely_vote"] == "up"
+
+
+def test_thumbs_down_cuts_score_and_drops_from_shopping_list(bf):
+    user = bf.db.create_user("thumbdown@example.com", "secret1")
+    bread = {"name": "White Bread", "qty": 1, "unit_price": 4, "line_total": 4, "barcode": "b1"}
+    for i, day in enumerate(("2026-07-20", "2026-07-27", "2026-08-03", "2026-08-10", "2026-08-17")):
+        _buy(bf, user["id"], f"BR{i}", day, [bread])
+    today = date(2026, 8, 24)
+    before = next(p for p in forecast.forecast(user["id"], today=today) if p["name"] == "White Bread")
+    assert before["include"] is True
+    assert before["score"] >= 40
+    names = [p["name"] for p in shopping_list(user["id"], horizon_days=7, today=today)]
+    assert "White Bread" in names
+    forecast.set_vote(user["id"], before["key"], "down")
+    assert forecast.forecast(user["id"], today=today) == []
+    held = next(p for p in forecast.forecast(user["id"], today=today, include_excluded=True) if p["name"] == "White Bread")
+    assert held["include"] is False
+    assert held["score"] == int(round(before["score"] * 0.2))
+    assert held["vote"] == "down"
+    assert "White Bread" not in [p["name"] for p in shopping_list(user["id"], horizon_days=7, today=today)]

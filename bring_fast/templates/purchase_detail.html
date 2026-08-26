@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_shelf_shapes.html" as shapes with context %}
 {% block body %}
 <p class="off"><a href="/purchases?range={{ range }}">← Purchases</a></p>
 <div class="prod-head">
@@ -9,7 +10,7 @@
   {% endif %}
   <div class="copy">
     <h1>{{ product.name }}</h1>
-    <p class="lead">{{ product.frequency }} · likely {{ product.likely or 0 }} · {{ product.times_bought }} buys · {{ product.per_year }}/yr</p>
+    <div class="lead">{{ product.frequency }} · <span class="likely-line">likely {{ product.likely or 0 }}{{ shapes.votes(product) }}</span> · {{ product.times_bought }} buys · {{ product.per_year }}/yr</div>
     {% if product.receipt_name and product.receipt_name != product.name %}
     <p class="skus">Receipt {{ product.receipt_name }}</p>
     {% endif %}
