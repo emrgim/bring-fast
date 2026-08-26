@@ -568,23 +568,31 @@
       .purchases-board .table-wrap, .desk-table { display:none !important; }
       .mlist { display:flex; flex-direction:column; gap:8px; }
       .mcard {
-        display:flex; gap:12px; align-items:center;
+        display:flex; gap:12px; align-items:flex-start;
         padding:12px; border:1px solid var(--line); border-radius:0;
         background:var(--card); color:inherit; min-height:72px; text-decoration:none;
       }
       .mcard > a.mcard-go:first-child { flex:0 0 56px; }
       .mcard .thumb { width:56px; height:56px; flex:0 0 56px; }
       .mcard .copy { flex:1; min-width:0; }
-      .mcard .copy b { display:block; font-size:15px; line-height:1.25; font-weight:700; }
+      /* Title and spend share the top row, so the figure is read with the
+         name. Frequency and likely then take the full width under it,
+         instead of being squeezed beside the price. */
+      .mcard-top { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
+      .mcard-top > .mcard-go:not(.amt) { flex:1 1 auto; min-width:0; }
+      .mcard .copy b { display:block; font-size:15px; line-height:1.25; font-weight:700; overflow-wrap:anywhere; }
       .mcard .copy .off { margin-top:2px; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .pair { display:flex; gap:6px; margin-top:6px; }
       .pair span, .pair .likely-box {
         flex:1; min-width:0; border:1px dashed var(--line); border-radius:0;
         padding:4px 6px; font-size:11px; line-height:1.2; color:var(--muted);
       }
-      .pair b { display:block; color:var(--ink); font-size:12px; font-weight:700; }
+      .pair b { display:block; color:var(--ink); font-size:12px; font-weight:700; overflow-wrap:normal; }
       .pair b.likely-line { display:flex; align-items:center; gap:6px; }
-      .mcard .amt { text-align:right; font-weight:700; font-size:14px; white-space:nowrap; }
+      .mcard .amt {
+        flex:0 0 auto; text-align:right; font-weight:700; font-size:15px;
+        line-height:1.25; white-space:nowrap;
+      }
       .mcard .amt small { display:block; font-weight:600; color:var(--muted); font-size:11px; }
       .likely-votes button { min-height:28px; width:auto; }
       .msort { margin:0 0 10px; padding:0 0 4px; }
