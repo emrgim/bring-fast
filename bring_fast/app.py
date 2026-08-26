@@ -7,7 +7,7 @@ import secrets
 import sys
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from fastapi import FastAPI, Form, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -204,7 +204,9 @@ def _remember(request: Request, user: dict[str, Any] | None) -> None:
     db.set_last_view(user["id"], path, str(request.url.query or ""))
 
 
-def _window_query(range_key: str, grain: str, start: str = "", end: str = "", day: str = "") -> str:
+def _window_query(
+    range_key: str, grain: str, start: str = "", end: str = "", day: str = "", dept: str = ""
+) -> str:
     pairs = [("range", range_key), ("grain", grain)]
     if range_key == "custom":
         if start:
@@ -213,13 +215,31 @@ def _window_query(range_key: str, grain: str, start: str = "", end: str = "", da
             pairs.append(("end", end))
     if day:
         pairs.append(("day", day))
+    if dept:
+        pairs.append(("dept", dept))
     return urlencode(pairs)
 
 
-def _remember_dashboard(user: dict[str, Any], request: Request, range_key: str, grain: str, start: str, end: str, day: str) -> None:
+def _window_with_dept(window_q: str, dept: str) -> str:
+    pairs = [(key, val) for key, val in parse_qsl(window_q, keep_blank_values=True) if key != "dept"]
+    if dept:
+        pairs.append(("dept", dept))
+    return urlencode(pairs)
+
+
+def _remember_dashboard(
+    user: dict[str, Any],
+    request: Request,
+    range_key: str,
+    grain: str,
+    start: str,
+    end: str,
+    day: str,
+    dept: str = "",
+) -> None:
     q = str(request.url.query or "")
     if "range" not in request.query_params and "grain" not in request.query_params:
-        q = _window_query(range_key, grain, start, end, day)
+        q = _window_query(range_key, grain, start, end, day, dept)
     db.set_last_view(user["id"], "/dashboard", q)
 
 
@@ -237,14 +257,15 @@ def _remember_purchases(
     store_q: str,
 ) -> None:
     rest = [("sort", sort), ("dir", direction)]
-    if dept:
-        rest.append(("dept", dept))
     if store_q:
         rest.append(("store", store_q))
     has_window = any(key in request.query_params for key in _WINDOW_KEYS)
     extra = urlencode(rest)
     if has_window or not db.get_tab_query(user["id"], "/dashboard"):
-        win = _window_query(range_key, grain, start, end, day)
+        win = _window_query(range_key, grain, start, end, day, dept)
+        q = win + (("&" + extra) if extra else "")
+    elif "dept" in request.query_params:
+        win = _window_with_dept(db.get_tab_query(user["id"], "/dashboard"), dept)
         q = win + (("&" + extra) if extra else "")
     else:
         q = extra
@@ -401,6 +422,7 @@ def spend_home(
     end: str = "",
     grain: str = "monthly",
     day: str = "",
+    dept: str = "",
 ):
     user = current_user(request)
     if not user:
@@ -410,8 +432,9 @@ def spend_home(
         if q:
             return RedirectResponse("/dashboard?" + q, status_code=303)
     grain = grain if grain in purchases.GRAINS else "monthly"
+    dept = purchases.normalize_dept(dept)
     since, until, range_key = purchases.resolve_window(user["id"], range, start, end)
-    raw_days = purchases.daily_spend(user["id"], since=since, until=until)
+    raw_days = purchases.daily_spend(user["id"], since=since, until=until, dept=dept)
     days = purchases.bucket_series(raw_days, grain)
     if grain == "daily":
         days = purchases.fill_daily_calendar(days, since, until)
@@ -432,10 +455,11 @@ def spend_home(
         direction="desc",
         since=focus_since,
         until=focus_until,
+        dept=dept,
         limit=8,
     )
-    trend = purchases.price_trend(user["id"], since=focus_since, until=focus_until, grain=grain)
-    _remember_dashboard(user, request, range_key, grain, start, end, day)
+    trend = purchases.price_trend(user["id"], since=focus_since, until=focus_until, grain=grain, dept=dept)
+    _remember_dashboard(user, request, range_key, grain, start, end, day, dept)
     return templates.TemplateResponse(
         request,
         "home.html",
@@ -458,6 +482,7 @@ def spend_home(
             "start": start or (since or ""),
             "end": end or until.isoformat(),
             "day": day,
+            "dept": dept,
         },
     )
 

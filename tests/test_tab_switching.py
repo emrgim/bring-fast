@@ -1,7 +1,7 @@
 """Dock taps are bare /dashboard /purchases /stores.
 
-Range, grain and the custom window are shared chrome on Home and Buys.
-Sort, department and store stay on Buys only.
+Range, grain, the custom window and department are shared chrome on Home and Buys.
+Sort and store stay on Buys only.
 """
 
 
@@ -44,7 +44,8 @@ def test_range_chosen_on_buys_is_on_home(bf, client):
 def test_sort_survives_a_range_change_on_the_other_tab(bf, client):
     _signin(bf, client, "sortkeep@example.com")
     client.get("/purchases", params={"sort": "likely", "dir": "desc", "dept": "Drinks", "range": "1m", "grain": "monthly"})
-    client.get("/dashboard", params={"range": "1y", "grain": "yearly"})
+    # Home range chips keep the selected department, same as Buys.
+    client.get("/dashboard", params={"range": "1y", "grain": "yearly", "dept": "Drinks"})
     dest, buys = _tap(client, "/purchases")
     assert "sort=likely" in dest
     assert "dept=Drinks" in dest
@@ -52,6 +53,7 @@ def test_sort_survives_a_range_change_on_the_other_tab(bf, client):
     assert "grain=yearly" in dest
     dest, home = _tap(client, "/dashboard")
     assert "range=1y" in dest
+    assert "dept=Drinks" in dest
     assert "sort=" not in dest
 
 
@@ -63,7 +65,8 @@ def test_full_cycle_home_buys_stores_home_buys(bf, client):
 
     dest, home = _tap(client, "/dashboard")
     assert "range=3m" in dest and "grain=weekly" in dest
-    assert 'class="on" href="/dashboard?range=3m&grain=weekly"' in home.text
+    assert "dept=Drinks" in dest
+    assert 'class="on" href="/dashboard?range=3m&grain=weekly&dept=Drinks"' in home.text
 
     dest, buys = _tap(client, "/purchases")
     assert "sort=likely" in dest
@@ -201,6 +204,7 @@ def test_interleaved_filter_changes_keep_the_latest(bf, client):
 
     dest, _home = _tap(client, "/dashboard")
     assert "range=1y" in dest and "grain=yearly" in dest
+    assert "dept=Drinks" in dest
     assert "range=1w" not in dest
     dest, _buys = _tap(client, "/purchases")
     assert "sort=likely" in dest and "dept=Drinks" in dest
@@ -226,6 +230,8 @@ def test_buys_store_and_dept_survive_home_and_stores(bf, client):
     )
     dest, home = _tap(client, "/dashboard")
     assert "range=2y" in dest and "grain=monthly" in dest
+    assert "dept=Edible" in dest
+    assert 'class="on" href="/dashboard?range=2y&grain=monthly&dept=Edible"' in home.text
     client.get("/stores")
     dest, buys = _tap(client, "/purchases")
     assert "sort=frequency" in dest
@@ -237,3 +243,21 @@ def test_buys_store_and_dept_survive_home_and_stores(bf, client):
     assert ">Edible<" in buys.text
     assert "Store ·" in buys.text
     assert home.status_code == 200
+
+
+def test_department_chosen_on_home_is_on_buys(bf, client):
+    _signin(bf, client, "homedept@example.com")
+    client.get("/dashboard", params={"range": "1y", "grain": "yearly", "dept": "Drinks"})
+    dest, buys = _tap(client, "/purchases")
+    assert "dept=Drinks" in dest
+    assert "range=1y" in dest
+    assert ">Drinks<" in buys.text
+    dest, home = _tap(client, "/dashboard")
+    assert "dept=Drinks" in dest
+    assert 'class="on" href="/dashboard?range=1y&grain=yearly&dept=Drinks"' in home.text
+    client.get("/dashboard", params={"range": "1y", "grain": "yearly"})
+    dest, buys = _tap(client, "/purchases")
+    assert "dept=" not in dest
+    dest, home = _tap(client, "/dashboard")
+    assert "dept=" not in dest
+    assert 'class="on" href="/dashboard?range=1y&grain=yearly"' in home.text

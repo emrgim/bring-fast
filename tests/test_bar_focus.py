@@ -196,9 +196,11 @@ def test_custom_date_fields_tick_when_they_are_the_filter(bf, client):
 
     custom = client.get(f"/dashboard?{WINDOW}&grain=monthly").text
     head = custom[custom.index('<header class="app-head">') : custom.index("</header>")]
-    # The two date fields are the selected range, not a chip.
+    range_row = head[head.index('aria-label="Range"') :]
+    # The two date fields are the selected range, not a chip. Department All
+    # still uses a range= href, so only the Range row is checked here.
     assert 'action="/dashboard" class="on"' in head
-    assert 'class="on" href="/dashboard?range=' not in head
+    assert 'class="on" href="/dashboard?range=' not in range_row
     assert ".filters form.on input[type=date]" in custom
     assert "animation: range-tick 1.8s steps(2, end) infinite" in custom
     assert "@keyframes range-tick" in custom

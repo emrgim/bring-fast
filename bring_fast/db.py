@@ -891,7 +891,8 @@ def get_oauth_client(client_id: str) -> dict[str, Any] | None:
 
 
 _TAB_PATHS = ("/dashboard", "/purchases")
-_WINDOW_KEYS = ("range", "grain", "start", "end", "day")
+# Shared Home/Buys chrome. Sort and store stay in the Buys rest.
+_WINDOW_KEYS = ("range", "grain", "start", "end", "day", "dept")
 
 
 def _tab_queries(row: sqlite3.Row | None) -> dict[str, str]:
@@ -938,8 +939,19 @@ def set_last_view(user_id: int, path: str, query: str = "") -> bool:
     if path in _TAB_PATHS:
         tabs = _tab_queries(row)
         window, rest = _split_query(query)
+        rest = [(key, val) for key, val in rest if key != "dept"]
         if window:
             tabs["window"] = urlencode(window)
+            # Department used to live in the Buys-only rest. Drop leftovers so
+            # All on Home actually clears it on Buys too.
+            if path != "/purchases" and "/purchases" in tabs:
+                tabs["/purchases"] = urlencode(
+                    [
+                        (key, val)
+                        for key, val in parse_qsl(tabs["/purchases"], keep_blank_values=True)
+                        if key != "dept"
+                    ]
+                )
         if path == "/purchases":
             tabs[path] = urlencode(rest)
         resume = (

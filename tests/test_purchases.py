@@ -661,6 +661,13 @@ def test_price_trend_is_mean_of_product_changes(bf, client):
     assert trend["series"][0]["index"] == 100
     assert trend["chart_svg"]
     assert "currentColor" in trend["chart_svg"]
+    drinks = bf.purchases.price_trend(user["id"], dept="Drinks")
+    assert drinks["products"] == 1
+    assert drinks["up"] == 1
+    assert drinks["down"] == 0
+    edible = bf.purchases.price_trend(user["id"], dept="Edible")
+    assert edible["products"] == 1
+    assert edible["down"] == 1
     client.post("/login", data={"email": "trend@example.com", "password": "secret1", "intent": "signin"})
     html = client.get("/dashboard?range=all&grain=monthly").text
     assert "Price trend" in html

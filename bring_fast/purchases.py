@@ -1297,6 +1297,7 @@ def price_trend(
     since: str | None = None,
     until: date | None = None,
     grain: str = "monthly",
+    dept: str = "",
 ) -> dict[str, Any]:
     """Mean first→last unit-price change, plus a time series of that same index."""
     con = db.connect()
@@ -1310,7 +1311,7 @@ def price_trend(
         args.append(until.isoformat())
     rows = con.execute(
         f"""
-        SELECT it.product_key, i.invoice_date, it.qty, it.unit_price, it.line_total
+        SELECT it.product_key, i.invoice_date, it.qty, it.unit_price, it.line_total, it.name
         FROM invoice_items it
         JOIN invoices i ON i.id = it.invoice_id
         {where}
@@ -1319,8 +1320,11 @@ def price_trend(
         args,
     ).fetchall()
     con.close()
+    want_dept = normalize_dept(dept)
     by_prod: dict[str, list[tuple[str, float]]] = {}
     for r in rows:
+        if want_dept and classify_dept(r["name"] or "") != want_dept:
+            continue
         price = _unit_price(dict(r))
         day = (r["invoice_date"] or "")[:10]
         if price is None or price <= 0 or not day:
