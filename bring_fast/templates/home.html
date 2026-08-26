@@ -2,13 +2,19 @@
 {% import "_shelf_shapes.html" as shapes with context %}
 {% block under_nav %}
 <div class="filters">
+  <div class="chip-row" aria-label="Department">
+    {% for key, label in [('','All'),('Edible','Edible'),('Drinks','Drinks')] %}
+    <a class="{% if dept==key %}on{% endif %}" href="/dashboard?range={{ range }}&grain={{ grain }}{% if key %}&dept={{ key }}{% endif %}">{{ label }}</a>
+    {% endfor %}
+  </div>
   <div class="chip-row" aria-label="Range">
-    {% for key, label, title in [('1w','1w','1 week'),('1m','1m','1 month'),('3m','3m','3 months'),('1y','1y','1 year'),('all','All','All')] %}
-    <a class="{% if range==key %}on{% endif %}" href="/dashboard?range={{ key }}&grain={{ grain }}" title="{{ title }}">{{ label }}</a>
+    {% for key, label, title in [('1w','1w','1 week'),('2w','2w','2 weeks'),('1m','1m','1 month'),('3m','3m','3 months'),('1y','1y','1 year'),('2y','2y','2 years'),('3y','3y','3 years'),('all','All','All')] %}
+    <a class="{% if range==key %}on{% endif %}" href="/dashboard?range={{ key }}&grain={{ grain }}{% if dept %}&dept={{ dept }}{% endif %}" title="{{ title }}">{{ label }}</a>
     {% endfor %}
     <form method="get" action="/dashboard"{% if range=='custom' %} class="on"{% endif %}>
       <input type="hidden" name="grain" value="{{ grain }}"/>
       <input type="hidden" name="range" value="custom"/>
+      {% if dept %}<input type="hidden" name="dept" value="{{ dept }}"/>{% endif %}
       <input type="date" name="start" value="{{ start }}"/>
       <input type="date" name="end" value="{{ end }}"/>
       <button type="submit">Apply</button>
@@ -29,7 +35,7 @@
     </div>
     <div class="grain">
       {% for key, label in [('daily','Daily'),('weekly','Weekly'),('monthly','Monthly'),('yearly','Yearly')] %}
-      <a class="{% if grain==key %}on{% endif %}" href="/dashboard?range={{ range }}&grain={{ key }}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}">{{ label }}</a>
+      <a class="{% if grain==key %}on{% endif %}" href="/dashboard?range={{ range }}&grain={{ key }}{% if dept %}&dept={{ dept }}{% endif %}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}">{{ label }}</a>
       {% endfor %}
     </div>
   </div>
@@ -44,7 +50,7 @@
   <div class="bars-scroller">
     <div class="bars" id="spend-bars">
       {% for d in days %}
-      <a class="bar {% if grain!='daily' %}wide{% endif %} {% if d.selected %}on{% endif %}" href="/dashboard?range={{ range }}&grain={{ grain }}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}{% if not d.selected %}&day={{ d.date }}{% endif %}" title="{{ d.label }} · AED {{ '%.2f'|format(d.spend) }}">
+      <a class="bar {% if grain!='daily' %}wide{% endif %} {% if d.selected %}on{% endif %}" href="/dashboard?range={{ range }}&grain={{ grain }}{% if dept %}&dept={{ dept }}{% endif %}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}{% if not d.selected %}&day={{ d.date }}{% endif %}" title="{{ d.label }} · AED {{ '%.2f'|format(d.spend) }}">
         <i style="height:{{ d.pct }}%"></i>
       </a>
       {% endfor %}

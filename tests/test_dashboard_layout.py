@@ -59,14 +59,51 @@ def test_range_filter_sits_under_the_title_bar(bf, client):
     client.post("/login", data={"email": "filterbar@example.com", "password": "secret1", "intent": "signin"})
     html = client.get("/dashboard?range=all&grain=monthly").text
 
-    # The 1w/1m/3m/1y/All row is header chrome: immediately under “Bring Fast”,
-    # not after the spend card and the price-trend widgets.
+    # The 1w/2w/1m/3m/1y/2y/3y/All row is header chrome: immediately under
+    # “Bring Fast”, not after the spend card and the price-trend widgets.
+    # Department sits in the same chrome as Buys.
     head = html[html.index('<header class="app-head">') : html.index("</header>")]
     assert 'class="filters"' in head
+    assert 'aria-label="Department"' in head
     assert 'aria-label="Range"' in head
+    assert ">Edible<" in head
+    assert ">Drinks<" in head
+    assert ">2w<" in head
+    assert ">2y<" in head
+    assert ">3y<" in head
     assert ">All<" in head
     assert html.index("</header>") < html.index('<div class="dash">')
     assert html.count('class="filters"') == 1
+
+
+def test_home_department_filter_hides_the_other_aisle(bf, client):
+    user = bf.db.create_user("homedept@example.com", "secret1")
+    bf.purchases.upsert_invoice(
+        user["id"],
+        {
+            "retailer": "carrefour",
+            "invoice_no": "both",
+            "invoice_date": "2026-08-10",
+            "items": [
+                {"name": "Rice", "qty": 1, "unit_price": 70, "line_total": 70, "barcode": "1"},
+                {"name": "Heineken Cans 50 cl", "qty": 1, "unit_price": 15, "line_total": 15, "barcode": "2"},
+            ],
+        },
+    )
+    client.post("/login", data={"email": "homedept@example.com", "password": "secret1", "intent": "signin"})
+    all_html = client.get("/dashboard?range=all&grain=daily").text
+    assert "AED 85.00" in all_html
+    assert "Rice" in all_html
+    assert "Heineken" in all_html
+    edible = client.get("/dashboard?range=all&grain=daily&dept=Edible").text
+    assert "AED 70.00" in edible
+    assert "Rice" in edible
+    assert "Heineken" not in edible
+    assert 'class="on" href="/dashboard?range=all&grain=daily&dept=Edible"' in edible
+    drinks = client.get("/dashboard?range=all&grain=daily&dept=Drinks").text
+    assert "AED 15.00" in drinks
+    assert "Heineken" in drinks
+    assert "Rice" not in drinks
 
 
 def test_buys_date_fields_show_the_window_when_all_is_selected(bf, client):
