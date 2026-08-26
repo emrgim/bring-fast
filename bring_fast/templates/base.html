@@ -716,6 +716,45 @@
       if(sc) sc.scrollLeft=sc.scrollWidth;
     })();
     (function(){
+      /* A tap on a bar sets ?day= and the card follows that bucket. Leaving
+         the selection — click outside the bar, or Escape — drops day and
+         returns the global window. A receipt sheet on this page takes Escape
+         first, so a slip never loses the day behind it. */
+      function globalUrl(){
+        var u=new URL(location.href);
+        if(!u.searchParams.has("day")) return "";
+        u.searchParams.delete("day");
+        return u.pathname+u.search;
+      }
+      function clearDay(){
+        var href=globalUrl();
+        if(!href) return false;
+        location.assign(href);
+        return true;
+      }
+      function closeSheet(){
+        var sheet=document.getElementById("receipt-sheet");
+        if(!sheet || !sheet.classList.contains("open")) return false;
+        sheet.classList.remove("open");
+        var frame=document.getElementById("receipt-frame");
+        if(frame) frame.src="";
+        return true;
+      }
+      var dash=document.querySelector(".dash");
+      if(dash){
+        dash.addEventListener("click", function(e){
+          if(e.target.closest(".bar")) return;
+          if(e.target.closest("a, button, input, label, form")) return;
+          if(clearDay()) e.preventDefault();
+        });
+      }
+      document.addEventListener("keydown", function(e){
+        if(e.key!=="Escape") return;
+        if(closeSheet()){ e.preventDefault(); return; }
+        if(clearDay()) e.preventDefault();
+      });
+    })();
+    (function(){
       var pin=document.getElementById("spend-pin");
       var avg=document.getElementById("spend-avg");
       var nav=document.querySelector("nav.topnav");

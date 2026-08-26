@@ -43,7 +43,7 @@
   <div class="bars-scroller">
     <div class="bars" id="spend-bars">
       {% for d in days %}
-      <a class="bar {% if grain!='daily' %}wide{% endif %} {% if d.selected %}on{% endif %}" href="/dashboard?range={{ range }}&grain={{ grain }}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}&day={{ d.date }}" title="{{ d.label }} · AED {{ '%.2f'|format(d.spend) }}">
+      <a class="bar {% if grain!='daily' %}wide{% endif %} {% if d.selected %}on{% endif %}" href="/dashboard?range={{ range }}&grain={{ grain }}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}{% if not d.selected %}&day={{ d.date }}{% endif %}" title="{{ d.label }} · AED {{ '%.2f'|format(d.spend) }}">
         <i style="height:{{ d.pct }}%"></i>
       </a>
       {% endfor %}
