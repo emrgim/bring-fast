@@ -788,8 +788,117 @@ def test_clicking_a_day_lists_only_that_days_products(bf, client):
     assert 'class="bar  on"' in html or " bar on" in html or "on" in html
 
 
+def _two_stores(bf, email="stores@example.com"):
+    user = bf.db.create_user(email, "secret1")
+    bf.purchases.upsert_invoice(
+        user["id"],
+        {
+            "retailer": "carrefour",
+            "store_name": "Carrefour City Center Meaisem",
+            "invoice_no": "c1",
+            "invoice_date": "2026-08-10",
+            "items": [
+                {"name": "Carrefour Milk", "qty": 1, "unit_price": 10, "line_total": 10, "barcode": "111"},
+                {"name": "Shared Oil", "qty": 1, "unit_price": 20, "line_total": 20, "barcode": "333"},
+            ],
+        },
+    )
+    bf.purchases.upsert_invoice(
+        user["id"],
+        {
+            "retailer": "grandiose",
+            "store_name": "Grandiose",
+            "invoice_no": "g1",
+            "invoice_date": "2026-08-12",
+            "items": [
+                {"name": "Grandiose Bread", "qty": 1, "unit_price": 5, "line_total": 5, "barcode": "222"},
+                {"name": "Shared Oil", "qty": 1, "unit_price": 22, "line_total": 22, "barcode": "333"},
+            ],
+        },
+    )
+    return user
 
 
+def test_normalize_stores_keeps_known_ids_in_order(bf):
+    assert bf.purchases.normalize_stores("carrefour,grandiose,nope") == ["carrefour", "grandiose"]
+    assert bf.purchases.normalize_stores(["mmi", "carrefour", "mmi"]) == ["mmi", "carrefour"]
+    assert bf.purchases.normalize_stores("") == []
+    assert bf.purchases.normalize_stores("Carrefour") == ["carrefour"]
+
+
+def test_list_products_filters_by_one_or_more_stores(bf):
+    user = _two_stores(bf, "list@example.com")
+    carrefour = {p["name"]: p for p in bf.purchases.list_products(user["id"], stores=["carrefour"])}
+    assert "Carrefour Milk" in carrefour
+    assert "Grandiose Bread" not in carrefour
+    assert carrefour["Shared Oil"]["times_bought"] == 1
+    assert carrefour["Shared Oil"]["spend_total"] == 20
+
+    both = {p["name"]: p for p in bf.purchases.list_products(user["id"], stores=["carrefour", "grandiose"])}
+    assert set(both) == {"Carrefour Milk", "Grandiose Bread", "Shared Oil"}
+    assert both["Shared Oil"]["times_bought"] == 2
+    assert both["Shared Oil"]["spend_total"] == 42
+
+
+def test_purchases_page_store_menu_filters_the_shelf(bf, client):
+    _two_stores(bf, "page@example.com")
+    client.post("/login", data={"email": "page@example.com", "password": "secret1", "intent": "signin"})
+
+    page = client.get("/purchases")
+    assert page.status_code == 200
+    assert 'id="store-pick"' in page.text
+    assert ">Name<" in page.text
+    assert page.text.index(">Name<") < page.text.index('id="store-pick"')
+    assert "Carrefour UAE" in page.text
+    assert "Grandiose" in page.text
+    assert "Carrefour Milk" in page.text
+    assert "Grandiose Bread" in page.text
+
+    one = client.get("/purchases", params={"store": "carrefour"})
+    assert one.status_code == 200
+    assert "Carrefour Milk" in one.text
+    assert "Grandiose Bread" not in one.text
+    assert "Shared Oil" in one.text
+    assert "Store · 1" in one.text
+    assert "store=carrefour" in one.text
+    assert 'data-shelf="' in one.text
+    assert "store=carrefour" in one.text[one.text.index("data-shelf=") :]
+
+    two = client.get("/purchases", params=[("store", "carrefour"), ("store", "grandiose")])
+    assert "Carrefour Milk" in two.text
+    assert "Grandiose Bread" in two.text
+    assert "Store · 2" in two.text
+
+    comma = client.get("/purchases", params={"store": "grandiose,carrefour"})
+    assert "Grandiose Bread" in comma.text
+    assert "Carrefour Milk" in comma.text
+
+
+def test_store_filter_changes_spend_and_receipts(bf, client):
+    user = _two_stores(bf, "kpi@example.com")
+    days = bf.purchases.daily_spend(user["id"], stores=["carrefour"])
+    assert sum(d["spend"] for d in days) == 30
+    assert bf.purchases.invoice_count(user["id"], stores=["carrefour"]) == 1
+    assert bf.purchases.invoice_count(user["id"], stores=["carrefour", "grandiose"]) == 2
+
+    client.post("/login", data={"email": "kpi@example.com", "password": "secret1", "intent": "signin"})
+    html = client.get("/purchases", params={"store": "grandiose"}).text
+    assert "AED 27" in html
+    assert "<b>1</b> of 2 receipts" in html
+
+
+def test_purchases_view_restores_store_filter(bf, client):
+    _two_stores(bf, "keepstore@example.com")
+    client.post("/login", data={"email": "keepstore@example.com", "password": "secret1", "intent": "signin"})
+    client.get("/purchases", params={"sort": "name", "dir": "asc", "store": "mmi,carrefour"})
+    r = client.get("/purchases", follow_redirects=False)
+    assert r.status_code == 303
+    loc = r.headers["location"]
+    assert "store=" in loc
+    assert "carrefour" in loc
+    # mmi was asked for but this account has no MMI invoices; the id is still
+    # a known store so the view keeps it.
+    assert "mmi" in loc
 
 
 

@@ -161,6 +161,46 @@ def test_a_batch_keeps_the_window_and_the_order_of_its_page(bf, client):
     assert re.findall(r"<b>(Water \d+)</b>", batch) == names[note["batch"] :]
 
 
+def test_a_batch_keeps_the_store_filter_of_its_page(bf, client):
+    user = _signed_in(bf, client, "storefilter@example.com", count=0)
+    bf.purchases.upsert_invoice(
+        user["id"],
+        {
+            "retailer": "carrefour",
+            "invoice_no": "CF1",
+            "invoice_date": "2026-08-10",
+            "items": [
+                {"name": f"Carrefour {n}", "qty": 1, "unit_price": 5, "line_total": 5, "barcode": str(8000 + n)}
+                for n in range(30)
+            ],
+        },
+    )
+    bf.purchases.upsert_invoice(
+        user["id"],
+        {
+            "retailer": "grandiose",
+            "invoice_no": "GR1",
+            "invoice_date": "2026-08-11",
+            "items": [
+                {"name": f"Grandiose {n}", "qty": 1, "unit_price": 9, "line_total": 9, "barcode": str(8100 + n)}
+                for n in range(30)
+            ],
+        },
+    )
+    page = client.get("/purchases?range=all&grain=daily&store=carrefour&sort=name&dir=asc").text
+    note = _note(page)
+
+    assert note["total"] == 30
+    assert "store=carrefour" in note["url"]
+    assert not re.findall(r"<b>(Grandiose \d+)</b>", page)
+    names = sorted(f"Carrefour {n}" for n in range(30))
+    assert re.findall(r"<b>(Carrefour \d+)</b>", page) == names[: note["batch"]]
+
+    batch = client.get(f"{note['url']}&offset={note['next']}&limit={note['batch']}").text
+    assert not re.findall(r"<b>(Grandiose \d+)</b>", batch)
+    assert re.findall(r"<b>(Carrefour \d+)</b>", batch) == names[note["batch"] :]
+
+
 def test_a_batch_is_never_the_whole_shelf(bf, client):
     _signed_in(bf, client, "cap@example.com", count=90)
     note = _note(client.get("/purchases?range=all&grain=daily").text)

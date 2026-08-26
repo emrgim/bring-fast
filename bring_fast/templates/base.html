@@ -367,15 +367,43 @@
     .grain, .chip-row, .msort {
       display:flex; gap:4px; flex-wrap:wrap; align-items:center;
     }
-    .grain a, .chip-row a, .msort a, .filters button {
+    .msort-wrap { position:relative; }
+    .grain a, .chip-row a, .msort a, .msort summary, .filters button {
       color:var(--muted); border:1px solid var(--line); border-radius:0;
       padding:4px 8px; font-size:11px; font-weight:700; letter-spacing:.04em;
       text-decoration:none; line-height:1.2; background:transparent;
       min-height:0; width:auto; cursor:pointer; font-family:inherit;
     }
     .grain a { text-transform:uppercase; }
-    .grain a.on, .chip-row a.on, .msort a.on {
+    .grain a.on, .chip-row a.on, .msort a.on, .msort .store-pick.on summary, .msort .store-pick[open] summary {
       color:var(--on-fill); background:var(--fill); border-color:var(--fill);
+    }
+    .store-pick { position:relative; flex:0 0 auto; }
+    .store-pick summary { list-style:none; display:inline-block; }
+    .store-pick summary::-webkit-details-marker { display:none; }
+    .store-pick summary:after { content:" ▾"; }
+    .store-menu {
+      position:absolute; right:0; top:calc(100% + 4px); z-index:25;
+      min-width:220px; padding:8px; display:flex; flex-direction:column; gap:2px;
+      background:var(--bg); border:1px solid var(--line); color:var(--ink);
+    }
+    .store-menu .store-all {
+      display:block; padding:8px 8px; font-size:12px; font-weight:700;
+      text-decoration:none; color:var(--ink); border:1px solid transparent;
+    }
+    .store-menu .store-all.on, .store-menu label.on { background:var(--fill); color:var(--on-fill); }
+    .store-menu label {
+      display:flex; align-items:center; gap:8px; margin:0; padding:8px;
+      font-size:12px; font-weight:700; letter-spacing:0; text-transform:none;
+      color:inherit; cursor:pointer;
+    }
+    .store-menu input[type=checkbox] {
+      width:16px; height:16px; flex:0 0 16px; padding:0; margin:0;
+      border:1px solid var(--ink); background:var(--bg); cursor:pointer;
+    }
+    .store-menu input[type=checkbox]:checked { background:var(--fill); }
+    .store-menu button {
+      margin-top:6px; width:100%; min-height:36px; padding:8px 12px;
     }
     .filters button {
       background:var(--fill); color:var(--on-fill); border-color:var(--fill);
@@ -488,9 +516,13 @@
         overscroll-behavior:contain; gap:4px;
       }
       .chip-row { padding:0 12px; }
-      .grain a, .chip-row a, .msort a, .filters button {
+      .grain a, .chip-row a, .msort a, .msort summary, .filters button {
         flex:0 0 auto; padding:5px 8px; font-size:11px;
       }
+      .store-pick { position:static; }
+      .store-menu { left:0; right:0; min-width:0; }
+      .store-menu label { min-height:44px; }
+      .store-menu input[type=checkbox] { width:20px; height:20px; flex-basis:20px; }
       .filters form { display:flex; }
       /* Under 16px iOS zooms the whole page the moment a field takes focus,
          and never zooms back out. The row scrolls sideways, so it fits. */
@@ -564,7 +596,9 @@
       .dock a.on { color:var(--on-fill); background:var(--fill); }
     }
     @media (min-width:721px) {
-      .mlist, .msort, .dock { display:none !important; }
+      .mlist, .dock { display:none !important; }
+      .msort > a { display:none; }
+      .msort { display:flex; justify-content:flex-end; margin:0 0 10px; }
       .purchases-board {
         /* vh first for Safari before 15.4, dvh after: the second line wins
            wherever it is understood. */
