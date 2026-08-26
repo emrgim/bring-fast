@@ -250,6 +250,7 @@ def search(query: str, limit: int = 8) -> dict[str, Any]:
                   name
                   url_key
                   canonical_url
+                  small_image { url }
                   price_range { minimum_price { regular_price { value currency } } }
                 }
               }
@@ -293,6 +294,7 @@ def search(query: str, limit: int = 8) -> dict[str, Any]:
                 "name": it.get("name") or sku,
                 "price": price,
                 "currency": currency,
+                "image_url": ((it.get("small_image") or {}).get("url") or ""),
                 "url": canon if str(canon).startswith("http") else _product_url(str(it.get("url_key") or ""), sku),
                 "available": in_stock is True,
                 "area": (_AREA or {}).get("area_name"),

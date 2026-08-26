@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import time
 from datetime import date, datetime, timedelta
@@ -279,6 +280,7 @@ def upsert_invoice(user_id: int, parsed: dict[str, Any], *, gmail_id: str = "") 
     ).fetchone()
     invoice_id = int(row["id"])
     con.execute("DELETE FROM invoice_items WHERE invoice_id=?", (invoice_id,))
+    pending: list[tuple[str, str, str]] = []
     for it in parsed["items"]:
         name = (it.get("name") or "").strip()
         if not name:
@@ -298,8 +300,21 @@ def upsert_invoice(user_id: int, parsed: dict[str, Any], *, gmail_id: str = "") 
                 product_key(barcode, name),
             ),
         )
+        pending.append((product_key(barcode, name), name, barcode))
     con.commit()
     con.close()
+    if pending and os.environ.get("BRINGFAST_FETCH_IMAGES", "1").strip().lower() not in {"0", "false", "no"}:
+        from .product_images import attach_for_receipt
+
+        seen: set[str] = set()
+        for key, name, barcode in pending:
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                attach_for_receipt(parsed["retailer"], key, name, barcode)
+            except Exception:
+                continue
     forget_shelf()
     return invoice_id
 

@@ -69,7 +69,7 @@ app.add_middleware(
 # app's own markup is the difference between a tab that opens and a tab that
 # arrives. Fonts, logos, product shots and receipt scans are already compressed
 # formats, and the MCP wire says no-transform, so those are handed on untouched.
-AS_SENT = ("/static/", "/receipts/", "/favicon.ico", "/apple-touch-icon.png", "/mcp")
+AS_SENT = ("/static/", "/receipts/", "/product-images/", "/favicon.ico", "/apple-touch-icon.png", "/mcp")
 
 
 class CompressMarkup:
@@ -153,6 +153,19 @@ def pwa_apple_touch_icon():
 @app.get("/favicon.ico")
 def pwa_favicon():
     return FileResponse(STATIC / "pwa" / "favicon.ico", media_type="image/x-icon")
+
+
+@app.get("/product-images/{name}")
+def product_image(name: str):
+    from .product_images import image_dir
+
+    safe = Path(name).name
+    if not safe.endswith(".webp"):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    path = image_dir() / safe
+    if not path.is_file():
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return FileResponse(path, media_type="image/webp", headers={"Cache-Control": "public, max-age=86400"})
 
 
 

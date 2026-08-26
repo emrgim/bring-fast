@@ -17,6 +17,7 @@ dependencies = [
   "requests>=2.32.0",
   "curl_cffi>=0.7.0",
   "passlib[bcrypt]>=1.7.4",
+  "pillow>=10.0.0",
 ]
 
 [project.optional-dependencies]
@@ -44,7 +45,7 @@ build-backend = "setuptools.build_meta"
 include = ["bring_fast*"]
 
 [tool.setuptools.package-data]
-bring_fast = ["templates/*", "static/**/*"]
+bring_fast = ["templates/*", "static/**/*", "data/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

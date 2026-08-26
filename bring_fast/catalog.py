@@ -98,6 +98,7 @@ def search_carrefour(query: str, limit: int = 8) -> dict[str, Any]:
                 "name": it.get("value") or d.get("name"),
                 "price": d.get("price"),
                 "currency": d.get("currency") or "AED",
+                "image_url": d.get("image_url") or "",
                 "url": "https://www.carrefouruae.com/mafuae/en" + (d.get("url") or f"/p/{d.get('id')}"),
             }
         )
@@ -366,6 +367,13 @@ SEARCHERS = {
 
 
 def search(retailer: str, query: str, limit: int = 8) -> dict[str, Any]:
+    if retailer == "mcdonalds":
+        from bring_fast.product_images import search_mcdonalds
+
+        try:
+            return search_mcdonalds(query, limit)
+        except Exception as e:
+            return {"retailer": retailer, "query": query, "results": [], "error": str(e)}
     fn = SEARCHERS.get(retailer)
     if not fn:
         return {"error": f"unknown retailer {retailer}", "results": []}
