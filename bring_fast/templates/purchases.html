@@ -76,7 +76,7 @@
   <div class="pop" id="day-pop"></div>
 </div>
 
-<div class="msort-wrap">
+<div class="msort-wrap" id="store-wrap">
 <div class="msort">
   <a class="{% if sort=='spend' %}on{% endif %}" href="/purchases?sort=spend&dir=desc&range={{ range }}&grain={{ grain }}&dept={{ dept }}{{ store_tail }}">Spent</a>
   <a class="{% if sort=='frequency' %}on{% endif %}" href="/purchases?sort=frequency&dir=desc&range={{ range }}&grain={{ grain }}&dept={{ dept }}{{ store_tail }}">Frequency</a>
@@ -84,31 +84,33 @@
   <a class="{% if sort=='times' %}on{% endif %}" href="/purchases?sort=times&dir=desc&range={{ range }}&grain={{ grain }}&dept={{ dept }}{{ store_tail }}">Times</a>
   <a class="{% if sort=='name' %}on{% endif %}" href="/purchases?sort=name&dir=asc&range={{ range }}&grain={{ grain }}&dept={{ dept }}{{ store_tail }}">Name</a>
   {% if store_options %}
-  <details class="store-pick{% if stores %} on{% endif %}" id="store-pick">
-    <summary aria-haspopup="true">Store{% if stores %} · {{ stores|length }}{% endif %}</summary>
-    <form class="store-menu" method="get" action="/purchases" data-current="{{ store_q }}" aria-label="Stores">
-      <input type="hidden" name="sort" value="{{ sort }}"/>
-      <input type="hidden" name="dir" value="{{ dir }}"/>
-      <input type="hidden" name="range" value="{{ range }}"/>
-      <input type="hidden" name="grain" value="{{ grain }}"/>
-      <input type="hidden" name="dept" value="{{ dept }}"/>
-      {% if range=='custom' %}
-      <input type="hidden" name="start" value="{{ start }}"/>
-      <input type="hidden" name="end" value="{{ end }}"/>
-      {% endif %}
-      {% if day %}<input type="hidden" name="day" value="{{ day }}"/>{% endif %}
-      <a class="store-all{% if not stores %} on{% endif %}" href="/purchases?sort={{ sort }}&dir={{ dir }}&range={{ range }}&grain={{ grain }}&dept={{ dept }}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}{% if day %}&day={{ day }}{% endif %}">All stores</a>
-      {% for s in store_options %}
-      <label class="{% if s.id in stores %}on{% endif %}">
-        <input type="checkbox" name="store" value="{{ s.id }}"{% if s.id in stores %} checked{% endif %}/>
-        {{ s.name }}
-      </label>
-      {% endfor %}
-      <button type="submit">Apply</button>
-    </form>
-  </details>
+  <button type="button" class="store-chip{% if stores %} on{% endif %}" id="store-toggle" aria-expanded="false" aria-controls="store-panel">Store{% if stores %} · {{ stores|length }}{% endif %}</button>
   {% endif %}
 </div>
+{% if store_options %}
+<form class="store-panel" id="store-panel" method="get" action="/purchases" hidden data-current="{{ store_q }}" aria-label="Stores">
+  <input type="hidden" name="sort" value="{{ sort }}"/>
+  <input type="hidden" name="dir" value="{{ dir }}"/>
+  <input type="hidden" name="range" value="{{ range }}"/>
+  <input type="hidden" name="grain" value="{{ grain }}"/>
+  <input type="hidden" name="dept" value="{{ dept }}"/>
+  {% if range=='custom' %}
+  <input type="hidden" name="start" value="{{ start }}"/>
+  <input type="hidden" name="end" value="{{ end }}"/>
+  {% endif %}
+  {% if day %}<input type="hidden" name="day" value="{{ day }}"/>{% endif %}
+  {% for s in store_options %}
+  <label class="{% if s.id in stores %}on{% endif %}">
+    <input type="checkbox" name="store" value="{{ s.id }}"{% if s.id in stores %} checked{% endif %}/>
+    {{ s.name }}
+  </label>
+  {% endfor %}
+  <div class="store-actions">
+    <button type="button" class="ghost" id="store-clear">Clear all</button>
+    <button type="submit">Done</button>
+  </div>
+</form>
+{% endif %}
 </div>
 <div class="mlist" id="buy-cards">
   {% for p in products %}{{ shapes.card(p) }}{% endfor %}
@@ -362,27 +364,39 @@
 </script>
 <script>
 (function(){
-  var box=document.getElementById("store-pick");
-  if(!box) return;
-  var form=box.querySelector("form");
-  function selected(){
-    return Array.prototype.map.call(form.querySelectorAll("input[name=store]:checked"), function(el){ return el.value; }).sort().join(",");
+  var wrap=document.getElementById("store-wrap");
+  var btn=document.getElementById("store-toggle");
+  var panel=document.getElementById("store-panel");
+  var clear=document.getElementById("store-clear");
+  if(!wrap||!btn||!panel) return;
+  function current(){
+    return (panel.getAttribute("data-current")||"").split(",").filter(Boolean);
   }
-  document.addEventListener("click", function(e){
-    if(box.open && !box.contains(e.target)) box.open=false;
-  });
-  box.addEventListener("toggle", function(){
-    if(box.open || !form) return;
-    if(selected()!==(form.getAttribute("data-current")||"")) form.submit();
-  });
-  form.addEventListener("change", function(){
-    form.querySelectorAll("label").forEach(function(lab){
-      var boxel=lab.querySelector("input[name=store]");
-      lab.classList.toggle("on", !!(boxel && boxel.checked));
+  function paint(){
+    panel.querySelectorAll("label").forEach(function(lab){
+      var box=lab.querySelector("input[name=store]");
+      lab.classList.toggle("on", !!(box && box.checked));
     });
-    var all=form.querySelector(".store-all");
-    if(all) all.classList.toggle("on", !selected());
+  }
+  function reset(){
+    var keep=current();
+    panel.querySelectorAll("input[name=store]").forEach(function(el){
+      el.checked=keep.indexOf(el.value)>=0;
+    });
+    paint();
+  }
+  function setOpen(on){
+    wrap.classList.toggle("is-open", on);
+    panel.hidden=!on;
+    btn.setAttribute("aria-expanded", on?"true":"false");
+    if(!on) reset();
+  }
+  btn.addEventListener("click", function(){ setOpen(panel.hidden); });
+  if(clear) clear.addEventListener("click", function(){
+    panel.querySelectorAll("input[name=store]").forEach(function(el){ el.checked=false; });
+    paint();
   });
+  panel.addEventListener("change", paint);
 })();
 </script>
 {% endblock %}
