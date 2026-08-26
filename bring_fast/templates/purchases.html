@@ -30,14 +30,14 @@
 {% endblock %}
 {% block body %}
 {# Same bar as the home tab, so the figure stays on screen in both places. #}
-<div class="spend-pin" id="spend-pin" aria-hidden="true">
+<div class="spend-pin{% if day %} is-focus{% endif %}" id="spend-pin" aria-hidden="true">
   <div class="pin-in">
     <span class="pin-avg">{{ period_word }} avg <b>AED {{ '%.2f'|format(period_avg) }}</b></span>
     <span class="pin-spent"><b>AED {{ '%.0f'|format(dash_spend) }}</b> spent</span>
   </div>
 </div>
 <div class="purchases-board">
-<div class="dash">
+<div class="dash{% if day %} is-focus{% endif %}">
   <div class="dash-top">
     <div>
       <h1>Purchases</h1>
