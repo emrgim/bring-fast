@@ -15,7 +15,7 @@
     {% for key, label, title in [('1w','1w','1 week'),('2w','2w','2 weeks'),('1m','1m','1 month'),('3m','3m','3 months'),('1y','1y','1 year'),('2y','2y','2 years'),('3y','3y','3 years'),('all','All','All')] %}
     <a class="{% if range==key %}on{% endif %}" href="/purchases?sort={{ sort }}&dir={{ dir }}&range={{ key }}&grain={{ grain }}&dept={{ dept }}{{ store_tail }}" title="{{ title }}">{{ label }}</a>
     {% endfor %}
-    <form method="get" action="/purchases">
+    <form method="get" action="/purchases"{% if range=='custom' %} class="on"{% endif %}>
       <input type="hidden" name="sort" value="{{ sort }}"/>
       <input type="hidden" name="dir" value="{{ dir }}"/>
       <input type="hidden" name="range" value="custom"/>
