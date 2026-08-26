@@ -192,6 +192,7 @@ def _safe_next(target: str) -> str:
 
 
 _REMEMBER = ("/dashboard", "/purchases", "/stores")
+_WINDOW_KEYS = ("range", "grain", "start", "end", "day")
 
 
 def _remember(request: Request, user: dict[str, Any] | None) -> None:
@@ -201,6 +202,53 @@ def _remember(request: Request, user: dict[str, Any] | None) -> None:
     if not any(path == p or path.startswith(p + "/") for p in _REMEMBER):
         return
     db.set_last_view(user["id"], path, str(request.url.query or ""))
+
+
+def _window_query(range_key: str, grain: str, start: str = "", end: str = "", day: str = "") -> str:
+    pairs = [("range", range_key), ("grain", grain)]
+    if range_key == "custom":
+        if start:
+            pairs.append(("start", start))
+        if end:
+            pairs.append(("end", end))
+    if day:
+        pairs.append(("day", day))
+    return urlencode(pairs)
+
+
+def _remember_dashboard(user: dict[str, Any], request: Request, range_key: str, grain: str, start: str, end: str, day: str) -> None:
+    q = str(request.url.query or "")
+    if "range" not in request.query_params and "grain" not in request.query_params:
+        q = _window_query(range_key, grain, start, end, day)
+    db.set_last_view(user["id"], "/dashboard", q)
+
+
+def _remember_purchases(
+    user: dict[str, Any],
+    request: Request,
+    range_key: str,
+    grain: str,
+    start: str,
+    end: str,
+    day: str,
+    sort: str,
+    direction: str,
+    dept: str,
+    store_q: str,
+) -> None:
+    rest = [("sort", sort), ("dir", direction)]
+    if dept:
+        rest.append(("dept", dept))
+    if store_q:
+        rest.append(("store", store_q))
+    has_window = any(key in request.query_params for key in _WINDOW_KEYS)
+    extra = urlencode(rest)
+    if has_window or not db.get_tab_query(user["id"], "/dashboard"):
+        win = _window_query(range_key, grain, start, end, day)
+        q = win + (("&" + extra) if extra else "")
+    else:
+        q = extra
+    db.set_last_view(user["id"], "/purchases", q)
 
 
 def _last_url(user: dict[str, Any]) -> str:
@@ -378,7 +426,7 @@ def spend_home(
         grain=grain,
         include_undated=(range_key == "all" and not day),
     )
-    _remember(request, user)
+    _remember_dashboard(user, request, range_key, grain, start, end, day)
     return templates.TemplateResponse(
         request,
         "home.html",
@@ -760,7 +808,19 @@ def purchases_page(
         stores=stores,
     )
     first = purchases.shelf_batch(shelf, 0, purchases.SHELF_BATCH)
-    _remember(request, user)
+    _remember_purchases(
+        user,
+        request,
+        range_key,
+        grain,
+        start,
+        end,
+        day,
+        sort,
+        direction,
+        dept,
+        store_q,
+    )
     return templates.TemplateResponse(
         request,
         "purchases.html",

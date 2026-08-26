@@ -7,6 +7,7 @@ import sqlite3
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlencode
 
 import hashlib
 import hmac
@@ -842,6 +843,7 @@ def get_oauth_client(client_id: str) -> dict[str, Any] | None:
 
 
 _TAB_PATHS = ("/dashboard", "/purchases")
+_WINDOW_KEYS = ("range", "grain", "start", "end", "day")
 
 
 def _tab_queries(row: sqlite3.Row | None) -> dict[str, str]:
@@ -857,20 +859,45 @@ def _tab_queries(row: sqlite3.Row | None) -> dict[str, str]:
     return {str(k): str(v or "") for k, v in data.items()}
 
 
+def _split_query(query: str) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    window: list[tuple[str, str]] = []
+    rest: list[tuple[str, str]] = []
+    for key, val in parse_qsl(query or "", keep_blank_values=True):
+        (window if key in _WINDOW_KEYS else rest).append((key, val))
+    return window, rest
+
+
+def _merge_query(*parts: str) -> str:
+    seen: set[str] = set()
+    out: list[tuple[str, str]] = []
+    for part in parts:
+        for key, val in parse_qsl(part or "", keep_blank_values=True):
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append((key, val))
+    return urlencode(out)
+
+
 def set_last_view(user_id: int, path: str, query: str = "") -> None:
     con = connect()
     query = query or ""
     if path in _TAB_PATHS:
         row = con.execute("SELECT tab_queries FROM user_prefs WHERE user_id=?", (user_id,)).fetchone()
         tabs = _tab_queries(row)
-        tabs[path] = query
+        window, rest = _split_query(query)
+        if window:
+            tabs["window"] = urlencode(window)
+        if path == "/purchases":
+            tabs[path] = urlencode(rest)
+        resume = _merge_query(tabs.get("window") or "", tabs.get(path) or "") if path == "/purchases" else (tabs.get("window") or query)
         con.execute(
             """INSERT INTO user_prefs(user_id, last_path, last_query, tab_queries) VALUES (?,?,?,?)
                ON CONFLICT(user_id) DO UPDATE SET
                  last_path=excluded.last_path,
                  last_query=excluded.last_query,
                  tab_queries=excluded.tab_queries""",
-            (user_id, path, query, json.dumps(tabs)),
+            (user_id, path, resume, json.dumps(tabs)),
         )
     else:
         con.execute(
@@ -893,4 +920,8 @@ def get_tab_query(user_id: int, path: str) -> str:
     con = connect()
     row = con.execute("SELECT tab_queries FROM user_prefs WHERE user_id=?", (user_id,)).fetchone()
     con.close()
-    return _tab_queries(row).get(path) or ""
+    tabs = _tab_queries(row)
+    window = tabs.get("window") or ""
+    if path == "/purchases":
+        return _merge_query(window, tabs.get(path) or "")
+    return window
