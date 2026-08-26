@@ -417,15 +417,24 @@ def spend_home(
         days = purchases.fill_daily_calendar(days, since, until)
     days = purchases.mark_day_windows(days, grain, since, until, day)
     focus_since, focus_until = purchases.focus_products_window(day, grain, since, until)
-    top = purchases.list_products(user["id"], sort="spend", direction="desc", since=focus_since, until=focus_until)[:8]
-    trend = purchases.price_trend(user["id"], since=focus_since, until=focus_until, grain=grain)
-    snap = purchases.spend_snapshot(
+    focus_end = (focus_until or until).isoformat()
+    card_days = [
+        d
+        for d in raw_days
+        if (not focus_since or (d.get("date") or "") >= focus_since)
+        and (d.get("date") or "") <= focus_end
+    ]
+    total_spend = sum(d["spend"] for d in card_days)
+    periods = purchases.period_span(focus_since, focus_until, grain)
+    top = purchases.list_products(
         user["id"],
+        sort="spend",
+        direction="desc",
         since=focus_since,
         until=focus_until,
-        grain=grain,
-        include_undated=(range_key == "all" and not day),
+        limit=8,
     )
+    trend = purchases.price_trend(user["id"], since=focus_since, until=focus_until, grain=grain)
     _remember_dashboard(user, request, range_key, grain, start, end, day)
     return templates.TemplateResponse(
         request,
@@ -435,13 +444,13 @@ def spend_home(
             "title": "Dashboard · Bring Fast",
             "tab": "dashboard",
             "days": days,
-            "dash_spend": snap["total"],
-            "period_avg": snap["period_avg"],
-            "period_word": snap["period_word"],
-            "period_unit": snap["period_unit"],
-            "periods_text": snap["periods_text"],
+            "dash_spend": total_spend,
+            "period_avg": round(total_spend / periods, 2),
+            "period_word": purchases.PERIOD_WORDS[grain],
+            "period_unit": purchases.period_unit(grain, periods),
+            "periods_text": purchases.format_periods(periods),
             "range_start": focus_since or "",
-            "range_end": (focus_until or until).isoformat(),
+            "range_end": focus_end,
             "products": top,
             "trend": trend,
             "grain": grain,
@@ -867,7 +876,6 @@ def purchases_page(
                 )
             ),
             "dash_receipts_total": purchases.invoice_count(user["id"], include_undated=True),
-            "stats": purchases.purchase_stats(user["id"]),
             "sort": sort,
             "dir": direction,
             "range": range_key,
