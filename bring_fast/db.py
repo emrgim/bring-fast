@@ -927,7 +927,7 @@ def _merge_query(*parts: str) -> str:
     return urlencode(out)
 
 
-def set_last_view(user_id: int, path: str, query: str = "") -> None:
+def set_last_view(user_id: int, path: str, query: str = "") -> bool:
     """Remember the tab. A reload of the same view is a no-op, not a write."""
     con = connect()
     query = query or ""
@@ -955,7 +955,7 @@ def set_last_view(user_id: int, path: str, query: str = "") -> None:
             and (row["tab_queries"] or "") == blob
         ):
             con.close()
-            return
+            return False
         con.execute(
             """INSERT INTO user_prefs(user_id, last_path, last_query, tab_queries) VALUES (?,?,?,?)
                ON CONFLICT(user_id) DO UPDATE SET
@@ -967,7 +967,7 @@ def set_last_view(user_id: int, path: str, query: str = "") -> None:
     else:
         if row and (row["last_path"] or "") == path and (row["last_query"] or "") == query:
             con.close()
-            return
+            return False
         con.execute(
             """INSERT INTO user_prefs(user_id, last_path, last_query) VALUES (?,?,?)
                ON CONFLICT(user_id) DO UPDATE SET last_path=excluded.last_path, last_query=excluded.last_query""",
@@ -975,6 +975,7 @@ def set_last_view(user_id: int, path: str, query: str = "") -> None:
         )
     con.commit()
     con.close()
+    return True
 
 
 def get_last_view(user_id: int) -> dict[str, str] | None:

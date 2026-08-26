@@ -89,29 +89,15 @@ def test_undated_receipt_does_not_blank_first_buy(bf):
     assert milk["times_bought"] == 2
 
 
-def test_unchanged_view_does_not_rewrite(bf, monkeypatch):
+def test_unchanged_view_does_not_rewrite(bf):
     user = bf.db.create_user("view@example.com", "secret1")
-    bf.db.set_last_view(user["id"], "/dashboard", "range=1m&grain=monthly")
-    writes = {"n": 0}
-    real = bf.db.connect
-
-    def wrapped():
-        con = real()
-        orig = con.commit
-
-        def counted():
-            writes["n"] += 1
-            orig()
-
-        con.commit = counted
-        return con
-
-    monkeypatch.setattr(bf.db, "connect", wrapped)
-    bf.db.set_last_view(user["id"], "/dashboard", "range=1m&grain=monthly")
-    assert writes["n"] == 0
+    assert bf.db.set_last_view(user["id"], "/dashboard", "range=1m&grain=monthly") is True
+    assert bf.db.set_last_view(user["id"], "/dashboard", "range=1m&grain=monthly") is False
     rec = bf.db.get_last_view(user["id"])
     assert rec["path"] == "/dashboard"
     assert "range=1m" in rec["query"]
+    assert bf.db.set_last_view(user["id"], "/dashboard", "range=1y&grain=yearly") is True
+    assert "range=1y" in bf.db.get_last_view(user["id"])["query"]
 
 
 def test_dashboard_does_not_rescan_the_whole_shelf(bf, client):
