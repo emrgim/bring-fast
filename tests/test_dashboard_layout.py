@@ -85,6 +85,33 @@ def test_buys_range_filter_sits_under_the_title_bar(bf, client):
     assert html.count('class="filters"') == 1
 
 
+def test_store_panel_expands_in_flow_and_inverts_when_filtered(bf, client):
+    user = _seed(bf, "storeui@example.com")
+    bf.purchases.upsert_invoice(
+        user["id"],
+        {
+            "retailer": "grandiose",
+            "invoice_no": "g-ui",
+            "invoice_date": "2026-08-11",
+            "items": [{"name": "Bread", "qty": 1, "unit_price": 4, "line_total": 4, "barcode": "9"}],
+        },
+    )
+    client.post("/login", data={"email": "storeui@example.com", "password": "secret1", "intent": "signin"})
+    html = client.get("/purchases").text
+    phone = html[html.index("@media (max-width:720px)") :]
+    # The chip row scrolls sideways; the store list is a sibling so that
+    # overflow cannot clip it, and opening it pushes the cards down.
+    assert ".store-panel { margin:0 0 10px; }" in phone
+    assert html.index('id="store-toggle"') < html.index('id="buy-cards"')
+    assert html.index('id="store-panel"') < html.index('id="buy-cards"')
+    assert 'class="store-chip"' in html
+    assert 'class="store-chip on"' not in html
+    assert ".msort .store-chip.on" in html
+    filtered = client.get("/purchases?store=carrefour").text
+    assert 'class="store-chip on"' in filtered
+    assert "Store · 1" in filtered
+
+
 def test_theme_toggle_lives_only_in_the_top_nav(bf, client):
     _seed(bf, "toggle@example.com")
     client.post("/login", data={"email": "toggle@example.com", "password": "secret1", "intent": "signin"})

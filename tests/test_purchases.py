@@ -846,9 +846,17 @@ def test_purchases_page_store_menu_filters_the_shelf(bf, client):
 
     page = client.get("/purchases")
     assert page.status_code == 200
-    assert 'id="store-pick"' in page.text
+    assert 'id="store-toggle"' in page.text
+    assert 'id="store-panel"' in page.text
     assert ">Name<" in page.text
-    assert page.text.index(">Name<") < page.text.index('id="store-pick"')
+    assert page.text.index(">Name<") < page.text.index('id="store-toggle"')
+    msort_end = page.text.index("</div>", page.text.index('class="msort"'))
+    assert msort_end < page.text.index('id="store-panel"')
+    assert "Clear all" in page.text
+    assert ">Done<" in page.text
+    panel_css = page.text[page.text.index(".store-panel {") : page.text.index(".store-panel[hidden]")]
+    assert "position:absolute" not in panel_css
+    assert "position:static" in panel_css
     assert "Carrefour UAE" in page.text
     assert "Grandiose" in page.text
     assert "Carrefour Milk" in page.text
