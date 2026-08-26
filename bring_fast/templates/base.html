@@ -304,6 +304,31 @@
       flex:0 0 auto; border:1px solid var(--line); border-radius:0;
       background:var(--card); padding:10px 12px 8px; margin:0 0 10px;
     }
+    /* A focused bucket inverts only this widget, so the rest of the app
+       stays the global window. Light takes the dark palette and dark takes
+       the light one; leaving the bar restores the tokens that were there. */
+    .dash.is-focus, .spend-pin.is-focus {
+      --bg:#0a0a0a;
+      --ink:#f5f5f5;
+      --muted:#b5b5b5;
+      --line:#f5f5f5;
+      --card:#0a0a0a;
+      --fill:#f5f5f5;
+      --on-fill:#0a0a0a;
+      background:var(--card);
+      border-color:var(--line);
+    }
+    .dash.is-focus { color:var(--ink); }
+    :root[data-theme="dark"] .dash.is-focus,
+    :root[data-theme="dark"] .spend-pin.is-focus {
+      --bg:#fff;
+      --ink:#111;
+      --muted:#444;
+      --line:#111;
+      --card:#fff;
+      --fill:#111;
+      --on-fill:#fff;
+    }
     .spend-pin {
       display:none; position:fixed; left:0; right:0; top:var(--sticky-top,56px); z-index:35;
       background:var(--bg); border-bottom:1px solid var(--line);
