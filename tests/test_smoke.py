@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from bring_fast import __version__, catalog, db
 
 
@@ -29,6 +31,8 @@ def test_retailers_have_logos_and_urls():
     for r in db.RETAILERS:
         assert r["url"].startswith("https://")
         assert r["logo"].startswith("/static/")
+        logo = Path(db.__file__).resolve().parent / r["logo"].lstrip("/")
+        assert logo.is_file(), r["logo"]
 
 
 def test_a_store_that_can_be_searched_has_something_to_search_it_with():

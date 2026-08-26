@@ -29,43 +29,52 @@ def official_ean(raw: str) -> str:
     return digits
 
 
-def canonical_key(key: str) -> str:
+def canonical_key(key: str, con: Any | None = None) -> str:
     key = (key or "").strip()
     if not key:
         return key
-    con = db.connect()
-    row = con.execute("SELECT canonical_key FROM product_aliases WHERE alias_key=?", (key,)).fetchone()
-    if row:
-        con.close()
-        return row["canonical_key"]
-    ean = key[4:] if key.startswith("ean:") else ""
-    full = official_ean(ean) if ean else ""
-    if full and full != ean:
-        cand = f"ean:{full}"
-        hit = con.execute("SELECT product_key FROM product_meta WHERE product_key=? OR official_ean=?", (cand, full)).fetchone()
-        alias = con.execute("SELECT canonical_key FROM product_aliases WHERE alias_key=?", (cand,)).fetchone()
-        con.close()
-        if alias:
-            return alias["canonical_key"]
-        if hit:
-            return hit["product_key"]
+    own = con is None
+    if own:
+        con = db.connect()
+    try:
+        row = con.execute("SELECT canonical_key FROM product_aliases WHERE alias_key=?", (key,)).fetchone()
+        if row:
+            return row["canonical_key"]
+        ean = key[4:] if key.startswith("ean:") else ""
+        full = official_ean(ean) if ean else ""
+        if full and full != ean:
+            cand = f"ean:{full}"
+            hit = con.execute(
+                "SELECT product_key FROM product_meta WHERE product_key=? OR official_ean=?",
+                (cand, full),
+            ).fetchone()
+            alias = con.execute(
+                "SELECT canonical_key FROM product_aliases WHERE alias_key=?", (cand,)
+            ).fetchone()
+            if alias:
+                return alias["canonical_key"]
+            if hit:
+                return hit["product_key"]
+            return key
+        if full:
+            hit = con.execute(
+                "SELECT product_key FROM product_meta WHERE official_ean=?", (full,)
+            ).fetchone()
+            if hit:
+                return hit["product_key"]
+            return key
         return key
-    if full:
-        hit = con.execute("SELECT product_key FROM product_meta WHERE official_ean=?", (full,)).fetchone()
-        con.close()
-        if hit:
-            return hit["product_key"]
-        return key
-    con.close()
-    return key
+    finally:
+        if own:
+            con.close()
 
 
-def product_key(barcode: str, name: str) -> str:
+def product_key(barcode: str, name: str, con: Any | None = None) -> str:
     code = (barcode or "").strip()
     if code:
-        return canonical_key(f"ean:{code}")
+        return canonical_key(f"ean:{code}", con=con)
     slug = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")
-    return canonical_key(f"name:{slug}")
+    return canonical_key(f"name:{slug}", con=con)
 
 
 def upsert_product_meta(product_key: str, meta: dict[str, Any]) -> None:
@@ -286,6 +295,7 @@ def upsert_invoice(user_id: int, parsed: dict[str, Any], *, gmail_id: str = "") 
         if not name:
             continue
         barcode = (it.get("barcode") or "").strip()
+        key = product_key(barcode, name, con=con)
         con.execute(
             """INSERT INTO invoice_items(invoice_id, barcode, name, qty, unit_price, line_total, image_url, product_key)
                VALUES (?,?,?,?,?,?,?,?)""",
@@ -297,10 +307,10 @@ def upsert_invoice(user_id: int, parsed: dict[str, Any], *, gmail_id: str = "") 
                 it.get("unit_price"),
                 float(it.get("line_total") or 0),
                 it.get("image_url") or "",
-                product_key(barcode, name),
+                key,
             ),
         )
-        pending.append((product_key(barcode, name), name, barcode))
+        pending.append((key, name, barcode))
     con.commit()
     con.close()
     if pending and os.environ.get("BRINGFAST_FETCH_IMAGES", "1").strip().lower() not in {"0", "false", "no"}:
@@ -587,6 +597,14 @@ def _same_price_unit(first: float, last: float) -> bool:
     return 1 / 3 <= ratio <= 3
 
 
+_SQL_SORT = {
+    "spend": "SUM(it.line_total)",
+    "times": "COUNT(DISTINCT i.id)",
+    "qty": "SUM(it.qty)",
+    "name": "LOWER(MAX(COALESCE(NULLIF(pm.official_name,''), it.name)))",
+}
+
+
 def list_products(
     user_id: int,
     sort: str = "spend",
@@ -595,6 +613,7 @@ def list_products(
     until: date | None = None,
     dept: str = "",
     stores: list[str] | None = None,
+    limit: int | None = None,
 ) -> list[dict[str, Any]]:
     stores = normalize_stores(stores)
     con = db.connect()
@@ -609,6 +628,16 @@ def list_products(
     extra, extra_args = _store_sql(stores)
     where += extra
     args.extend(extra_args)
+    sort_key = sort if sort in SORTS else "spend"
+    order_sql = ""
+    limit_sql = ""
+    cap = max(0, int(limit)) if limit else 0
+    # Dept is applied in Python, so a SQL LIMIT would undershoot. Likely/frequency
+    # are not SQL-sortable. The dashboard's top eight by spend is the cheap case.
+    if cap and sort_key in _SQL_SORT and not normalize_dept(dept):
+        direction_sql = "ASC" if (direction or "desc").lower() == "asc" else "DESC"
+        order_sql = f"ORDER BY {_SQL_SORT[sort_key]} {direction_sql}"
+        limit_sql = f"LIMIT {cap}"
     rows = con.execute(
         f"""
         SELECT it.product_key,
@@ -620,14 +649,15 @@ def list_products(
                COUNT(*) AS buy_count,
                COUNT(DISTINCT i.id) AS invoice_count,
                SUM(it.line_total) AS spend_total,
-               MIN(i.invoice_date) AS first_buy,
-               MAX(i.invoice_date) AS last_buy,
-               GROUP_CONCAT(i.invoice_date) AS dates
+               MIN(NULLIF(i.invoice_date,'')) AS first_buy,
+               MAX(i.invoice_date) AS last_buy
         FROM invoice_items it
         JOIN invoices i ON i.id = it.invoice_id
         LEFT JOIN product_meta pm ON pm.product_key = it.product_key
         {where}
         GROUP BY it.product_key
+        {order_sql}
+        {limit_sql}
         """,
         args,
     ).fetchall()
@@ -635,9 +665,9 @@ def list_products(
     out = []
     for r in rows:
         times = int(r["invoice_count"] or 0)
-        dates = [p for p in (r["dates"] or "").split(",") if p]
+        first = r["first_buy"] or ""
         label, interval = _frequency(
-            dates,
+            [first] if first else [],
             times,
             since=_parse_day(since) if since else None,
             until=until,
@@ -668,20 +698,24 @@ def list_products(
             }
         )
     attach_likely(user_id, out, today=until)
-    key = sort if sort in SORTS else "spend"
     reverse = (direction or "desc").lower() != "asc"
-    out.sort(key=SORTS[key], reverse=reverse)
+    out.sort(key=SORTS[sort_key], reverse=reverse)
+    if cap:
+        out = out[:cap]
     return out
 
 
 def attach_likely(user_id: int, products: list[dict[str, Any]], *, today: date | None = None) -> list[dict[str, Any]]:
     from bring_fast import forecast as fc
 
+    if not products:
+        return products
     today = today or date.today()
+    keys = [p.get("key") for p in products if p.get("key")]
     blocked = fc.load_exclusions(user_id)
     votes = fc.load_votes(user_id)
     classified = {}
-    for rec in fc.buy_history(user_id, until=today).values():
+    for rec in fc.buy_history(user_id, until=today, keys=keys).values():
         classified[rec["key"]] = fc.classify(
             rec,
             today=today,
@@ -1011,11 +1045,13 @@ def spend_snapshot(
     until: date | None = None,
     grain: str = "daily",
     include_undated: bool = False,
+    days: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Totals that move when the dashboard range, grain (or new invoices) change."""
     until = until or date.today()
     grain = grain if grain in GRAINS else "daily"
-    days = daily_spend(user_id, since=since, until=until)
+    if days is None:
+        days = daily_spend(user_id, since=since, until=until)
     total = round(sum(d["spend"] for d in days), 2)
     receipts = invoice_count(user_id, since=since, until=until, include_undated=include_undated)
     receipts_total = invoice_count(user_id, include_undated=True)
@@ -1024,7 +1060,12 @@ def spend_snapshot(
     today_key = until.isoformat()
     today = next((d["spend"] for d in days if d.get("date") == today_key), 0.0)
     week_since, week_until, _ = window("1w", end=until.isoformat())
-    week_days = daily_spend(user_id, since=week_since, until=week_until)
+    week_lo = week_since or ""
+    week_hi = week_until.isoformat()
+    if not since or since <= week_lo:
+        week_days = [d for d in days if week_lo <= (d.get("date") or "") <= week_hi]
+    else:
+        week_days = daily_spend(user_id, since=week_since, until=week_until)
     week_total = sum(d["spend"] for d in week_days)
     week_span = max(1, (week_until - (_parse_day(week_since) or week_until)).days + 1)
     periods = period_span(since, until, grain)
