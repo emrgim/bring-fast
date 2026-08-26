@@ -191,10 +191,11 @@
     }
     .ghost { background:transparent; color:var(--ink); border:1px solid var(--line); font-weight:600; }
     .mcard-go { color:inherit; text-decoration:none; }
-    .likely-line { display:flex; align-items:center; gap:6px; }
-    .likely-votes {
+    .likely-line { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+    .prod-head .lead { max-width:72ch; }
+    form.likely-votes {
       display:inline-flex; align-items:center; gap:2px; flex:0 0 auto;
-      vertical-align:middle;
+      vertical-align:middle; width:auto; margin:0;
     }
     .likely-votes button {
       display:inline-flex; align-items:center; justify-content:center;
@@ -523,7 +524,7 @@
       .mcard .copy b { display:block; font-size:15px; line-height:1.25; font-weight:700; }
       .mcard .copy .off { margin-top:2px; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .pair { display:flex; gap:6px; margin-top:6px; }
-      .pair span {
+      .pair span, .pair .likely-box {
         flex:1; min-width:0; border:1px dashed var(--line); border-radius:0;
         padding:4px 6px; font-size:11px; line-height:1.2; color:var(--muted);
       }

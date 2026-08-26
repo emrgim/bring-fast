@@ -757,7 +757,7 @@ def product_purchases(user_id: int, key: str, since: str | None = None, until: d
     receipt = head["name"] or ""
     official = (meta.get("official_name") or "").strip()
     display = official or receipt
-    return {
+    out = {
         "key": key,
         "name": display,
         "receipt_name": receipt,

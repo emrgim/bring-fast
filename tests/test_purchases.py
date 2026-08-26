@@ -81,6 +81,12 @@ def test_likely_thumbs_change_the_score_and_toggle_off(bf, client):
     home = client.get("/dashboard")
     assert 'aria-label="More likely to buy"' in home.text
     assert "55" in home.text
+    detail = client.get(f"/purchases/{key}")
+    assert "likely" in detail.text
+    assert "55" in detail.text
+    assert 'aria-pressed="true"' in detail.text
+    assert 'class="likely-line"' in detail.text
+    assert "<div class=\"lead\">" in detail.text
     again = client.post(f"/purchases/{key}/vote", data={"vote": "up", "next": "/purchases"}, follow_redirects=True)
     assert bf.forecast.load_votes(user["id"]).get(key, "") == ""
     down = client.post(
