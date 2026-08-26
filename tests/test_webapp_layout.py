@@ -171,6 +171,41 @@ def test_the_buy_page_is_never_wider_than_the_phone(bf, client):
     assert "margin:0;" in board
 
 
+def test_buys_keeps_the_spend_bars_on_a_phone(bf, client):
+    """A tap on a year focuses the card. The chart has to stay on Buys."""
+    _signed_in(bf, client, "yearbars@example.com")
+    html = client.get("/purchases").text
+    phone = html[html.index("@media (max-width:720px)") :]
+    # Hiding the bars left the receipts list with no way to see or clear
+    # which year was selected, so All + Yearly read as a 2025-only view.
+    assert ".purchases-board .bars-scroller { display:none; }" not in html
+    assert ".bars-scroller { display:block; }" in phone
+
+
+def test_receipt_popup_rows_keep_the_amount_on_the_right(bf, client):
+    """A McDonald's slip names the restaurant. That line must wrap in place."""
+    user = bf.db.create_user("mcdpop@example.com", "secret1")
+    bf.purchases.upsert_invoice(
+        user["id"],
+        {
+            "retailer": "mcdonalds",
+            "store_name": "McDonald's · ENOC 1044 Oud Metha",
+            "invoice_no": "9-20250105",
+            "invoice_date": "2025-01-05",
+            "items": [{"name": "Big Mac", "qty": 1, "unit_price": 45, "line_total": 45, "barcode": ""}],
+        },
+    )
+    client.post("/login", data={"email": "mcdpop@example.com", "password": "secret1", "intent": "signin"})
+    html = client.get("/purchases?range=all&grain=yearly&day=2025").text
+
+    assert 'class="amt">AED ' in html
+    assert ".pop .row > span:first-child { min-width:0; flex:1 1 auto; overflow-wrap:anywhere; }" in html
+    assert ".pop .row .amt { flex:0 0 auto; white-space:nowrap; }" in html
+    # Hundreds of slips in a year must not bury the product shelf.
+    assert "max-height:min(30vh, 16em);" in html
+    assert html.index('id="day-pop"') < html.index('id="buy-cards"')
+
+
 def test_a_browser_tab_can_still_be_zoomed(bf, client):
     html = client.get("/login").text
 

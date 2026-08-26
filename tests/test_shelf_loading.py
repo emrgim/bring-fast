@@ -387,6 +387,8 @@ def test_a_bar_carries_only_what_a_tap_reads(bf, client):
     assert tapped["spend"] == 7
     assert tapped["invoices"][0]["invoice_no"] == "BAR2"
     assert tapped["invoices"][0]["store"] == "Grandiose Marina"
+    # The amount is its own column so a long restaurant name wraps in place.
+    assert 'class="amt">AED ' in html
     # A day nobody shopped on carries no empty list, and a label that is the
     # date is left for the page to fall back to.
     quiet = next(m for m in marks if m["date"] == "2026-08-11")
