@@ -36,34 +36,54 @@
     })();
   </script>
   <script>
+    /* Theme is a preference, not a guess: Light, Dark, or Auto. Auto is
+       the operating system, and it moves when the OS does. A tap walks
+       the three in that order. */
     window.__bfTheme=(function(){
       var KEY="bf-theme";
       var COLORS={light:"#ffffff",dark:"#0a0a0a"};
-      function read(){
-        try{var t=localStorage.getItem(KEY);if(t==="light"||t==="dark")return t;}catch(e){}
-        return (window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";
+      var ORDER=["light","dark","auto"];
+      var LABEL={light:"Light",dark:"Dark",auto:"Auto"};
+      var mq=window.matchMedia?matchMedia("(prefers-color-scheme: dark)"):null;
+      function pref(){
+        try{var t=localStorage.getItem(KEY);if(t==="light"||t==="dark"||t==="auto")return t;}catch(e){}
+        return "auto";
+      }
+      function resolve(p){
+        if(p==="light"||p==="dark") return p;
+        return (mq&&mq.matches)?"dark":"light";
       }
       function paint(){
+        var p=pref();
+        var next=ORDER[(ORDER.indexOf(p)+1)%ORDER.length];
         document.querySelectorAll("[data-theme-toggle]").forEach(function(btn){
-          var t=document.documentElement.getAttribute("data-theme");
-          btn.textContent=t==="dark"?"Light":"Dark";
-          btn.setAttribute("aria-label", t==="dark"?"Switch to light theme":"Switch to dark theme");
+          btn.textContent=LABEL[p];
+          btn.setAttribute("aria-label","Theme "+LABEL[p]+". Switch to "+LABEL[next]);
         });
       }
-      function apply(t,persist){
-        if(t!=="light"&&t!=="dark") t=read();
+      function apply(p,persist){
+        if(p!=="light"&&p!=="dark"&&p!=="auto") p=pref();
+        var t=resolve(p);
         var r=document.documentElement;
         r.setAttribute("data-theme",t);
+        r.setAttribute("data-theme-pref",p);
         r.style.colorScheme=t;
         var m=document.querySelector('meta[name="theme-color"]');
         if(m) m.setAttribute("content", COLORS[t]);
         var bar=document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
         if(bar) bar.setAttribute("content", t==="dark"?"black-translucent":"default");
+        if(persist){ try{ localStorage.setItem(KEY,p);}catch(e){} }
         paint();
-        if(persist){ try{ localStorage.setItem(KEY,t);}catch(e){} }
       }
-      apply(read(), false);
-      return {read:read, apply:apply, paint:paint, toggle:function(){ apply(read()==="dark"?"light":"dark", true); }};
+      function onOs(){ if(pref()==="auto") apply("auto", false); }
+      if(mq){
+        if(mq.addEventListener) mq.addEventListener("change", onOs);
+        else if(mq.addListener) mq.addListener(onOs);
+      }
+      apply(pref(), false);
+      return {read:pref, apply:apply, paint:paint, toggle:function(){
+        apply(ORDER[(ORDER.indexOf(pref())+1)%ORDER.length], true);
+      }};
     })();
   </script>
   <style>
@@ -247,7 +267,7 @@
     .user { color:var(--muted); font-size:13px; }
     .user a { color:var(--ink); }
     .nav-right { display:flex; align-items:center; gap:12px; flex-wrap:wrap; justify-content:flex-end; }
-    .nav-right .theme-toggle { padding:7px 10px; font-size:12px; width:auto; min-height:36px; }
+    .nav-right .theme-toggle { padding:7px 10px; font-size:12px; width:auto; min-width:5.2em; min-height:36px; text-align:center; }
     .tabs { display:flex; gap:8px; }
     .tabs a {
       color:var(--muted); font-size:12px; font-weight:700; letter-spacing:.08em;
@@ -749,12 +769,12 @@
           <div class="user"><span class="who">{{ user.email }} · </span><a href="/logout">Sign out</a></div>
           <button class="ghost upd-btn" type="button" id="pwa-install">Install</button>
           <button class="ghost upd-btn" type="button" id="upd-nav">Update</button>
-          <button class="ghost theme-toggle" type="button" data-theme-toggle>Dark</button>
+          <button class="ghost theme-toggle" type="button" data-theme-toggle>Auto</button>
         </div>
       {% else %}
         <div class="nav-right">
           <button class="ghost upd-btn" type="button" id="pwa-install">Install</button>
-          <button class="ghost theme-toggle" type="button" data-theme-toggle>Dark</button>
+          <button class="ghost theme-toggle" type="button" data-theme-toggle>Auto</button>
         </div>
       {% endif %}
     </nav>
