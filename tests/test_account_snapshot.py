@@ -101,5 +101,51 @@ def test_non_magento_store_is_search_only(bf):
     assert "search-only" in out["error"].lower() or "magento" in out["error"].lower()
     snap = json.loads(bf._call_tool(user, "bf_whoami", {}))
     carrefour = next(s for s in snap["stores"] if s["store_id"] == "carrefour")
-    assert carrefour["capabilities"] == ["search"]
+    assert carrefour["capabilities"] == ["search", "receipts"]
     assert "union coop" in snap["note"].lower()
+
+
+def test_a_receipts_only_store_is_never_offered_a_search_tool(bf):
+    user = bf.db.create_user("i@example.com", "secret1")
+    names = {t["name"] for t in bf.tools_catalog()}
+    assert "careem_search" not in names
+    assert "careem_cart" not in names
+    assert "careem_checkout" not in names
+
+    snap = json.loads(bf._call_tool(user, "bf_whoami", {}))
+    careem = next(s for s in snap["stores"] if s["store_id"] == "careem")
+    assert careem["capabilities"] == ["receipts"]
+    assert careem["tools"] == []
+    assert careem["receipts_only"] is True
+    assert "receipts-only" in snap["note"].lower()
+
+
+def test_asking_a_receipts_only_store_for_prices_says_why_not(bf):
+    """A store with no catalog says so, rather than "unknown retailer"."""
+    user = bf.db.create_user("j@example.com", "secret1")
+
+    direct = json.loads(bf._call_tool(user, "careem_search", {"query": "shawarma"}))
+    assert direct["success"] is False
+    assert direct["results"] == []
+    assert "receipts-only" in direct["error"].lower()
+    assert "careem" in direct["error"].lower()
+
+    scoped = json.loads(bf._call_tool(user, "bf_search", {"query": "shawarma", "retailer": "careem"}))
+    assert scoped["success"] is False
+    assert "receipts-only" in scoped["error"].lower()
+
+    unknown = json.loads(bf._call_tool(user, "bf_search", {"query": "milk", "retailer": "nowhere"}))
+    assert "unknown retailer" in unknown["error"]
+
+
+def test_searching_every_store_skips_the_one_with_no_catalog(bf, monkeypatch):
+    user = bf.db.create_user("k@example.com", "secret1")
+    monkeypatch.setattr(
+        bf.catalog,
+        "search",
+        lambda sid, query, limit: {"retailer": sid, "query": query, "results": []},
+    )
+    out = json.loads(bf._call_tool(user, "bf_search", {"query": "shawarma"}))
+    asked = {block["retailer"] for block in out["stores"]}
+    assert "careem" not in asked
+    assert "grandiose" in asked

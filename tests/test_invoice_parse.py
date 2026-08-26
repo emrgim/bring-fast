@@ -1,5 +1,7 @@
 from bring_fast.invoice_parse import (
     parse_africaneastern_html,
+    parse_careem_html,
+    parse_careem_text,
     parse_carrefour_text,
     parse_grandiose_confirmation_html,
     parse_grandiose_text,
@@ -150,5 +152,125 @@ def test_parse_africaneastern_invoice_html():
     assert out["invoice_date"] == "2024-06-19"
     assert out["items"][0]["barcode"] == "90490005"
     assert out["items"][0]["line_total"] == 139.0
+
+
+CAREEM_PDF = """
+Tax Invoice
+Careem Networks FZ LLC
+TRN 100123456700003
+Invoice No: CRM-2026-884213
+Order ID: 8842137755
+Your order from: Al Safadi Restaurant
+Invoice Date: 26 Aug 2026
+2 x Chicken Shawarma Wrap AED 36.00
+1 x Mixed Grill Platter AED 58.50
+Hummus Beiruty AED 18.00
+Delivery fee AED 5.00
+Service fee AED 2.50
+Subtotal AED 112.50
+VAT 5% AED 5.63
+Total AED 123.13
+"""
+
+
+def test_parse_careem_invoice_keeps_dishes_and_drops_the_totals():
+    out = parse_careem_text(CAREEM_PDF, source="careem.pdf")
+    assert out["retailer"] == "careem"
+    assert out["invoice_no"] == "CRM-2026-884213"
+    assert out["order_no"] == "8842137755"
+    assert out["invoice_date"] == "2026-08-26"
+    # The restaurant is what you actually bought from, so it is the store name.
+    assert out["store_name"] == "Careem · Al Safadi Restaurant"
+    assert [i["name"] for i in out["items"]] == [
+        "Chicken Shawarma Wrap",
+        "Mixed Grill Platter",
+        "Hummus Beiruty",
+    ]
+    wrap = out["items"][0]
+    assert wrap["qty"] == 2.0
+    assert wrap["line_total"] == 36.0
+    assert wrap["unit_price"] == 18.0
+    # Food has no barcode to look a product up by.
+    assert all(i["barcode"] == "" for i in out["items"])
+
+
+def test_parse_careem_confirmation_html_reads_either_side_of_the_quantity():
+    html = """
+    <table>
+     <tr><td>Your order from</td><td>Reem Al Bawadi</td></tr>
+     <tr><td>Order ID</td><td>9911223344</td></tr>
+     <tr><td>Order Date</td><td>Aug 24, 2026</td></tr>
+     <tr><td>3x Falafel Plate</td><td>AED 27.00</td></tr>
+     <tr><td>Fattoush Salad x 2</td><td>AED 44.00</td></tr>
+     <tr><td>Delivery</td><td>AED 6.00</td></tr>
+     <tr><td>Total</td><td>AED 77.00</td></tr>
+    </table>
+    """
+    out = parse_careem_html(html, source="mail")
+    # No invoice number on a confirmation, so the order carries the receipt.
+    assert out["invoice_no"] == "order-9911223344"
+    assert out["invoice_date"] == "2026-08-24"
+    assert [(i["name"], i["qty"], i["line_total"]) for i in out["items"]] == [
+        ("Falafel Plate", 3.0, 27.0),
+        ("Fattoush Salad", 2.0, 44.0),
+    ]
+
+
+def test_parse_careem_pairs_a_dish_with_the_price_on_the_next_line():
+    """A mail table puts each cell on its own line once the tags are gone."""
+    text = """
+Careem
+Order ID: 5566778899
+Delivery Date: 12 Sep 2026
+Your order from: Zaroob
+2x Manakish Zaatar
+AED 24.00
+Karak Chai x 4
+AED 16.00
+Delivery fee
+AED 5.00
+Total
+AED 45.00
+"""
+    out = parse_careem_text(text)
+    assert out["store_name"] == "Careem · Zaroob"
+    assert [(i["name"], i["qty"], i["unit_price"]) for i in out["items"]] == [
+        ("Manakish Zaatar", 2.0, 12.0),
+        ("Karak Chai", 4.0, 4.0),
+    ]
+
+
+def test_parse_careem_does_not_read_the_restaurant_as_a_dish():
+    """A bare line above a total is as likely to be the restaurant as an item."""
+    text = """
+Careem
+Order ID: 1212121212
+Al Safadi Restaurant
+AED 88.00
+Total
+AED 88.00
+"""
+    out = parse_careem_text(text)
+    assert out["items"] == []
+
+
+def test_careem_invoice_lands_in_purchases(bf):
+    from datetime import date
+
+    user = bf.db.create_user("careem@example.com", "secret1")
+    parsed = parse_careem_text(CAREEM_PDF, source="careem.pdf")
+    invoice_id = bf.purchases.upsert_invoice(user["id"], parsed, gmail_id="mail-1")
+
+    assert invoice_id is not None
+    orders = bf.purchases.orders_report(
+        user["id"], range_key="all", include_items=True, today=date(2026, 12, 31)
+    )
+    order = next(o for o in orders["orders"] if o["invoice_no"] == "CRM-2026-884213")
+    assert order["store"] == "Careem · Al Safadi Restaurant"
+    assert {i["name"] for i in order["items"]} == {
+        "Chicken Shawarma Wrap",
+        "Mixed Grill Platter",
+        "Hummus Beiruty",
+    }
 
 

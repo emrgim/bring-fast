@@ -18,8 +18,8 @@
     <div class="capline{% if not c.on %} no{% endif %}">
       <dt>{{ c.label }}</dt>
       <dd>
-        {% if c.key == 'search' %}Look up prices and products on {{ store.name }}.
-        {% elif c.key == 'compare' %}Put {{ store.name }}'s price next to what you paid.
+        {% if c.key == 'search' %}{% if c.on %}Look up prices and products on {{ store.name }}.{% else %}No catalog to look up: {{ store.name }} is here for its invoices.{% endif %}
+        {% elif c.key == 'compare' %}{% if c.on %}Put {{ store.name }}'s price next to what you paid.{% else %}Nothing to price against: {{ store.name }} has no catalog to read.{% endif %}
         {% elif c.key == 'cart' %}{% if c.on %}Fill a basket on {{ store.name }} from here.{% else %}No basket: not a Magento store we have tested.{% endif %}
         {% elif c.key == 'checkout' %}{% if c.on %}Place the order on {{ store.name }}.{% else %}No orders from here.{% endif %}
         {% elif c.key == 'receipts' %}{% if c.on %}Read {{ store.name }} invoices into your purchases.{% else %}No invoice reader for {{ store.name }} yet.{% endif %}
@@ -38,7 +38,9 @@
     </p>
   </form>
   <p class="off">
-    {% if store.enabled %}On: this store answers the app's tools and shows up in comparisons.
+    {% if not store.search %}{{ store.name }} has no tools and no comparisons to be in, so this only
+    says whether you count it as a store you use. Its invoices are read either way.
+    {% elif store.enabled %}On: this store answers the app's tools and shows up in comparisons.
     {% else %}Off: hidden from the app's tools until you turn it back on.{% endif %}
   </p>
 </div>
@@ -85,6 +87,8 @@
 </div>
 {% elif store.login %}
 <p class="off">Turn {{ store.name }} on to keep a login for it.</p>
+{% elif store.receipts and not store.search %}
+<p class="off">{{ store.name }} invoices arrive by mail, so there is no login to keep here.</p>
 {% else %}
 <p class="off">No login is wired for {{ store.name }} yet, so there is nothing to keep here.</p>
 {% endif %}

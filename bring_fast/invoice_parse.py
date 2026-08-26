@@ -1,4 +1,4 @@
-"""Parse official Carrefour / Grandiose tax-invoice PDFs."""
+"""Read a store's own invoice — PDF, email HTML, or the text of either — into lines."""
 
 from __future__ import annotations
 
@@ -256,6 +256,9 @@ def parse_invoice_pdf(path: str | Path) -> dict[str, Any]:
         return parse_mmi_text(text, source=p.name)
     if "african" in low and "eastern" in low:
         return parse_africaneastern_text(text, source=p.name)
+    # Before the Carrefour arm: a Careem invoice is also headed "Tax Invoice".
+    if "careem" in low:
+        return parse_careem_text(text, source=p.name)
     if "majid al futtaim" in low or "carrefour" in low or "tax invoice" in low:
         return parse_carrefour_text(text, source=p.name)
     raise ValueError(f"unrecognized invoice: {p.name}")
@@ -355,6 +358,163 @@ def parse_africaneastern_html(html: str, *, source: str = "") -> dict[str, Any]:
     text = re.sub(r"<[^>]+>", " ", text)
     text = re.sub(r"[ \t]+", " ", text)
     return parse_africaneastern_text(text, source=source)
+
+
+"""Careem food orders.
+
+Careem is food delivery, so a line is a dish and not a barcoded product, and the
+totals block carries most of the money. The receipt arrives in more than one
+shape — a tax-invoice PDF, an order-confirmation email, plain text pasted out of
+either — so the line readers below are deliberately loose about where the
+quantity and the `AED` sit, and the summary rows are named out rather than
+guessed at from the numbers.
+"""
+CAREEM_ORDER = re.compile(r"Order\s*(?:ID|No\.?|Number|#)\s*[:#]?\s*([A-Za-z0-9][A-Za-z0-9-]{3,})", re.I)
+CAREEM_INV = re.compile(r"(?:Tax\s+)?Invoice\s*(?:No\.?|Number|#)\s*[:#]?\s*([A-Za-z0-9][A-Za-z0-9/-]{2,})", re.I)
+CAREEM_PLACE = re.compile(
+    r"(?:Your order from|Order from|Delivered from|Restaurant|Merchant|Store)\s*[:\-]?\s*(.+)",
+    re.I,
+)
+CAREEM_DATE = re.compile(
+    r"(?:Invoice|Order|Delivery|Placed on|Date)\s*(?:Date)?\s*[:\-]?\s*"
+    r"(\d{1,2}[ /-][A-Za-z]{3,9}[ /-]\d{4}|[A-Za-z]{3,9} \d{1,2},? \d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4})",
+    re.I,
+)
+
+# Everything on a Careem receipt that carries money but is not a dish.
+CAREEM_SUMMARY = (
+    "subtotal", "sub total", "total", "grand total", "order total", "items total",
+    "vat", "tax", "discount", "promo", "promotion", "voucher", "coupon",
+    "delivery", "service", "packaging", "small order", "careem plus", "careem pay",
+    "tip", "tips", "rounding", "amount paid", "amount due", "paid", "payment",
+    "wallet", "credit", "card", "you saved", "savings", "surcharge", "peak",
+)
+
+_CAREEM_AMOUNT = re.compile(r"^(?:AED\s*)?(\d{1,6}(?:\.\d{1,2})?)(?:\s*AED)?$", re.I)
+# "2 x Chicken Shawarma  AED 36.00", "2x Fries 24.00", "1 Mixed Grill 58.00"
+_CAREEM_QTY_FIRST = re.compile(
+    r"^(?P<qty>\d{1,2})\s*(?:[xX×]\s*|[xX×]?\s+)(?P<name>[^\W\d][^\n]*?)\s+"
+    r"(?:AED\s*)?(?P<total>\d{1,6}(?:\.\d{1,2})?)(?:\s*AED)?$"
+)
+# "Chicken Shawarma x 2  36.00"
+_CAREEM_QTY_LAST = re.compile(
+    r"^(?P<name>.+?)\s*[xX×]\s*(?P<qty>\d{1,2})\s+(?:AED\s*)?(?P<total>\d{1,6}(?:\.\d{1,2})?)(?:\s*AED)?$"
+)
+# "Chicken Shawarma  AED 18.00" — a decimal is required so an order id is not a price.
+_CAREEM_NO_QTY = re.compile(r"^(?P<name>.+?)\s+(?:AED\s*)?(?P<total>\d{1,6}\.\d{2})(?:\s*AED)?$")
+# The quantity marker on its own line, for receipts that break name and price up.
+_CAREEM_QTY_ONLY_FIRST = re.compile(r"^(?P<qty>\d{1,2})\s*[xX×]\s*(?P<name>[^\W\d].*)$")
+_CAREEM_QTY_ONLY_LAST = re.compile(r"^(?P<name>.+?)\s*[xX×]\s*(?P<qty>\d{1,2})$")
+
+
+def _careem_summary(name: str) -> bool:
+    n = re.sub(r"[^a-z0-9 ]+", " ", (name or "").lower())
+    n = re.sub(r"\s+", " ", n).strip()
+    if not n:
+        return True
+    return any(n == s or n.startswith(f"{s} ") for s in CAREEM_SUMMARY)
+
+
+def _careem_named(raw: str) -> bool:
+    if not raw or len(raw) > 120 or raw.strip().lower() in ("aed", "dhs", "dh"):
+        return False
+    return len(re.findall(r"[A-Za-z]", raw)) >= 2
+
+
+def _careem_date(raw: str) -> str:
+    for fmt in (
+        "%d %b %Y", "%d %B %Y", "%d-%b-%Y", "%d-%B-%Y", "%d/%m/%Y",
+        "%b %d, %Y", "%B %d, %Y", "%b %d %Y", "%B %d %Y", "%Y-%m-%d",
+    ):
+        try:
+            return datetime.strptime(raw, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return ""
+
+
+def _careem_item(name: str, qty: float, total: float) -> dict[str, Any] | None:
+    clean = re.sub(r"\s+", " ", name or "").strip(" -–—·|")
+    clean = re.sub(r"^AED\s+|\s+AED$", "", clean, flags=re.I).strip(" -–—·|")
+    if not _careem_named(clean) or total <= 0:
+        return None
+    qty = qty if qty > 0 else 1.0
+    return {
+        "name": clean,
+        "qty": qty,
+        "unit_price": round(total / qty, 2),
+        "line_total": total,
+        "barcode": "",
+    }
+
+
+def parse_careem_text(text: str, *, source: str = "") -> dict[str, Any]:
+    order = _first(CAREEM_ORDER, text)
+    inv = _first(CAREEM_INV, text)
+    date_raw = _first(CAREEM_DATE, text)
+    place = re.sub(r"\s+", " ", _first(CAREEM_PLACE, text)).strip(" -–—:·|")
+    lines = [re.sub(r"\s+", " ", ln).strip() for ln in text.splitlines()]
+    lines = [ln for ln in lines if ln]
+    items: list[dict[str, Any]] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        # A cell holding only money belongs to the line above it, which has
+        # already had its chance to claim it.
+        if _CAREEM_AMOUNT.match(line):
+            i += 1
+            continue
+        hit = None
+        for rx in (_CAREEM_QTY_FIRST, _CAREEM_QTY_LAST, _CAREEM_NO_QTY):
+            m = rx.match(line)
+            if not m:
+                continue
+            groups = m.groupdict()
+            hit = _careem_item(groups["name"], float(groups.get("qty") or 1), float(groups["total"]))
+            if hit:
+                break
+        if hit:
+            items.append(hit)
+            i += 1
+            continue
+        # Table cells flatten to one line each, so a dish can sit above its
+        # price. Only pair them when the line carries a quantity marker: a bare
+        # line above a total is as likely to be the restaurant's name.
+        nxt = _CAREEM_AMOUNT.match(lines[i + 1]) if i + 1 < len(lines) else None
+        if nxt:
+            for rx in (_CAREEM_QTY_ONLY_FIRST, _CAREEM_QTY_ONLY_LAST):
+                m = rx.match(line)
+                if not m:
+                    continue
+                paired = _careem_item(m.group("name"), float(m.group("qty")), float(nxt.group(1)))
+                if paired:
+                    items.append(paired)
+                    i += 2
+                    break
+            else:
+                i += 1
+            continue
+        i += 1
+    kept = [it for it in items if not _skip(it["name"]) and not _careem_summary(it["name"])]
+    return {
+        "retailer": "careem",
+        "store_name": f"Careem · {place}" if place else "Careem",
+        "invoice_no": inv or (f"order-{order}" if order else ""),
+        "order_no": order,
+        "invoice_date": _careem_date(date_raw) if date_raw else "",
+        "source": source,
+        "items": kept,
+    }
+
+
+def parse_careem_html(html: str, *, source: str = "") -> dict[str, Any]:
+    text = re.sub(r"<(script|style)[\s\S]*?</\1>", " ", html, flags=re.I)
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
+    text = re.sub(r"</(p|tr|td|th|div|h\d|li|span)>", "\n", text, flags=re.I)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"&nbsp;?", " ", text, flags=re.I)
+    text = re.sub(r"&amp;", "&", text, flags=re.I)
+    return parse_careem_text(text, source=source)
 
 
 def parse_grandiose_confirmation_html(html: str, *, source: str = "", date: str = "") -> dict[str, Any]:

@@ -176,11 +176,20 @@ when it does not.
 | [Spinneys UAE](https://www.spinneys.com/en-ae/) | yes | yes | — | — | — | yes |
 | [MMI](https://www.mmihomedelivery.ae/) | yes | yes | — | — | yes | yes |
 | [African + Eastern](https://www.africaneasternonline.com/) | yes | yes | — | — | yes | yes |
+| [Careem](https://www.careem.com/) | — | — | — | — | yes | — |
 
-Search and price comparison work everywhere because they only read public pages.
-Cart and checkout are the Magento stores we have tested. Receipts means there is
-a parser for that store's invoices, and login means a saved store account, which
-is what receipts and baskets are read with.
+Search and price comparison read public catalog pages, so they go together and a
+store with no catalog has neither. Cart and checkout are the Magento stores we
+have tested. Receipts means there is a parser for that store's invoices, and
+login means a saved store account, which is what receipts and baskets are read
+with.
+
+Careem is receipts only. It is food delivery, not a supermarket: the menu is per
+restaurant and per hour, so there is no catalog to search and no shelf price to
+compare a dish against. It is a store here so its emailed invoices have somewhere
+to land, and it is left out of search, comparison and the price refresh rather
+than kept in them answering errors. A Careem invoice names the restaurant it came
+from, so purchases read `Careem · Zaroob` and not just `Careem`.
 
 ## Run
 

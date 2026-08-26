@@ -1115,24 +1115,28 @@ def _store_tools() -> list[dict[str, Any]]:
     ]
     for r in db.RETAILERS:
         sid, name = r["id"], r["name"]
-        tools.append(
-            {
-                "name": f"{sid}_search",
-                "description": (
-                    f"Search products at {name}."
-                    + (
-                        " Magento: cart/checkout available if the store is enabled."
-                        if r.get("shop")
-                        else " Search only — not used for orders."
-                    )
-                ),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}},
-                    "required": ["query"],
-                },
-            }
-        )
+        # A receipts-only store has no catalog, so it is never offered a search
+        # tool: a listed tool that can only answer with an error is worse than
+        # no tool at all.
+        if r.get("search"):
+            tools.append(
+                {
+                    "name": f"{sid}_search",
+                    "description": (
+                        f"Search products at {name}."
+                        + (
+                            " Magento: cart/checkout available if the store is enabled."
+                            if r.get("shop")
+                            else " Search only — not used for orders."
+                        )
+                    ),
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}},
+                        "required": ["query"],
+                    },
+                }
+            )
         if not (r.get("shop") and db.is_store_enabled(sid)):
             continue
         tools.extend(
@@ -1181,6 +1185,15 @@ def _ok(**kw):
     return json.dumps({"success": True, **kw}, ensure_ascii=False)
 
 
+def _no_catalog(retailer: str) -> str:
+    """Said the same way everywhere a receipts-only store is asked for prices."""
+    name = (db.store_meta(retailer) or {}).get("name") or retailer
+    return (
+        f"{name} is receipts-only: its emailed invoices are read into purchases, "
+        "but it has no catalog to search or compare."
+    )
+
+
 def _store_snapshot(user: dict[str, Any], retailer: str) -> dict[str, Any]:
     """Saved Bring Fast state. Does not invent or write a dashboard delivery address."""
     stores = {s["id"]: s for s in db.list_retailer_accounts(user["id"])}
@@ -1203,9 +1216,15 @@ def _store_snapshot(user: dict[str, Any], retailer: str) -> dict[str, Any]:
         "checkout_url": s.get("checkout_url"),
         "enabled": bool(s.get("enabled")),
         "shop": bool(s.get("shop")),
-        "capabilities": ["search", "cart", "checkout"] if s.get("shop") else ["search"],
+        "searchable": bool(s.get("search")),
+        "receipts_only": bool(s.get("receipts") and not s.get("search")),
+        "capabilities": (
+            (["search"] if s.get("search") else [])
+            + (["cart", "checkout"] if s.get("shop") else [])
+            + (["receipts"] if s.get("receipts") else [])
+        ),
         "tools": (
-            [f"{retailer}_search"]
+            ([f"{retailer}_search"] if s.get("search") else [])
             + (
                 [f"{retailer}_cart", f"{retailer}_checkout", f"{retailer}_status"]
                 if s.get("shop") and s.get("enabled")
@@ -1229,6 +1248,8 @@ def _account_snapshot(user: dict[str, Any]) -> dict[str, Any]:
             "The only cart is the official store account cart. "
             "Orders (add to cart / checkout) only on Magento: Grandiose and Union Coop. "
             "Carrefour, Waitrose and Spinneys are search-only — not tested for orders. "
+            "Careem is receipts-only: its emailed invoices are read into purchases, "
+            "and it has no catalog to search and nothing to compare. "
             "Never invent or report a Bring Fast local cart or awaiting_official_payment order."
         ),
         "stores": stores,
@@ -1435,7 +1456,12 @@ def _search_stores(user: dict[str, Any], query: str, retailer: str, limit: int) 
     all_ids = [r["id"] for r in db.RETAILERS]
     if retailer and retailer not in all_ids:
         return json.dumps({"success": False, "error": f"unknown retailer {retailer}", "stores": []}, ensure_ascii=False)
-    ids = [retailer] if retailer in all_ids else all_ids
+    if retailer and not db.store_can_search(retailer):
+        return json.dumps(
+            {"success": False, "error": _no_catalog(retailer), "stores": []},
+            ensure_ascii=False,
+        )
+    ids = [retailer] if retailer else [r["id"] for r in db.searchable_retailers()]
     out = []
     for sid in ids:
         block = catalog.search(sid, query, limit)
@@ -1466,7 +1492,7 @@ def _compare(user: dict[str, Any], args: dict[str, Any]) -> str:
     else:
         return json.dumps({"success": False, "error": "Pass source=<store> (official cart) or query=...", "items": []})
     if source and targets is None:
-        targets = [r["id"] for r in db.RETAILERS if r["id"] != source]
+        targets = [r["id"] for r in db.searchable_retailers() if r["id"] != source]
     out = catalog.compare_items(items, targets=targets, limit=int(args.get("limit") or 3))
     out["source"] = source or None
     out["source_total"] = source_total
@@ -1564,6 +1590,8 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
     for r in db.RETAILERS:
         sid = r["id"]
         if name == f"{sid}_search":
+            if not r.get("search"):
+                return json.dumps({"success": False, "error": _no_catalog(sid), "results": []}, ensure_ascii=False)
             result = catalog.search(sid, args.get("query") or "", int(args.get("limit") or 8))
             result["store"] = r["name"]
             result["shop"] = bool(r.get("shop"))
