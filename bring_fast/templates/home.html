@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_shelf_shapes.html" as shapes with context %}
 {% block under_nav %}
 <div class="filters">
   <div class="chip-row" aria-label="Range">
@@ -68,19 +69,7 @@
 {% endif %}
 
 <div class="mlist">
-  {% for p in products %}
-  <a class="mcard" href="/purchases/{{ p.key }}">
-    {% if p.image_url %}<img class="thumb" src="{{ p.image_url }}" alt="" width="56" height="56" loading="eager" decoding="async" referrerpolicy="no-referrer"/>{% else %}<div class="thumb empty">{{ p.name[:1] }}</div>{% endif %}
-    <div class="copy">
-      <b>{{ p.name }}</b>
-      <div class="pair">
-        <span>Frequency<b>{{ p.frequency }}</b></span>
-        <span>Likely<b>{{ p.likely or 0 }}</b></span>
-      </div>
-    </div>
-    <div class="amt">AED {{ '%.0f'|format(p.spend_total) }}<small>{{ p.times_bought }} buys</small></div>
-  </a>
-  {% else %}
+  {% for p in products %}{{ shapes.card(p) }}{% else %}
   <p class="off">No invoices yet.</p>
   {% endfor %}
 </div>

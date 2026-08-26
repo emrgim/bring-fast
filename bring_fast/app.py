@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import __version__, catalog, checkout, compare, db, mcp_skill, purchases, update
+from . import __version__, catalog, checkout, compare, db, forecast, mcp_skill, purchases, update
 
 HOST = os.environ.get("BRINGFAST_HOST", "127.0.0.1")
 PORT = int(os.environ.get("BRINGFAST_PORT", "8877"))
@@ -885,6 +885,51 @@ def refresh_compare(request: Request, key: str, retailer: str, range: str = "all
     return RedirectResponse(f"/purchases/{key}{tail}", status_code=303)
 
 
+def _local_next(raw: str, fallback: str) -> str:
+    path = (raw or "").strip()
+    dest = ""
+    if path.startswith("/") and not path.startswith("//"):
+        dest = path
+    else:
+        parts = urlsplit(path)
+        if parts.scheme and parts.netloc and parts.path.startswith("/"):
+            dest = parts.path
+            if parts.query:
+                dest += "?" + parts.query
+    if not dest:
+        return fallback
+    if dest.startswith("/purchases/rows"):
+        dest = "/purchases" + dest[len("/purchases/rows"):]
+        split = dest.split("?", 1)
+        if len(split) == 2:
+            kept = []
+            for bit in split[1].split("&"):
+                key = bit.split("=", 1)[0]
+                if key not in ("offset", "limit"):
+                    kept.append(bit)
+            dest = split[0] + (("?" + "&".join(kept)) if kept else "")
+    return dest
+
+
+@app.post("/purchases/{key:path}/vote")
+def vote_likely(request: Request, key: str, vote: str = Form(""), next: str = Form("")):
+    user = current_user(request)
+    if not user:
+        return RedirectResponse("/login?mode=signin&next=/purchases", status_code=303)
+    key = purchases.canonical_key(key)
+    dest = _local_next(next or request.headers.get("referer") or "", f"/purchases/{key}")
+    product = purchases.product_purchases(user["id"], key)
+    if not product:
+        return RedirectResponse("/purchases", status_code=303)
+    wanted = (vote or "").strip().lower()
+    if wanted not in ("up", "down"):
+        return RedirectResponse(dest, status_code=303)
+    current = forecast.load_votes(user["id"]).get(key, "")
+    forecast.set_vote(user["id"], key, "" if current == wanted else wanted)
+    purchases.forget_shelf()
+    return RedirectResponse(dest, status_code=303)
+
+
 @app.get("/receipts/{retailer}/{invoice_no}", response_class=HTMLResponse)
 def receipt_view(request: Request, retailer: str, invoice_no: str):
     user = current_user(request)
@@ -1081,7 +1126,9 @@ def _store_tools() -> list[dict[str, Any]]:
             "description": (
                 "Weekly-style shopping list from invoice history (mean cadence, as before). "
                 "Each item has likely 0-100: how much more probable it is a real buy-again "
-                "(EWMA + regularity; 500ml single water stays on the list with likely=0). "
+                "(EWMA + regularity, then this user's thumbs up/down on Likely). "
+                "Thumbs up raises likely and can put a weak staple on the list; thumbs down "
+                "drops it. 500ml single water stays on the list with likely=0 unless thumbed. "
                 "horizon_days=0 today, 1 tomorrow, 7 week. exclude=comma keys or names."
             ),
             "inputSchema": {

@@ -31,7 +31,7 @@ Every answer is scoped to the signed-in Bring Fast account. Friends never see th
 | Most expensive product | `bf_products` `sort=unit_price` |
 | Where the money goes | `bf_products` `sort=spend` |
 | Bought most often | `bf_products` `sort=frequency` |
-| What to buy tomorrow / likely list | `bf_shopping_list` — lista come prima (media); campo `likely` 0-100 per i prodotti molto più probabili |
+| What to buy tomorrow / likely list | `bf_shopping_list` — lista come prima (media); campo `likely` 0-100, già condizionato dai thumbs up/down dell'utente |
 | When to buy X again | `bf_product` `query=X` |
 | Price of X now | `bf_search` or `{store}_search` |
 | Compare cart / items | `bf_compare` |
@@ -47,7 +47,8 @@ Optional: `dept=Edible` or `dept=Drinks`.
 - Spend, orders, and ranks come from **invoices**, not from a local cart.
 - Frequency = buys ÷ days from first buy of that product to the end of the view. Sort by rate, not interval.
 - Typical unit price = **median**. Drop piece-vs-kg (ratio outside 1/3–3×).
-- Shopping list skips one-offs, lapsed items (last buy > 90 days), and bags.
+- Shopping list skips one-offs, lapsed items (last buy > 90 days), bags, and products the user thumbed down.
+- `likely` 0-100 already includes thumbs: up raises the score (floor 55), down cuts it and drops the item. `likely_vote` is `up`, `down`, or empty.
 - `status`: overdue / due_today / due_tomorrow / upcoming. `lapsed` means they stopped.
 - Show the official product title when present.
 
