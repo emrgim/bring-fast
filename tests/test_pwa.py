@@ -163,3 +163,7 @@ def test_pwa_apple_icon_and_head(client):
     assert "bf-theme" in html
     assert "IBM Plex Mono" in html
     assert 'data-theme' in html or "__bfTheme" in html
+    assert '["light","dark","auto"]' in html
+    offline = client.get("/offline").text
+    assert 't==="light"||t==="dark"||t==="auto"' in offline
+    assert "prefers-color-scheme" in offline

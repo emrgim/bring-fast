@@ -123,6 +123,20 @@ def test_theme_toggle_lives_only_in_the_top_nav(bf, client):
     assert "<button" not in dock
 
 
+def test_theme_toggle_cycles_light_dark_auto(client):
+    html = client.get("/login").text
+
+    assert html.count("data-theme-toggle>Auto</button>") == 1
+    assert 'var ORDER=["light","dark","auto"]' in html
+    assert 'LABEL={light:"Light",dark:"Dark",auto:"Auto"}' in html
+    # Auto is the OS, and a change to the OS is followed while Auto is set.
+    assert 'prefers-color-scheme: dark' in html
+    assert 'if(pref()==="auto") apply("auto", false)' in html
+    assert 't==="light"||t==="dark"||t==="auto"' in html
+    # A stored Light or Dark still wins; nothing stored is Auto.
+    assert 'return "auto"' in html
+
+
 def test_mobile_header_pads_the_safe_area_only_at_the_top(bf, client):
     html = client.get("/login").text
 
