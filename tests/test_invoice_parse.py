@@ -240,6 +240,41 @@ AED 45.00
     ]
 
 
+def test_parse_careem_mail_reads_qty_addons_and_paid_price():
+    html = """
+    <div>Your total bill: AED 71.24</div>
+    <div>21 August, 12:40 PM</div>
+    <div>Delivery details</div>
+    <div>Sushi Cago</div>
+    <div>Order ID: 168151265</div>
+    <div><span>1 &times;</span> Salmon Box 16 Pieces</div>
+    <div>AED 119.60</div>
+    <div>AED 59.80</div>
+    <div>+ Soy Sauce ( Bottle)</div>
+    <div>AED 3.00 AED 1.50</div>
+    <div>Original cart (incl. tax)</div>
+    <div>AED 122.60</div>
+    <div>Restaurant discount</div>
+    <div>- AED 61.30</div>
+    <div>Delivery charge (incl. tax)</div>
+    <div>AED 1.99</div>
+    <div>Service fee (incl. tax)</div>
+    <div>AED 4.95</div>
+    <div>"Reward your captain!"</div>
+    <div>AED 3.00</div>
+    <div>Order total (incl. tax)</div>
+    <div>AED 71.24</div>
+    """
+    out = parse_careem_html(html, source="mail", date="2026-08-21")
+    assert out["invoice_no"] == "order-168151265"
+    assert out["invoice_date"] == "2026-08-21"
+    assert out["store_name"] == "Careem · Sushi Cago"
+    assert [(i["name"], i["qty"], i["line_total"]) for i in out["items"]] == [
+        ("Salmon Box 16 Pieces", 1.0, 59.8),
+        ("Soy Sauce ( Bottle)", 1.0, 1.5),
+    ]
+
+
 def test_parse_careem_does_not_read_the_restaurant_as_a_dish():
     """A bare line above a total is as likely to be the restaurant as an item."""
     text = """

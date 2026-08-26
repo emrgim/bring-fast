@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html as html_lib
 import re
 from datetime import datetime
 from pathlib import Path
@@ -388,6 +389,14 @@ CAREEM_SUMMARY = (
     "delivery", "service", "packaging", "small order", "careem plus", "careem pay",
     "tip", "tips", "rounding", "amount paid", "amount due", "paid", "payment",
     "wallet", "credit", "card", "you saved", "savings", "surcharge", "peak",
+    "your total bill", "original cart", "original basket", "cart total", "basket total",
+    "restaurant discount", "reward your captain", "payment method", "no delivery fee",
+    "promo code", "incl tax",
+)
+_CAREEM_WHEN = re.compile(
+    r"^(?P<dmy>\d{1,2} [A-Za-z]{3,9}),?\s+\d{1,2}:\d{2}\s*[AP]M$"
+    r"|^(?P<mdy>[A-Za-z]{3,9} \d{1,2}),\s+\d{1,2}:\d{2}\s*[AP]M$",
+    re.I,
 )
 
 _CAREEM_AMOUNT = re.compile(r"^(?:AED\s*)?(\d{1,6}(?:\.\d{1,2})?)(?:\s*AED)?$", re.I)
@@ -412,7 +421,13 @@ def _careem_summary(name: str) -> bool:
     n = re.sub(r"\s+", " ", n).strip()
     if not n:
         return True
-    return any(n == s or n.startswith(f"{s} ") for s in CAREEM_SUMMARY)
+    for s in CAREEM_SUMMARY:
+        if " " in s:
+            if s in n:
+                return True
+        elif n == s or n.startswith(f"{s} "):
+            return True
+    return False
 
 
 def _careem_named(raw: str) -> bool:
@@ -433,6 +448,42 @@ def _careem_date(raw: str) -> str:
     return ""
 
 
+def _careem_when(raw: str, year: int | None) -> str:
+    m = _CAREEM_WHEN.match((raw or "").strip())
+    if not m or not year:
+        return ""
+    stub = (m.group("dmy") or m.group("mdy") or "").replace(",", "")
+    for fmt in ("%d %B %Y", "%d %b %Y", "%B %d %Y", "%b %d %Y"):
+        try:
+            return datetime.strptime(f"{stub} {year}", fmt).date().isoformat()
+        except ValueError:
+            continue
+    return ""
+
+
+def _careem_money_line(line: str) -> list[float] | None:
+    s = (line or "").strip()
+    if re.search(r"[A-Za-z]", re.sub(r"AED", "", s, flags=re.I)):
+        return None
+    if not re.search(r"AED|\d+\.\d{2}", s, re.I):
+        m = _CAREEM_AMOUNT.match(s)
+        return [float(m.group(1))] if m else None
+    vals = [float(x) for x in re.findall(r"\d{1,6}(?:\.\d{1,2})?", s)]
+    return vals or None
+
+
+def _careem_following_price(lines: list[str], i: int) -> tuple[float | None, int]:
+    j = i + 1
+    last: float | None = None
+    while j < len(lines):
+        vals = _careem_money_line(lines[j])
+        if not vals:
+            break
+        last = vals[-1]
+        j += 1
+    return last, j
+
+
 def _careem_item(name: str, qty: float, total: float) -> dict[str, Any] | None:
     clean = re.sub(r"\s+", " ", name or "").strip(" -–—·|")
     clean = re.sub(r"^AED\s+|\s+AED$", "", clean, flags=re.I).strip(" -–—·|")
@@ -448,20 +499,42 @@ def _careem_item(name: str, qty: float, total: float) -> dict[str, Any] | None:
     }
 
 
-def parse_careem_text(text: str, *, source: str = "") -> dict[str, Any]:
+def parse_careem_text(text: str, *, source: str = "", date: str = "") -> dict[str, Any]:
     order = _first(CAREEM_ORDER, text)
     inv = _first(CAREEM_INV, text)
     date_raw = _first(CAREEM_DATE, text)
     place = re.sub(r"\s+", " ", _first(CAREEM_PLACE, text)).strip(" -–—:·|")
+    year = int(date[:4]) if date[:4].isdigit() else None
     lines = [re.sub(r"\s+", " ", ln).strip() for ln in text.splitlines()]
     lines = [ln for ln in lines if ln]
+    for i, line in enumerate(lines):
+        if line.lower() == "delivery details" and i + 1 < len(lines):
+            place = lines[i + 1]
+            break
+        if not date_raw:
+            when = _careem_when(line, year)
+            if when:
+                date_raw = line
     items: list[dict[str, Any]] = []
     i = 0
     while i < len(lines):
         line = lines[i]
-        # A cell holding only money belongs to the line above it, which has
-        # already had its chance to claim it.
-        if _CAREEM_AMOUNT.match(line):
+        if _careem_money_line(line) is not None:
+            i += 1
+            continue
+        if line.startswith("+"):
+            name = line[1:].strip()
+            name_i = i
+            if not name and i + 1 < len(lines):
+                name_i = i + 1
+                name = lines[name_i]
+            price, j = _careem_following_price(lines, name_i)
+            if price is not None:
+                hit = _careem_item(name, 1.0, price)
+                if hit:
+                    items.append(hit)
+                    i = j
+                    continue
             i += 1
             continue
         hit = None
@@ -480,41 +553,49 @@ def parse_careem_text(text: str, *, source: str = "") -> dict[str, Any]:
         # Table cells flatten to one line each, so a dish can sit above its
         # price. Only pair them when the line carries a quantity marker: a bare
         # line above a total is as likely to be the restaurant's name.
-        nxt = _CAREEM_AMOUNT.match(lines[i + 1]) if i + 1 < len(lines) else None
-        if nxt:
+        # Careem mail often prints the struck-through price then the paid one —
+        # keep the last AED in the run.
+        price, j = _careem_following_price(lines, i)
+        if price is not None:
             for rx in (_CAREEM_QTY_ONLY_FIRST, _CAREEM_QTY_ONLY_LAST):
                 m = rx.match(line)
                 if not m:
                     continue
-                paired = _careem_item(m.group("name"), float(m.group("qty")), float(nxt.group(1)))
+                paired = _careem_item(m.group("name"), float(m.group("qty")), price)
                 if paired:
                     items.append(paired)
-                    i += 2
+                    i = j
                     break
             else:
                 i += 1
             continue
         i += 1
     kept = [it for it in items if not _skip(it["name"]) and not _careem_summary(it["name"])]
+    invoice_date = _careem_date(date_raw) if date_raw else ""
+    if not invoice_date:
+        invoice_date = _careem_when(date_raw, year) if date_raw else ""
+    if not invoice_date:
+        invoice_date = date[:10] if date else ""
     return {
         "retailer": "careem",
         "store_name": f"Careem · {place}" if place else "Careem",
         "invoice_no": inv or (f"order-{order}" if order else ""),
         "order_no": order,
-        "invoice_date": _careem_date(date_raw) if date_raw else "",
+        "invoice_date": invoice_date,
         "source": source,
         "items": kept,
     }
 
 
-def parse_careem_html(html: str, *, source: str = "") -> dict[str, Any]:
-    text = re.sub(r"<(script|style)[\s\S]*?</\1>", " ", html, flags=re.I)
+def parse_careem_html(html: str, *, source: str = "", date: str = "") -> dict[str, Any]:
+    text = html_lib.unescape(html)
+    text = re.sub(r"<(script|style)[\s\S]*?</\1>", " ", text, flags=re.I)
     text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
-    text = re.sub(r"</(p|tr|td|th|div|h\d|li|span)>", "\n", text, flags=re.I)
+    # Leave </span> in place so "1 × Name" stays on one line in Careem mail.
+    text = re.sub(r"</(p|tr|td|th|div|h\d|li)>", "\n", text, flags=re.I)
     text = re.sub(r"<[^>]+>", " ", text)
-    text = re.sub(r"&nbsp;?", " ", text, flags=re.I)
-    text = re.sub(r"&amp;", "&", text, flags=re.I)
-    return parse_careem_text(text, source=source)
+    text = re.sub(r"[ \t]+", " ", text)
+    return parse_careem_text(text, source=source, date=date)
 
 
 def parse_grandiose_confirmation_html(html: str, *, source: str = "", date: str = "") -> dict[str, Any]:
