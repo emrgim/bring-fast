@@ -30,7 +30,7 @@ def main() -> None:
             barcodes = [prod.get("official_ean") or "", prod.get("barcode") or ""]
             names = [prod.get("official_name") or "", prod.get("receipt_name") or ""]
             print(f"PROD {i}/{len(products)} {prod.get('official_name') or prod.get('receipt_name')}", flush=True)
-            for store in db.RETAILERS:
+            for store in db.searchable_retailers():
                 if not compare.stale_before(uid, prod["product_key"], store["id"], cutoff):
                     skip += 1
                     continue

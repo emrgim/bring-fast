@@ -170,12 +170,14 @@ def latest_quotes(user_id: int, product_key: str) -> dict[str, dict[str, Any]]:
 
 
 def compare_board(user_id: int, product_key: str, paid: float | None) -> list[dict[str, Any]]:
+    """A row per store whose catalog can be quoted. A receipts-only store has no
+    catalog, so it would only ever contribute a permanently empty row."""
     latest = latest_quotes(user_id, product_key)
     priced = [r for r in latest.values() if r.get("price")]
     lo = min((float(r["price"]) for r in priced), default=None)
     hi = max((float(r["price"]) for r in priced), default=None)
     board = []
-    for store in db.RETAILERS:
+    for store in db.searchable_retailers():
         rec = latest.get(store["id"]) or {}
         price = rec.get("price")
         vs = None

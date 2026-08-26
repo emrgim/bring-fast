@@ -27,6 +27,7 @@ RETAILERS = [
         "cart_url": "https://www.grandiose.ae/checkout/cart/",
         "checkout_url": "https://www.grandiose.ae/checkout/",
         "enabled": True,
+        "search": True,
         "receipts": True,
         "login": True,
         "shop": True,
@@ -40,6 +41,7 @@ RETAILERS = [
         "cart_url": "https://www.unioncoop.ae/checkout/cart/",
         "checkout_url": "https://www.unioncoop.ae/checkout/",
         "enabled": False,
+        "search": True,
         "receipts": False,
         "login": False,
         "shop": True,
@@ -53,6 +55,7 @@ RETAILERS = [
         "cart_url": "https://www.carrefouruae.com/mafuae/en",
         "checkout_url": "https://www.carrefouruae.com/mafuae/en/cart",
         "enabled": False,
+        "search": True,
         "receipts": True,
         "login": True,
         "shop": False,
@@ -66,6 +69,7 @@ RETAILERS = [
         "cart_url": "https://www.waitrose.ae/en/",
         "checkout_url": "https://www.waitrose.ae/en/checkout/",
         "enabled": False,
+        "search": True,
         "receipts": False,
         "login": True,
         "shop": False,
@@ -79,6 +83,7 @@ RETAILERS = [
         "cart_url": "https://www.spinneys.com/en-ae/",
         "checkout_url": "https://www.spinneys.com/en-ae/checkout/",
         "enabled": False,
+        "search": True,
         "receipts": False,
         "login": True,
         "shop": False,
@@ -92,6 +97,7 @@ RETAILERS = [
         "cart_url": "https://www.mmihomedelivery.ae/",
         "checkout_url": "https://www.mmihomedelivery.ae/",
         "enabled": False,
+        "search": True,
         "receipts": True,
         "login": True,
         "shop": False,
@@ -105,8 +111,26 @@ RETAILERS = [
         "cart_url": "https://www.africaneasternonline.com/",
         "checkout_url": "https://www.africaneasternonline.com/",
         "enabled": False,
+        "search": True,
         "receipts": True,
         "login": True,
+        "shop": False,
+    },
+    {
+        # Food delivery, not a supermarket: the menu is per restaurant and per
+        # hour, so there is no catalog to search and nothing to price against a
+        # shelf. Careem is here to give its emailed invoices a store to land on.
+        "id": "careem",
+        "name": "Careem",
+        "url": "https://www.careem.com/",
+        "logo": "/static/logos/careem.svg",
+        "color": "#3bb54a",
+        "cart_url": "https://www.careem.com/",
+        "checkout_url": "https://www.careem.com/",
+        "enabled": False,
+        "search": False,
+        "receipts": True,
+        "login": False,
         "shop": False,
     },
 ]
@@ -554,10 +578,11 @@ def list_retailer_accounts(user_id: int) -> list[dict[str, Any]]:
 
 """What a store can do here, in the order the cards read it out.
 
-Search and price comparison work on every store because they only read public
-pages. Cart and checkout are Magento stores we have tested. Receipts is a
-parser for that store's invoices, and login is a saved store account, which is
-what receipts and carts are read with.
+Search and price comparison read public catalog pages, so they go together and
+a store without a catalog to read has neither. Cart and checkout are Magento
+stores we have tested. Receipts is a parser for that store's invoices, and
+login is a saved store account, which is what receipts and carts are read with.
+A store can be receipts alone: its invoices are read, and nothing else.
 """
 CAPABILITIES = [
     ("search", "Search"),
@@ -574,8 +599,8 @@ def store_capabilities(retailer: str) -> list[dict[str, Any]]:
         if r["id"] != retailer:
             continue
         can = {
-            "search": True,
-            "compare": True,
+            "search": bool(r.get("search")),
+            "compare": bool(r.get("search")),
             "cart": bool(r.get("shop")),
             "checkout": bool(r.get("shop")),
             "receipts": bool(r.get("receipts")),
@@ -622,6 +647,15 @@ def enabled_retailers() -> list[dict[str, Any]]:
 def store_can_shop(retailer: str) -> bool:
     """Cart/checkout only for Magento stores we tested: Grandiose and Union Coop."""
     return bool(next((r.get("shop") for r in RETAILERS if r["id"] == retailer), False))
+
+
+def store_can_search(retailer: str) -> bool:
+    """A store with a catalog to read. Receipts-only stores have none."""
+    return bool(next((r.get("search") for r in RETAILERS if r["id"] == retailer), False))
+
+
+def searchable_retailers() -> list[dict[str, Any]]:
+    return [r for r in RETAILERS if r.get("search")]
 
 
 def create_order(user_id: int, retailer: str, items: list, address: str, checkout_url: str) -> dict[str, Any]:
