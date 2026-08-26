@@ -135,7 +135,6 @@ def test_day_focus_is_shared_across_home_and_buys(bf, client):
     _signin(bf, client, "daytap@example.com")
     client.get("/dashboard", params={"range": "1m", "grain": "daily", "day": "2026-08-10"})
     dest, buys = _tap(client, "/purchases")
-    assert "sort=spend" in dest or "sort=" not in dest or "day=2026-08-10" in dest
     assert "day=2026-08-10" in dest
     assert "grain=daily" in dest
     dest, home = _tap(client, "/dashboard")
