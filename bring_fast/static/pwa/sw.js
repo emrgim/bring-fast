@@ -9,7 +9,7 @@
  * so those are saved too — one after another, behind whatever the reader is
  * doing, never as one flood of requests the open page has to compete with.
  */
-const VERSION = "bf-pwa-v8";
+const VERSION = "bf-pwa-v9";
 const SHELL = VERSION + "-shell";
 const PAGES = VERSION + "-pages";
 const ASSETS = VERSION + "-assets";
@@ -189,14 +189,18 @@ async function savePage(req, copy) {
 
 async function cachedPage(req) {
   const cache = await caches.open(PAGES);
-  const hit = (await cache.match(req)) || (await cache.match(req, { ignoreSearch: true }));
+  const hit = await cache.match(req);
   if (hit) return hit;
+  const path = new URL(req.url).pathname;
+  /* Home and Buys carry their window in the query. A 1m page is not a 1y
+     page, and ignoreSearch would show the wrong chips after a dock tap. */
+  if (path === "/dashboard" || path === "/purchases") return undefined;
   try {
-    if (new URL(req.url).pathname === "/") {
+    if (path === "/") {
       return await cache.match(self.location.origin + RESUME);
     }
   } catch (e) {}
-  return undefined;
+  return await cache.match(req, { ignoreSearch: true });
 }
 
 /* A page the device already saw wins over an error screen, every time. */

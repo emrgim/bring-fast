@@ -136,6 +136,32 @@ def test_buys_range_filter_sits_under_the_title_bar(bf, client):
     assert html.count('class="filters"') == 1
 
 
+def test_date_fields_are_not_inside_the_range_chip_row(bf, client):
+    """Two 14em dates in the Range strip clip to 07/28/20… on a phone, and a
+    dock tap resets the strip so the bar looks like it grew extra filters."""
+    _seed(bf, "daterow@example.com")
+    client.post("/login", data={"email": "daterow@example.com", "password": "secret1", "intent": "signin"})
+    for path in ("/dashboard?range=1m&grain=monthly", "/purchases?range=1m&grain=monthly"):
+        html = client.get(path).text
+        head = html[html.index('<header class="app-head">') : html.index("</header>")]
+        range_at = head.index('aria-label="Range"')
+        range_div = head[head.rindex("<div", 0, range_at) : head.index("</div>", range_at) + 6]
+        assert 'type="date"' not in range_div
+        assert ">Apply<" not in range_div
+        assert "filter-dates" in head
+        assert head.index('aria-label="Range"') < head.index('type="date"')
+        hidden_css = html[html.index("input[type=hidden]") :]
+        assert "display:none !important" in hidden_css
+
+
+def test_a_dock_tap_keeps_the_selected_chip_in_the_strip(bf, client):
+    _seed(bf, "chipscroll@example.com")
+    client.post("/login", data={"email": "chipscroll@example.com", "password": "secret1", "intent": "signin"})
+    html = client.get("/dashboard").text
+    assert 'document.querySelectorAll(".chip-row a.on")' in html
+    assert "row.scrollLeft" in html
+
+
 def test_store_panel_expands_in_flow_and_inverts_when_filtered(bf, client):
     user = _seed(bf, "storeui@example.com")
     bf.purchases.upsert_invoice(
