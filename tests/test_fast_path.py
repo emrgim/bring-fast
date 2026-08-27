@@ -100,6 +100,41 @@ def test_unchanged_view_does_not_rewrite(bf):
     assert "range=1y" in bf.db.get_last_view(user["id"])["query"]
 
 
+def test_home_and_buys_remember_separate_queries(bf):
+    user = bf.db.create_user("tabs@example.com", "secret1")
+    assert bf.db.set_last_view(user["id"], "/dashboard", "range=1y&grain=yearly&dept=Drinks") is True
+    assert bf.db.set_last_view(user["id"], "/purchases", "sort=times&dir=desc&range=all&grain=daily") is True
+    home = bf.db.get_tab_query(user["id"], "/dashboard")
+    buys = bf.db.get_tab_query(user["id"], "/purchases")
+    assert "range=1y" in home and "grain=yearly" in home and "dept=Drinks" in home
+    assert "sort=times" in buys and "range=all" in buys
+    assert "range=1y" not in buys
+    assert "sort=times" not in home
+    assert "dept=Drinks" not in buys
+
+
+def test_legacy_shared_window_does_not_land_on_buys(bf):
+    import json
+
+    user = bf.db.create_user("legacywin@example.com", "secret1")
+    con = bf.db.connect()
+    con.execute(
+        "INSERT INTO user_prefs(user_id, last_path, last_query, tab_queries) VALUES (?,?,?,?)",
+        (
+            user["id"],
+            "/dashboard",
+            "range=1y&grain=yearly",
+            json.dumps({"window": "range=1y&grain=yearly", "/purchases": "sort=times&dir=desc"}),
+        ),
+    )
+    con.commit()
+    con.close()
+    assert "range=1y" in bf.db.get_tab_query(user["id"], "/dashboard")
+    buys = bf.db.get_tab_query(user["id"], "/purchases")
+    assert "sort=times" in buys
+    assert "range=1y" not in buys
+
+
 def test_dashboard_does_not_rescan_the_whole_shelf(bf, client):
     user = bf.db.create_user("dash@example.com", "secret1")
     for i in range(15):

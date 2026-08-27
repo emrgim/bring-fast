@@ -1,4 +1,4 @@
-{# Shared Home / Buys chrome. Sort and store stay Buys-only via extra query. #}
+{# Same filter chrome on Home and Buys. Each tab keeps its own selection. #}
 {% macro bar(action, sort='', dir='', store_q='', store_tail='') %}
 {% set extra = ('sort=' ~ sort ~ '&dir=' ~ dir ~ '&') if sort else '' %}
 <div class="filters">
