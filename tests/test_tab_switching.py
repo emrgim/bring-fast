@@ -1,10 +1,12 @@
 """Dock taps are bare /dashboard /purchases /stores.
 
-Range, grain, the custom window and department are shared chrome on Home and Buys.
+Each tab restores the filters left on that tab. Home and Buys do not share a
+window: switching must not copy range, grain, department, day or dates.
 Sort and store stay on Buys only.
 """
 
 import re
+from urllib.parse import parse_qsl, urlsplit
 
 _CHIP = re.compile(r'<a class="([^"]*)"[^>]*>([^<]+)</a>')
 _DATE = re.compile(r'<input type="date" name="(start|end)" value="([^"]*)"')
@@ -35,6 +37,10 @@ def _filter_view(html):
     }
 
 
+def _q(dest):
+    return dict(parse_qsl(urlsplit(dest).query, keep_blank_values=True))
+
+
 def _signin(bf, client, email):
     bf.db.create_user(email, "secret1")
     client.post("/login", data={"email": email, "password": "secret1", "intent": "signin"})
@@ -49,60 +55,78 @@ def _tap(client, path):
     return path, r
 
 
-def test_range_chosen_on_home_is_on_buys(bf, client):
+def test_range_chosen_on_home_stays_off_buys(bf, client):
     _signin(bf, client, "sharehome@example.com")
     client.get("/dashboard", params={"range": "1y", "grain": "yearly"})
     dest, buys = _tap(client, "/purchases")
-    assert "range=1y" in dest
-    assert "grain=yearly" in dest
-    assert 'class="on" href="/purchases?sort=spend&dir=desc&range=1y&grain=yearly' in buys.text or ">1y<" in buys.text
-    assert ">Yearly<" in buys.text
+    q = _q(dest)
+    assert q.get("range") != "1y"
+    assert q.get("grain") != "yearly"
+    dest, home = _tap(client, "/dashboard")
+    assert _q(dest).get("range") == "1y"
+    assert _q(dest).get("grain") == "yearly"
+    assert ">Yearly<" in home.text
+    assert ">1y<" in home.text or 'range=1y' in home.text
+    assert buys.status_code == 200
 
 
-def test_range_chosen_on_buys_is_on_home(bf, client):
+def test_range_chosen_on_buys_stays_off_home(bf, client):
     _signin(bf, client, "sharebuys@example.com")
     client.get("/purchases", params={"sort": "frequency", "range": "3m", "grain": "weekly"})
     dest, home = _tap(client, "/dashboard")
-    assert "range=3m" in dest
-    assert "grain=weekly" in dest
-    assert 'class="on" href="/dashboard?range=3m&grain=weekly"' in home.text
+    q = _q(dest)
+    assert q.get("range") != "3m"
+    assert q.get("grain") != "weekly"
     dest, buys = _tap(client, "/purchases")
-    assert "sort=frequency" in dest
-    assert "range=3m" in dest
+    q = _q(dest)
+    assert q.get("sort") == "frequency"
+    assert q.get("range") == "3m"
+    assert q.get("grain") == "weekly"
+    assert home.status_code == 200
+    assert buys.status_code == 200
 
 
 def test_sort_survives_a_range_change_on_the_other_tab(bf, client):
     _signin(bf, client, "sortkeep@example.com")
-    client.get("/purchases", params={"sort": "likely", "dir": "desc", "dept": "Drinks", "range": "1m", "grain": "monthly"})
-    # Home range chips keep the selected department, same as Buys.
+    client.get(
+        "/purchases",
+        params={"sort": "likely", "dir": "desc", "dept": "Drinks", "range": "1m", "grain": "monthly"},
+    )
     client.get("/dashboard", params={"range": "1y", "grain": "yearly", "dept": "Drinks"})
-    dest, buys = _tap(client, "/purchases")
-    assert "sort=likely" in dest
-    assert "dept=Drinks" in dest
-    assert "range=1y" in dest
-    assert "grain=yearly" in dest
-    dest, home = _tap(client, "/dashboard")
-    assert "range=1y" in dest
-    assert "dept=Drinks" in dest
-    assert "sort=" not in dest
+    dest, _buys = _tap(client, "/purchases")
+    q = _q(dest)
+    assert q.get("sort") == "likely"
+    assert q.get("dept") == "Drinks"
+    assert q.get("range") == "1m"
+    assert q.get("grain") == "monthly"
+    dest, _home = _tap(client, "/dashboard")
+    q = _q(dest)
+    assert q.get("range") == "1y"
+    assert q.get("dept") == "Drinks"
+    assert "sort" not in q
 
 
 def test_full_cycle_home_buys_stores_home_buys(bf, client):
     _signin(bf, client, "cycle@example.com")
     client.get("/dashboard", params={"range": "1y", "grain": "yearly"})
-    client.get("/purchases", params={"sort": "likely", "dir": "desc", "dept": "Drinks", "range": "3m", "grain": "weekly"})
+    client.get(
+        "/purchases",
+        params={"sort": "likely", "dir": "desc", "dept": "Drinks", "range": "3m", "grain": "weekly"},
+    )
     client.get("/stores")
 
     dest, home = _tap(client, "/dashboard")
-    assert "range=3m" in dest and "grain=weekly" in dest
-    assert "dept=Drinks" in dest
-    assert 'class="on" href="/dashboard?range=3m&grain=weekly&dept=Drinks"' in home.text
+    q = _q(dest)
+    assert q.get("range") == "1y" and q.get("grain") == "yearly"
+    assert q.get("dept") != "Drinks"
+    assert 'class="on" href="/dashboard?range=1y&grain=yearly"' in home.text
 
     dest, buys = _tap(client, "/purchases")
-    assert "sort=likely" in dest
-    assert "dept=Drinks" in dest
-    assert "range=3m" in dest
-    assert "grain=weekly" in dest
+    q = _q(dest)
+    assert q.get("sort") == "likely"
+    assert q.get("dept") == "Drinks"
+    assert q.get("range") == "3m"
+    assert q.get("grain") == "weekly"
     assert ">Likely<" in buys.text
     assert ">Drinks<" in buys.text
 
@@ -110,10 +134,11 @@ def test_full_cycle_home_buys_stores_home_buys(bf, client):
     assert stores.status_code == 200
     assert 'aria-current="page"' in stores.text
 
-    dest, home = _tap(client, "/dashboard")
-    assert "range=3m" in dest and "grain=weekly" in dest
-    dest, buys = _tap(client, "/purchases")
-    assert "sort=likely" in dest and "dept=Drinks" in dest and "range=3m" in dest
+    dest, _home = _tap(client, "/dashboard")
+    assert _q(dest).get("range") == "1y" and _q(dest).get("grain") == "yearly"
+    dest, _buys = _tap(client, "/purchases")
+    q = _q(dest)
+    assert q.get("sort") == "likely" and q.get("dept") == "Drinks" and q.get("range") == "3m"
 
 
 def test_filters_survive_many_switches(bf, client):
@@ -124,25 +149,29 @@ def test_filters_survive_many_switches(bf, client):
     for _ in range(4):
         _tap(client, "/stores")
         dest, _home = _tap(client, "/dashboard")
-        assert "range=1w" in dest and "grain=daily" in dest
+        assert _q(dest).get("range") == "1w" and _q(dest).get("grain") == "daily"
         dest, _buys = _tap(client, "/purchases")
-        assert "sort=name" in dest and "dir=asc" in dest
-        assert "range=1w" in dest
+        q = _q(dest)
+        assert q.get("sort") == "name" and q.get("dir") == "asc"
+        assert q.get("range") == "1w"
 
     client.get("/dashboard", params={"range": "3m", "grain": "monthly"})
     dest, _buys = _tap(client, "/purchases")
-    assert "sort=name" in dest
-    assert "range=3m" in dest
+    q = _q(dest)
+    assert q.get("sort") == "name"
+    assert q.get("range") == "1w"
     client.get("/purchases", params={"sort": "spend", "dir": "desc", "range": "all", "grain": "daily"})
     dest, _home = _tap(client, "/dashboard")
-    assert "range=all" in dest and "grain=daily" in dest
+    assert _q(dest).get("range") == "3m" and _q(dest).get("grain") == "monthly"
     dest, _buys = _tap(client, "/purchases")
-    assert "sort=spend" in dest and "dir=desc" in dest
+    q = _q(dest)
+    assert q.get("sort") == "spend" and q.get("dir") == "desc"
+    assert q.get("range") == "all"
     client.get("/stores")
     dest, _home = _tap(client, "/dashboard")
-    assert "range=all" in dest
+    assert _q(dest).get("range") == "3m"
     dest, _buys = _tap(client, "/purchases")
-    assert "sort=spend" in dest
+    assert _q(dest).get("sort") == "spend"
 
 
 def test_custom_range_survives_other_tabs(bf, client):
@@ -154,31 +183,33 @@ def test_custom_range_survives_other_tabs(bf, client):
     client.get("/purchases", params={"sort": "times"})
     client.get("/stores")
     dest, home = _tap(client, "/dashboard")
-    assert "range=custom" in dest
-    assert "start=2026-01-01" in dest
-    assert "end=2026-03-31" in dest
+    q = _q(dest)
+    assert q.get("range") == "custom"
+    assert q.get("start") == "2026-01-01"
+    assert q.get("end") == "2026-03-31"
     assert 'action="/dashboard"' in home.text
     assert 'class="on filter-dates"' in home.text
     dest, _buys = _tap(client, "/purchases")
-    assert "sort=times" in dest
-    assert "range=custom" in dest
-    assert "start=2026-01-01" in dest
+    q = _q(dest)
+    assert q.get("sort") == "times"
+    assert q.get("range") != "custom"
+    assert q.get("start") != "2026-01-01"
 
 
-def test_day_focus_is_shared_across_home_and_buys(bf, client):
+def test_day_focus_stays_on_the_tab_that_set_it(bf, client):
     _signin(bf, client, "daytap@example.com")
     client.get("/dashboard", params={"range": "1m", "grain": "daily", "day": "2026-08-10"})
-    dest, buys = _tap(client, "/purchases")
-    assert "day=2026-08-10" in dest
-    assert "grain=daily" in dest
-    dest, home = _tap(client, "/dashboard")
-    assert "day=2026-08-10" in dest
+    dest, _buys = _tap(client, "/purchases")
+    assert _q(dest).get("day") != "2026-08-10"
+    dest, _home = _tap(client, "/dashboard")
+    assert _q(dest).get("day") == "2026-08-10"
     client.get("/purchases", params={"sort": "frequency"})
-    dest, home = _tap(client, "/dashboard")
-    assert "day=2026-08-10" in dest
-    dest, buys = _tap(client, "/purchases")
-    assert "sort=frequency" in dest
-    assert "day=2026-08-10" in dest
+    dest, _home = _tap(client, "/dashboard")
+    assert _q(dest).get("day") == "2026-08-10"
+    dest, _buys = _tap(client, "/purchases")
+    q = _q(dest)
+    assert q.get("sort") == "frequency"
+    assert q.get("day") != "2026-08-10"
 
 
 def test_store_page_then_dock_tabs(bf, client):
@@ -192,10 +223,12 @@ def test_store_page_then_dock_tabs(bf, client):
     assert root.headers["location"].startswith("/stores/grandiose")
 
     dest, _home = _tap(client, "/dashboard")
-    assert "range=all" in dest and "grain=yearly" in dest
+    q = _q(dest)
+    assert q.get("range") == "all" and q.get("grain") == "yearly"
     dest, _buys = _tap(client, "/purchases")
-    assert "sort=qty" in dest and "dept=Edible" in dest
-    assert "range=all" in dest
+    q = _q(dest)
+    assert q.get("sort") == "qty" and q.get("dept") == "Edible"
+    assert q.get("grain") != "yearly"
 
 
 def test_root_follows_whichever_tab_was_last(bf, client):
@@ -205,26 +238,28 @@ def test_root_follows_whichever_tab_was_last(bf, client):
     client.get("/purchases", params={"sort": "times"})
     loc = client.get("/", follow_redirects=False).headers["location"]
     assert "/purchases" in loc
-    assert "range=1y" in loc
+    assert _q(loc).get("range") != "1y"
+    assert _q(loc).get("sort") == "times"
     client.get("/stores")
     assert client.get("/", follow_redirects=False).headers["location"].startswith("/stores")
     _tap(client, "/dashboard")
     loc = client.get("/", follow_redirects=False).headers["location"]
     assert loc.startswith("/dashboard")
-    assert "range=1y" in loc
+    assert _q(loc).get("range") == "1y"
 
 
-def test_first_visit_to_home_picks_up_the_buys_window(bf, client):
+def test_first_visit_to_home_does_not_pick_up_the_buys_window(bf, client):
     _signin(bf, client, "first@example.com")
     client.get("/purchases", params={"sort": "frequency", "range": "1y"})
     dest, home = _tap(client, "/dashboard")
-    assert "range=1y" in dest
-    dest, buys = _tap(client, "/purchases")
-    assert "sort=frequency" in dest and "range=1y" in dest
+    assert _q(dest).get("range") != "1y"
+    dest, _buys = _tap(client, "/purchases")
+    q = _q(dest)
+    assert q.get("sort") == "frequency" and q.get("range") == "1y"
     assert home.status_code == 200
 
 
-def test_interleaved_filter_changes_keep_the_latest(bf, client):
+def test_interleaved_filter_changes_keep_each_tab(bf, client):
     _signin(bf, client, "latest@example.com")
     client.get("/dashboard", params={"range": "1w", "grain": "daily"})
     client.get("/purchases", params={"sort": "name", "dir": "asc"})
@@ -234,13 +269,15 @@ def test_interleaved_filter_changes_keep_the_latest(bf, client):
     client.get("/stores/carrefour")
 
     dest, _home = _tap(client, "/dashboard")
-    assert "range=1y" in dest and "grain=yearly" in dest
-    assert "dept=Drinks" in dest
-    assert "range=1w" not in dest
+    q = _q(dest)
+    assert q.get("range") == "1y" and q.get("grain") == "yearly"
+    assert q.get("dept") != "Drinks"
+    assert q.get("range") != "1w"
     dest, _buys = _tap(client, "/purchases")
-    assert "sort=likely" in dest and "dept=Drinks" in dest
-    assert "range=1y" in dest
-    assert "sort=name" not in dest
+    q = _q(dest)
+    assert q.get("sort") == "likely" and q.get("dept") == "Drinks"
+    assert q.get("sort") != "name"
+    assert q.get("range") != "1y"
 
 
 def test_buys_store_and_dept_survive_home_and_stores(bf, client):
@@ -257,18 +294,26 @@ def test_buys_store_and_dept_survive_home_and_stores(bf, client):
     client.post("/login", data={"email": "chips@example.com", "password": "secret1", "intent": "signin"})
     client.get(
         "/purchases",
-        params={"sort": "frequency", "dir": "desc", "range": "2y", "grain": "monthly", "dept": "Edible", "store": "mmi,carrefour"},
+        params={
+            "sort": "frequency",
+            "dir": "desc",
+            "range": "2y",
+            "grain": "monthly",
+            "dept": "Edible",
+            "store": "mmi,carrefour",
+        },
     )
     dest, home = _tap(client, "/dashboard")
-    assert "range=2y" in dest and "grain=monthly" in dest
-    assert "dept=Edible" in dest
-    assert 'class="on" href="/dashboard?range=2y&grain=monthly&dept=Edible"' in home.text
+    q = _q(dest)
+    assert q.get("range") != "2y"
+    assert q.get("dept") != "Edible"
     client.get("/stores")
     dest, buys = _tap(client, "/purchases")
-    assert "sort=frequency" in dest
-    assert "range=2y" in dest
-    assert "grain=monthly" in dest
-    assert "dept=Edible" in dest
+    q = _q(dest)
+    assert q.get("sort") == "frequency"
+    assert q.get("range") == "2y"
+    assert q.get("grain") == "monthly"
+    assert q.get("dept") == "Edible"
     assert "carrefour" in dest
     assert "mmi" in dest
     assert ">Edible<" in buys.text
@@ -276,22 +321,31 @@ def test_buys_store_and_dept_survive_home_and_stores(bf, client):
     assert home.status_code == 200
 
 
-def test_department_chosen_on_home_is_on_buys(bf, client):
+def test_department_chosen_on_home_stays_off_buys(bf, client):
     _signin(bf, client, "homedept@example.com")
     client.get("/dashboard", params={"range": "1y", "grain": "yearly", "dept": "Drinks"})
     dest, buys = _tap(client, "/purchases")
-    assert "dept=Drinks" in dest
-    assert "range=1y" in dest
-    assert ">Drinks<" in buys.text
+    assert _q(dest).get("dept") != "Drinks"
     dest, home = _tap(client, "/dashboard")
-    assert "dept=Drinks" in dest
+    assert _q(dest).get("dept") == "Drinks"
     assert 'class="on" href="/dashboard?range=1y&grain=yearly&dept=Drinks"' in home.text
     client.get("/dashboard", params={"range": "1y", "grain": "yearly"})
-    dest, buys = _tap(client, "/purchases")
-    assert "dept=" not in dest
+    dest, _buys = _tap(client, "/purchases")
     dest, home = _tap(client, "/dashboard")
-    assert "dept=" not in dest
+    assert "dept" not in _q(dest)
     assert 'class="on" href="/dashboard?range=1y&grain=yearly"' in home.text
+    assert buys.status_code == 200
+
+
+def test_all_on_home_does_not_clear_buys_department(bf, client):
+    _signin(bf, client, "allhome@example.com")
+    client.get("/purchases", params={"sort": "likely", "dept": "Drinks", "range": "all", "grain": "daily"})
+    client.get("/dashboard", params={"range": "1m", "grain": "monthly", "dept": "Edible"})
+    client.get("/dashboard", params={"range": "1m", "grain": "monthly"})
+    dest, _home = _tap(client, "/dashboard")
+    assert "dept" not in _q(dest)
+    dest, _buys = _tap(client, "/purchases")
+    assert _q(dest).get("dept") == "Drinks"
 
 
 def _seed_receipts(bf, email):
@@ -323,13 +377,18 @@ def test_home_filter_bar_does_not_drift_across_twelve_tab_switches(bf, client):
     client.post("/login", data={"email": "twelve@example.com", "password": "secret1", "intent": "signin"})
 
     dest, home = _tap(client, "/dashboard")
-    first = _filter_view(home.text)
-    assert first["dept_chips"] == ["All", "Edible", "Drinks"]
-    assert first["range_chips"] == ["1w", "2w", "1m", "3m", "1y", "2y", "3y", "All"]
-    assert first["dept_on"] == ["All"]
-    assert first["range_on"] == ["1m"]
-    assert first["grain_on"] == ["Monthly"]
-    snapshots = [("home0", dest, first)]
+    home_first = _filter_view(home.text)
+    assert home_first["dept_chips"] == ["All", "Edible", "Drinks"]
+    assert home_first["range_chips"] == ["1w", "2w", "1m", "3m", "1y", "2y", "3y", "All"]
+    assert home_first["dept_on"] == ["All"]
+    assert home_first["range_on"] == ["1m"]
+    assert home_first["grain_on"] == ["Monthly"]
+
+    dest_b, buys = _tap(client, "/purchases")
+    buys_first = _filter_view(buys.text)
+    assert buys_first["range_on"] == ["All"]
+    assert buys_first["grain_on"] == ["Daily"]
+    assert buys_first["range_on"] != home_first["range_on"]
 
     for i in range(12):
         dest_b, buys = _tap(client, "/purchases")
@@ -338,47 +397,47 @@ def test_home_filter_bar_does_not_drift_across_twelve_tab_switches(bf, client):
         assert stores.status_code == 200
         dest_h, home = _tap(client, "/dashboard")
         home_view = _filter_view(home.text)
-        snapshots.append((f"buys{i+1}", dest_b, buys_view))
-        snapshots.append((f"home{i+1}", dest_h, home_view))
-        assert home_view == first, (
-            f"Home filters changed after switch {i + 1} ({dest_h}): {first} → {home_view}"
+        assert home_view == home_first, (
+            f"Home filters changed after switch {i + 1} ({dest_h}): {home_first} → {home_view}"
         )
-        shared_keys = ("dept_on", "range_on", "dept_chips", "range_chips", "grain_on", "custom_on")
-        for key in shared_keys:
-            assert buys_view[key] == first[key], (
-                f"Buys shared filter {key} drifted on switch {i + 1} ({dest_b}): "
-                f"{first[key]} → {buys_view[key]}"
-            )
+        assert buys_view == buys_first, (
+            f"Buys filters changed after switch {i + 1} ({dest_b}): {buys_first} → {buys_view}"
+        )
 
 
 def test_chosen_filters_do_not_drift_across_twelve_switches(bf, client):
     _seed_receipts(bf, "chosen12@example.com")
     client.post("/login", data={"email": "chosen12@example.com", "password": "secret1", "intent": "signin"})
     client.get("/dashboard", params={"range": "1y", "grain": "yearly", "dept": "Drinks"})
-    client.get("/purchases", params={"sort": "likely", "dir": "desc"})
+    client.get("/purchases", params={"sort": "likely", "dir": "desc", "range": "all", "grain": "daily"})
 
     dest, home = _tap(client, "/dashboard")
-    first = _filter_view(home.text)
-    assert first["dept_on"] == ["Drinks"]
-    assert first["range_on"] == ["1y"]
-    assert first["grain_on"] == ["Yearly"]
+    home_first = _filter_view(home.text)
+    assert home_first["dept_on"] == ["Drinks"]
+    assert home_first["range_on"] == ["1y"]
+    assert home_first["grain_on"] == ["Yearly"]
+    dest_b, buys = _tap(client, "/purchases")
+    buys_first = _filter_view(buys.text)
+    assert buys_first["dept_on"] == ["All"]
+    assert buys_first["range_on"] == ["All"]
+    assert buys_first["grain_on"] == ["Daily"]
+    assert "sort=likely" in dest_b
 
     for i in range(12):
         dest_b, buys = _tap(client, "/purchases")
         _tap(client, "/stores")
         dest_h, home = _tap(client, "/dashboard")
-        assert _filter_view(home.text) == first, (
+        assert _filter_view(home.text) == home_first, (
             f"Home drifted on switch {i + 1} ({dest_h}): {_filter_view(home.text)}"
         )
-        buys_view = _filter_view(buys.text)
-        assert buys_view["dept_on"] == ["Drinks"]
-        assert buys_view["range_on"] == ["1y"]
-        assert buys_view["grain_on"] == ["Yearly"]
+        assert _filter_view(buys.text) == buys_first, (
+            f"Buys drifted on switch {i + 1} ({dest_b}): {_filter_view(buys.text)}"
+        )
         assert "sort=likely" in dest_b
 
 
 def test_home_and_buys_show_the_same_filter_chips(bf, client):
-    """Switching tabs must not grow or shrink the shared filter bar."""
+    """Switching tabs must not grow or shrink the filter bar chrome."""
     _signin(bf, client, "samechips@example.com")
     _, home = _tap(client, "/dashboard")
     _, buys = _tap(client, "/purchases")
@@ -415,6 +474,36 @@ def test_buys_first_visit_does_not_replace_home_window_on_the_way_back(bf, clien
     _, home2 = _tap(client, "/dashboard")
     back = _filter_view(home2.text)
     assert back == first, f"Coming back from Buys changed Home: {first} → {back}"
-    assert buys_view["range_on"] == first["range_on"]
-    assert buys_view["grain_on"] == first["grain_on"]
-    assert buys_view["range_on"] != ["All"] or first["range_on"] == ["All"]
+    assert buys_view["range_on"] == ["All"]
+    assert buys_view["grain_on"] == ["Daily"]
+
+
+def test_two_or_three_switches_do_not_apply_the_other_tabs_filters(bf, client):
+    """The bug showed up on the second or third dock tap, not the first."""
+    _seed_receipts(bf, "twothree@example.com")
+    client.post("/login", data={"email": "twothree@example.com", "password": "secret1", "intent": "signin"})
+    client.get("/dashboard", params={"range": "1y", "grain": "yearly", "dept": "Drinks"})
+    client.get("/purchases", params={"sort": "times", "dir": "desc", "range": "3m", "grain": "weekly"})
+
+    dest, home = _tap(client, "/dashboard")
+    home_first = _filter_view(home.text)
+    dest, buys = _tap(client, "/purchases")
+    buys_first = _filter_view(buys.text)
+    assert home_first["range_on"] == ["1y"]
+    assert home_first["grain_on"] == ["Yearly"]
+    assert home_first["dept_on"] == ["Drinks"]
+    assert buys_first["range_on"] == ["3m"]
+    assert buys_first["grain_on"] == ["Weekly"]
+    assert buys_first["dept_on"] == ["All"]
+
+    for i in range(3):
+        _tap(client, "/stores")
+        dest_h, home = _tap(client, "/dashboard")
+        dest_b, buys = _tap(client, "/purchases")
+        dest_h, home = _tap(client, "/dashboard")
+        dest_b, buys = _tap(client, "/purchases")
+        assert _filter_view(home.text) == home_first, f"Home drifted on round {i + 1} ({dest_h})"
+        assert _filter_view(buys.text) == buys_first, f"Buys drifted on round {i + 1} ({dest_b})"
+        assert _q(dest_h).get("range") == "1y"
+        assert _q(dest_b).get("range") == "3m"
+        assert _q(dest_b).get("sort") == "times"

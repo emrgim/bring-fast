@@ -192,7 +192,9 @@ def _safe_next(target: str) -> str:
 
 
 _REMEMBER = ("/dashboard", "/purchases", "/stores")
-_WINDOW_KEYS = ("range", "grain", "start", "end", "day")
+_DASHBOARD_KEYS = ("range", "grain", "start", "end", "day", "dept")
+_PURCHASES_KEYS = ("sort", "dir", "range", "grain", "start", "end", "day", "dept", "store")
+_WINDOW_KEYS = ("range", "grain", "start", "end", "day", "dept")
 
 
 def _remember(request: Request, user: dict[str, Any] | None) -> None:
@@ -204,27 +206,56 @@ def _remember(request: Request, user: dict[str, Any] | None) -> None:
     db.set_last_view(user["id"], path, str(request.url.query or ""))
 
 
-def _window_query(
-    range_key: str, grain: str, start: str = "", end: str = "", day: str = "", dept: str = ""
+def _encode_tab(keys: tuple[str, ...], values: dict[str, str]) -> str:
+    return urlencode([(key, values[key]) for key in keys if values.get(key)])
+
+
+def _tab_query_from_request(
+    user_id: int,
+    path: str,
+    request: Request,
+    resolved: dict[str, str],
+    keys: tuple[str, ...],
 ) -> str:
-    pairs = [("range", range_key), ("grain", grain)]
-    if range_key == "custom":
-        if start:
-            pairs.append(("start", start))
-        if end:
-            pairs.append(("end", end))
-    if day:
-        pairs.append(("day", day))
-    if dept:
-        pairs.append(("dept", dept))
-    return urlencode(pairs)
+    """Keep this tab's last filters when the request omitted them.
 
-
-def _window_with_dept(window_q: str, dept: str) -> str:
-    pairs = [(key, val) for key, val in parse_qsl(window_q, keep_blank_values=True) if key != "dept"]
-    if dept:
-        pairs.append(("dept", dept))
-    return urlencode(pairs)
+    Chip hrefs send the keys they mean to change. A dock tap restores the
+    saved query. Neither may copy the other tab's window.
+    """
+    saved = {
+        key: val
+        for key, val in parse_qsl(db.get_tab_query(user_id, path), keep_blank_values=True)
+        if key in keys
+    }
+    params = request.query_params
+    window_nav = any(key in params for key in _WINDOW_KEYS)
+    out = dict(saved)
+    for key in keys:
+        if key in params:
+            val = (resolved.get(key) or "").strip()
+            if val:
+                out[key] = val
+            else:
+                out.pop(key, None)
+        elif key not in out:
+            val = (resolved.get(key) or "").strip()
+            if val:
+                out[key] = val
+    if window_nav and "day" not in params:
+        out.pop("day", None)
+    if window_nav and "dept" not in params:
+        out.pop("dept", None)
+    if "range" in params and params.get("range") != "custom":
+        out.pop("start", None)
+        out.pop("end", None)
+    if out.get("range") != "custom":
+        out.pop("start", None)
+        out.pop("end", None)
+    # Range/grain (and the store form) carry store= when stores are selected.
+    # An omitted store on those URLs is a clear, not a keep.
+    if "store" not in params and ("range" in params or "grain" in params):
+        out.pop("store", None)
+    return _encode_tab(keys, out)
 
 
 def _remember_dashboard(
@@ -237,9 +268,20 @@ def _remember_dashboard(
     day: str,
     dept: str = "",
 ) -> None:
-    q = str(request.url.query or "")
-    if "range" not in request.query_params and "grain" not in request.query_params:
-        q = _window_query(range_key, grain, start, end, day, dept)
+    q = _tab_query_from_request(
+        user["id"],
+        "/dashboard",
+        request,
+        {
+            "range": range_key,
+            "grain": grain,
+            "start": start if range_key == "custom" else "",
+            "end": end if range_key == "custom" else "",
+            "day": day,
+            "dept": dept,
+        },
+        _DASHBOARD_KEYS,
+    )
     db.set_last_view(user["id"], "/dashboard", q)
 
 
@@ -256,19 +298,23 @@ def _remember_purchases(
     dept: str,
     store_q: str,
 ) -> None:
-    rest = [("sort", sort), ("dir", direction)]
-    if store_q:
-        rest.append(("store", store_q))
-    has_window = any(key in request.query_params for key in _WINDOW_KEYS)
-    extra = urlencode(rest)
-    if has_window or not db.get_tab_query(user["id"], "/dashboard"):
-        win = _window_query(range_key, grain, start, end, day, dept)
-        q = win + (("&" + extra) if extra else "")
-    elif "dept" in request.query_params:
-        win = _window_with_dept(db.get_tab_query(user["id"], "/dashboard"), dept)
-        q = win + (("&" + extra) if extra else "")
-    else:
-        q = extra
+    q = _tab_query_from_request(
+        user["id"],
+        "/purchases",
+        request,
+        {
+            "sort": sort,
+            "dir": direction,
+            "range": range_key,
+            "grain": grain,
+            "start": start if range_key == "custom" else "",
+            "end": end if range_key == "custom" else "",
+            "day": day,
+            "dept": dept,
+            "store": store_q,
+        },
+        _PURCHASES_KEYS,
+    )
     db.set_last_view(user["id"], "/purchases", q)
 
 
