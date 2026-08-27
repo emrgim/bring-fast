@@ -8,7 +8,6 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qsl, urlencode
 
 import hashlib
 import hmac
@@ -891,8 +890,6 @@ def get_oauth_client(client_id: str) -> dict[str, Any] | None:
 
 
 _TAB_PATHS = ("/dashboard", "/purchases")
-# Shared Home/Buys chrome. Sort and store stay in the Buys rest.
-_WINDOW_KEYS = ("range", "grain", "start", "end", "day", "dept")
 
 
 def _tab_queries(row: sqlite3.Row | None) -> dict[str, str]:
@@ -908,28 +905,8 @@ def _tab_queries(row: sqlite3.Row | None) -> dict[str, str]:
     return {str(k): str(v or "") for k, v in data.items()}
 
 
-def _split_query(query: str) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
-    window: list[tuple[str, str]] = []
-    rest: list[tuple[str, str]] = []
-    for key, val in parse_qsl(query or "", keep_blank_values=True):
-        (window if key in _WINDOW_KEYS else rest).append((key, val))
-    return window, rest
-
-
-def _merge_query(*parts: str) -> str:
-    seen: set[str] = set()
-    out: list[tuple[str, str]] = []
-    for part in parts:
-        for key, val in parse_qsl(part or "", keep_blank_values=True):
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append((key, val))
-    return urlencode(out)
-
-
 def set_last_view(user_id: int, path: str, query: str = "") -> bool:
-    """Remember the tab. A reload of the same view is a no-op, not a write."""
+    """Remember this tab's own query. A reload of the same view is a no-op."""
     con = connect()
     query = query or ""
     row = con.execute(
@@ -938,32 +915,12 @@ def set_last_view(user_id: int, path: str, query: str = "") -> bool:
     ).fetchone()
     if path in _TAB_PATHS:
         tabs = _tab_queries(row)
-        window, rest = _split_query(query)
-        rest = [(key, val) for key, val in rest if key != "dept"]
-        if window:
-            tabs["window"] = urlencode(window)
-            # Department used to live in the Buys-only rest. Drop leftovers so
-            # All on Home actually clears it on Buys too.
-            if path != "/purchases" and "/purchases" in tabs:
-                tabs["/purchases"] = urlencode(
-                    [
-                        (key, val)
-                        for key, val in parse_qsl(tabs["/purchases"], keep_blank_values=True)
-                        if key != "dept"
-                    ]
-                )
-        if path == "/purchases":
-            tabs[path] = urlencode(rest)
-        resume = (
-            _merge_query(tabs.get("window") or "", tabs.get(path) or "")
-            if path == "/purchases"
-            else (tabs.get("window") or query)
-        )
+        tabs[path] = query
         blob = json.dumps(tabs)
         if (
             row
             and (row["last_path"] or "") == path
-            and (row["last_query"] or "") == resume
+            and (row["last_query"] or "") == query
             and (row["tab_queries"] or "") == blob
         ):
             con.close()
@@ -974,7 +931,7 @@ def set_last_view(user_id: int, path: str, query: str = "") -> bool:
                  last_path=excluded.last_path,
                  last_query=excluded.last_query,
                  tab_queries=excluded.tab_queries""",
-            (user_id, path, resume, blob),
+            (user_id, path, query, blob),
         )
     else:
         if row and (row["last_path"] or "") == path and (row["last_query"] or "") == query:
@@ -998,11 +955,16 @@ def get_last_view(user_id: int) -> dict[str, str] | None:
 
 
 def get_tab_query(user_id: int, path: str) -> str:
+    """The query last left on this tab. Home and Buys do not share a window."""
     con = connect()
     row = con.execute("SELECT tab_queries FROM user_prefs WHERE user_id=?", (user_id,)).fetchone()
     con.close()
     tabs = _tab_queries(row)
-    window = tabs.get("window") or ""
-    if path == "/purchases":
-        return _merge_query(window, tabs.get(path) or "")
-    return window
+    own = tabs.get(path) or ""
+    if own:
+        return own
+    # Older builds stored one shared window. Home may still restore from it;
+    # Buys must not, or a dock tap applies Home's filters.
+    if path == "/dashboard":
+        return tabs.get("window") or ""
+    return ""
