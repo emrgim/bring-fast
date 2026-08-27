@@ -198,6 +198,13 @@
       /* iOS styles inputs and buttons its own way unless told not to. */
       -webkit-appearance:none; appearance:none;
     }
+    /* appearance:none on every input can un-hide type=hidden in WebKit and
+       give it width:100%, so Buys (more hidden fields) grows extra boxes
+       that Home does not have. */
+    input[type=hidden] {
+      display:none !important; width:auto !important; height:auto !important;
+      padding:0 !important; border:0 !important; position:absolute;
+    }
     input:focus { outline:2px solid var(--ink); outline-offset:0; }
     input:focus-visible, button:focus-visible, a:focus-visible { outline:2px solid var(--ink); outline-offset:2px; }
     .saved { margin:0; }
@@ -489,6 +496,7 @@
     .pop .row .amt { flex:0 0 auto; white-space:nowrap; }
     .filters { display:flex; flex-direction:column; gap:6px; margin:0 0 12px; }
     .filters form { display:flex; gap:4px; align-items:center; flex-wrap:nowrap; flex:0 0 auto; }
+    .filter-dates { width:100%; min-width:0; overflow-x:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
     /* An empty date field on iOS has no intrinsic width once appearance is
        stripped, and collapses to a sliver beside the end date. Chrome then
        draws a calendar glyph that clips “08/11/2023” down to “/11/2023”.
@@ -590,7 +598,7 @@
         flex-wrap:nowrap; overflow-x:auto; -webkit-overflow-scrolling:touch;
         overscroll-behavior:contain; gap:4px;
       }
-      .chip-row { padding:0 12px; }
+      .chip-row, .filter-dates { padding:0 12px; }
       .grain a, .chip-row a, .msort a, .msort .store-chip, .filters button {
         flex:0 0 auto; padding:5px 8px; font-size:11px;
       }
@@ -878,6 +886,19 @@
     (function(){
       var sc=document.querySelector(".bars-scroller");
       if(sc) sc.scrollLeft=sc.scrollWidth;
+    })();
+    (function(){
+      /* A dock tap rebuilds the page and parks every chip row at 0. The
+         selected range can sit off the right edge, so Home looks like it
+         dropped 2y/3y/All. Keep the on-chip in the strip. */
+      document.querySelectorAll(".chip-row a.on").forEach(function(el){
+        var row=el.parentElement;
+        if(!row || row.scrollWidth<=row.clientWidth) return;
+        var left=el.offsetLeft-12;
+        var right=el.offsetLeft+el.offsetWidth+12-row.clientWidth;
+        if(row.scrollLeft>left) row.scrollLeft=Math.max(0,left);
+        else if(row.scrollLeft<right) row.scrollLeft=Math.max(0,right);
+      });
     })();
     (function(){
       /* A tap on a bar sets ?day= and the card follows that bucket. Leaving

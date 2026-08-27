@@ -4,6 +4,36 @@ Range, grain, the custom window and department are shared chrome on Home and Buy
 Sort and store stay on Buys only.
 """
 
+import re
+
+_CHIP = re.compile(r'<a class="([^"]*)"[^>]*>([^<]+)</a>')
+_DATE = re.compile(r'<input type="date" name="(start|end)" value="([^"]*)"')
+
+
+def _section(html, label):
+    found = re.search(rf'aria-label="{label}"(.*?)(?:</div>|</form>)', html, re.S)
+    return found.group(1) if found else ""
+
+
+def _filter_view(html):
+    """What the filter bar actually shows: chips, which are on, dates, grain."""
+    if '<header class="app-head">' not in html:
+        return {}
+    head = html.split('<header class="app-head">', 1)[1].split("</header>", 1)[0]
+    grain = re.search(r'<div class="grain">(.*?)</div>', html, re.S)
+    grain_html = grain.group(1) if grain else ""
+    dept = _CHIP.findall(_section(head, "Department"))
+    rng = _CHIP.findall(_section(head, "Range"))
+    return {
+        "dept_on": [label for cls, label in dept if cls == "on"],
+        "range_on": [label for cls, label in rng if cls == "on"],
+        "dept_chips": [label for _cls, label in dept],
+        "range_chips": [label for _cls, label in rng],
+        "dates": dict(_DATE.findall(head)),
+        "custom_on": bool(re.search(r'<form method="get"[^>]*class="on"', head)),
+        "grain_on": [label for cls, label in _CHIP.findall(grain_html) if cls == "on"],
+    }
+
 
 def _signin(bf, client, email):
     bf.db.create_user(email, "secret1")
@@ -127,7 +157,8 @@ def test_custom_range_survives_other_tabs(bf, client):
     assert "range=custom" in dest
     assert "start=2026-01-01" in dest
     assert "end=2026-03-31" in dest
-    assert 'action="/dashboard" class="on"' in home.text
+    assert 'action="/dashboard"' in home.text
+    assert 'class="on filter-dates"' in home.text
     dest, _buys = _tap(client, "/purchases")
     assert "sort=times" in dest
     assert "range=custom" in dest
@@ -261,3 +292,129 @@ def test_department_chosen_on_home_is_on_buys(bf, client):
     dest, home = _tap(client, "/dashboard")
     assert "dept=" not in dest
     assert 'class="on" href="/dashboard?range=1y&grain=yearly"' in home.text
+
+
+def _seed_receipts(bf, email):
+    user = bf.db.create_user(email, "secret1")
+    for i, day in enumerate(("2026-08-01", "2026-08-10", "2026-05-01", "2025-08-20")):
+        bf.purchases.upsert_invoice(
+            user["id"],
+            {
+                "retailer": "carrefour" if i % 2 == 0 else "grandiose",
+                "invoice_no": f"{email}-{i}",
+                "invoice_date": day,
+                "items": [
+                    {
+                        "name": "Milk" if i % 2 == 0 else "Heineken Cans 50 cl",
+                        "qty": 1,
+                        "unit_price": 10 + i,
+                        "line_total": 10 + i,
+                        "barcode": str(100 + i),
+                    }
+                ],
+            },
+        )
+    return user
+
+
+def test_home_filter_bar_does_not_drift_across_twelve_tab_switches(bf, client):
+    """A dock tap is not a filter. Home → Buys → Stores → Home, twelve times."""
+    _seed_receipts(bf, "twelve@example.com")
+    client.post("/login", data={"email": "twelve@example.com", "password": "secret1", "intent": "signin"})
+
+    dest, home = _tap(client, "/dashboard")
+    first = _filter_view(home.text)
+    assert first["dept_chips"] == ["All", "Edible", "Drinks"]
+    assert first["range_chips"] == ["1w", "2w", "1m", "3m", "1y", "2y", "3y", "All"]
+    assert first["dept_on"] == ["All"]
+    assert first["range_on"] == ["1m"]
+    assert first["grain_on"] == ["Monthly"]
+    snapshots = [("home0", dest, first)]
+
+    for i in range(12):
+        dest_b, buys = _tap(client, "/purchases")
+        buys_view = _filter_view(buys.text)
+        dest_s, stores = _tap(client, "/stores")
+        assert stores.status_code == 200
+        dest_h, home = _tap(client, "/dashboard")
+        home_view = _filter_view(home.text)
+        snapshots.append((f"buys{i+1}", dest_b, buys_view))
+        snapshots.append((f"home{i+1}", dest_h, home_view))
+        assert home_view == first, (
+            f"Home filters changed after switch {i + 1} ({dest_h}): {first} → {home_view}"
+        )
+        shared_keys = ("dept_on", "range_on", "dept_chips", "range_chips", "grain_on", "custom_on")
+        for key in shared_keys:
+            assert buys_view[key] == first[key], (
+                f"Buys shared filter {key} drifted on switch {i + 1} ({dest_b}): "
+                f"{first[key]} → {buys_view[key]}"
+            )
+
+
+def test_chosen_filters_do_not_drift_across_twelve_switches(bf, client):
+    _seed_receipts(bf, "chosen12@example.com")
+    client.post("/login", data={"email": "chosen12@example.com", "password": "secret1", "intent": "signin"})
+    client.get("/dashboard", params={"range": "1y", "grain": "yearly", "dept": "Drinks"})
+    client.get("/purchases", params={"sort": "likely", "dir": "desc"})
+
+    dest, home = _tap(client, "/dashboard")
+    first = _filter_view(home.text)
+    assert first["dept_on"] == ["Drinks"]
+    assert first["range_on"] == ["1y"]
+    assert first["grain_on"] == ["Yearly"]
+
+    for i in range(12):
+        dest_b, buys = _tap(client, "/purchases")
+        _tap(client, "/stores")
+        dest_h, home = _tap(client, "/dashboard")
+        assert _filter_view(home.text) == first, (
+            f"Home drifted on switch {i + 1} ({dest_h}): {_filter_view(home.text)}"
+        )
+        buys_view = _filter_view(buys.text)
+        assert buys_view["dept_on"] == ["Drinks"]
+        assert buys_view["range_on"] == ["1y"]
+        assert buys_view["grain_on"] == ["Yearly"]
+        assert "sort=likely" in dest_b
+
+
+def test_home_and_buys_show_the_same_filter_chips(bf, client):
+    """Switching tabs must not grow or shrink the shared filter bar."""
+    _signin(bf, client, "samechips@example.com")
+    _, home = _tap(client, "/dashboard")
+    _, buys = _tap(client, "/purchases")
+    _, home2 = _tap(client, "/dashboard")
+    home_view = _filter_view(home.text)
+    buys_view = _filter_view(buys.text)
+    home2_view = _filter_view(home2.text)
+    assert home_view["dept_chips"] == buys_view["dept_chips"] == ["All", "Edible", "Drinks"]
+    assert home_view["range_chips"] == buys_view["range_chips"] == [
+        "1w",
+        "2w",
+        "1m",
+        "3m",
+        "1y",
+        "2y",
+        "3y",
+        "All",
+    ]
+    assert home_view["dept_chips"] == home2_view["dept_chips"]
+    assert home_view["range_chips"] == home2_view["range_chips"]
+
+
+def test_buys_first_visit_does_not_replace_home_window_on_the_way_back(bf, client):
+    """Home's 1m/Monthly must survive a first dock tap on Buys, which defaults to all/daily."""
+    _seed_receipts(bf, "defaults@example.com")
+    client.post("/login", data={"email": "defaults@example.com", "password": "secret1", "intent": "signin"})
+    _, home = _tap(client, "/dashboard")
+    first = _filter_view(home.text)
+    assert first["range_on"] == ["1m"]
+    assert first["grain_on"] == ["Monthly"]
+
+    _, buys = _tap(client, "/purchases")
+    buys_view = _filter_view(buys.text)
+    _, home2 = _tap(client, "/dashboard")
+    back = _filter_view(home2.text)
+    assert back == first, f"Coming back from Buys changed Home: {first} → {back}"
+    assert buys_view["range_on"] == first["range_on"]
+    assert buys_view["grain_on"] == first["grain_on"]
+    assert buys_view["range_on"] != ["All"] or first["range_on"] == ["All"]

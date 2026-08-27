@@ -4,30 +4,9 @@
    screen, so an account with hundreds of products costs the same to open as an
    account with twelve, and a tap on another tab is never queued behind a shelf. #}
 {% import "_shelf_shapes.html" as shapes with context %}
+{% import "_filters.html" as filt with context %}
 {% block under_nav %}
-<div class="filters">
-  <div class="chip-row" aria-label="Department">
-    {% for key, label in [('','All'),('Edible','Edible'),('Drinks','Drinks')] %}
-    <a class="{% if dept==key %}on{% endif %}" href="/purchases?sort={{ sort }}&dir={{ dir }}&range={{ range }}&grain={{ grain }}&dept={{ key }}{{ store_tail }}">{{ label }}</a>
-    {% endfor %}
-  </div>
-  <div class="chip-row" aria-label="Range">
-    {% for key, label, title in [('1w','1w','1 week'),('2w','2w','2 weeks'),('1m','1m','1 month'),('3m','3m','3 months'),('1y','1y','1 year'),('2y','2y','2 years'),('3y','3y','3 years'),('all','All','All')] %}
-    <a class="{% if range==key %}on{% endif %}" href="/purchases?sort={{ sort }}&dir={{ dir }}&range={{ key }}&grain={{ grain }}&dept={{ dept }}{{ store_tail }}" title="{{ title }}">{{ label }}</a>
-    {% endfor %}
-    <form method="get" action="/purchases"{% if range=='custom' %} class="on"{% endif %}>
-      <input type="hidden" name="sort" value="{{ sort }}"/>
-      <input type="hidden" name="dir" value="{{ dir }}"/>
-      <input type="hidden" name="range" value="custom"/>
-      <input type="hidden" name="grain" value="{{ grain }}"/>
-      <input type="hidden" name="dept" value="{{ dept }}"/>
-      {% if store_q %}<input type="hidden" name="store" value="{{ store_q }}"/>{% endif %}
-      <input type="date" name="start" value="{{ start }}"/>
-      <input type="date" name="end" value="{{ end }}"/>
-      <button type="submit">Apply</button>
-    </form>
-  </div>
-</div>
+{{ filt.bar("/purchases", sort=sort, dir=dir, store_q=store_q, store_tail=store_tail) }}
 {% endblock %}
 {% block body %}
 {# Same bar as the home tab, so the figure stays on screen in both places. #}

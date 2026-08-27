@@ -20,7 +20,7 @@ def test_pwa_service_worker(client):
     assert sw.status_code == 200
     assert "javascript" in (sw.headers.get("content-type") or "")
     assert "skipWaiting" in sw.text
-    assert "bf-pwa-v8" in sw.text
+    assert "bf-pwa-v9" in sw.text
     assert "/__resume" in sw.text
     assert 'RESUME = "/__resume"' in sw.text
     assert sw.headers.get("cache-control", "").startswith("no-cache") or "no-cache" in (
@@ -88,6 +88,13 @@ def test_service_worker_never_saves_a_page_it_was_redirected_to(client):
     # would show a login form named "Dashboard" the next time the network drops.
     assert "samePage" in sw
     assert "res.redirected" in sw
+
+
+def test_service_worker_does_not_reuse_a_filtered_home_for_another_window(client):
+    sw = client.get("/sw.js").text
+    cached = sw[sw.index("async function cachedPage(") : sw.index("async function page(")]
+    assert 'path === "/dashboard" || path === "/purchases"' in cached
+    assert "return undefined" in cached
 
 
 def test_a_form_sent_with_no_network_says_nothing_was_saved(client):

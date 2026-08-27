@@ -199,7 +199,8 @@ def test_custom_date_fields_tick_when_they_are_the_filter(bf, client):
     range_row = head[head.index('aria-label="Range"') :]
     # The two date fields are the selected range, not a chip. Department All
     # still uses a range= href, so only the Range row is checked here.
-    assert 'action="/dashboard" class="on"' in head
+    assert 'action="/dashboard"' in head
+    assert 'class="on filter-dates"' in head
     assert 'class="on" href="/dashboard?range=' not in range_row
     assert ".filters form.on input[type=date]" in custom
     assert "animation: range-tick 1.8s steps(2, end) infinite" in custom
@@ -216,5 +217,8 @@ def test_custom_date_fields_tick_when_they_are_the_filter(bf, client):
     assert 'action="/dashboard"' in preset_head
 
     buys = client.get(f"/purchases?{WINDOW}&grain=monthly").text
-    assert 'action="/purchases" class="on"' in buys
-    assert 'action="/purchases" class="on"' not in client.get("/purchases?range=all&grain=monthly").text
+    assert 'action="/purchases"' in buys
+    assert 'class="on filter-dates"' in buys
+    preset_buys = client.get("/purchases?range=all&grain=monthly").text
+    assert 'class="on filter-dates"' not in preset_buys
+    assert "filter-dates" in preset_buys
