@@ -137,13 +137,22 @@ def token_from_browser_cookies() -> dict[str, str]:
         return out
     if not isinstance(cookies, list):
         return out
+    by_name: dict[str, str] = {}
     for c in cookies:
-        if not isinstance(c, dict):
+        if not isinstance(c, dict) or not c.get("name"):
             continue
-        if c.get("name") == "token":
-            out["token"] = str(c.get("value") or "")
-        if c.get("name") == "userId":
-            out["user_id"] = str(c.get("value") or "")
+        by_name[str(c.get("name"))] = str(c.get("value") or "")
+    for name, val in by_name.items():
+        key = re.sub(r"[^a-z0-9]", "", name.lower())
+        if key in ("token", "accesstoken", "authtoken") and not out["token"]:
+            out["token"] = val
+        if key in ("userid", "customerid") and not out["user_id"] and val.lower() not in (
+            "",
+            "anonymous",
+            "undefined",
+            "null",
+        ):
+            out["user_id"] = val
     return out
 
 
@@ -513,7 +522,15 @@ def harvest_token_from_login_page(email: str, password: str) -> dict[str, Any]:
         except Exception:
             cookies = {}
         captured["token"] = captured["token"] or cookies.get("token") or ""
-        captured["user_id"] = captured["user_id"] or cookies.get("userId") or cookies.get("customerId") or ""
+        captured["user_id"] = (
+            captured["user_id"]
+            or cookies.get("userId")
+            or cookies.get("userID")
+            or cookies.get("userid")
+            or cookies.get("customerId")
+            or cookies.get("customerID")
+            or ""
+        )
         try:
             save_browser_cookies(list(context.cookies()))
         except Exception:

@@ -1,5 +1,6 @@
 """Live cart/status must not hold the MCP request until Chrome finishes."""
 
+import json
 import time
 
 import pytest
@@ -290,9 +291,9 @@ def test_browser_api_add_posts_additem_then_lists(monkeypatch):
     assert "/entries" not in posts[0]["url"]
     assert gets, "must re-read official liteCart after add"
     gh = gets[0].get("headers") or {}
-    assert "Content-Type" not in gh
-    assert gh.get("appid") != "Android"
     assert gh.get("userId") == "u9"
+    assert (gh.get("appId") or gh.get("appid")) != "Android"
+    assert gh.get("appId") == "Reactweb"
     assert not any("carrefouruae.com/mafuae/en/p/" in str(f.get("url")) for f in fetches)
 
 
@@ -533,15 +534,20 @@ def test_http_unusable_treats_litecart_400_as_browser_fallback():
     assert checkout._http_unusable({"ok": True, "error": "liteCart HTTP 400"}) is False
 
 
-def test_browser_get_headers_are_web_not_android():
+def test_browser_get_headers_match_maf_website_xhr():
     h = checkout._browser_headers("tok", "u9", {"pos_info": "food=073_Zone04"}, method="GET")
-    assert "Content-Type" not in h
-    assert h.get("appid") != "Android"
-    assert h.get("appid") == "Web"
     assert h.get("userId") == "u9"
+    assert (h.get("appId") or h.get("appid")) != "Android"
+    assert h.get("appId") == "Reactweb"
+    assert h.get("channel") == "c4online"
+    assert h["Content-Type"].startswith("application/json")
     assert h["Authorization"].startswith("Bearer ")
+    assert h["token"].startswith("Bearer ")
     post = checkout._browser_headers("tok", "u9", {"pos_info": "food=073_Zone04"}, method="POST")
-    assert post.get("Content-Type") == "application/json"
+    assert post.get("Content-Type", "").startswith("application/json")
+    assert post.get("userId") == "u9"
+    anon = checkout._browser_headers("tok", "", {}, method="GET")
+    assert anon.get("userId") == "anonymous"
 
 
 def test_http_litecart_400_with_saved_login_falls_back_to_browser(monkeypatch):
@@ -636,75 +642,67 @@ def test_akamai_blocked_list_with_saved_login_falls_back_to_browser(monkeypatch)
     assert out["akamai_retry"] == "browser_api"
 
 
-def test_browser_list_retries_after_litecart_400(monkeypatch):
-    """First same-origin GET 400 (bad headers/session) must retry; list still returns names."""
-    from bring_fast.stores import carrefour as api
-
+def test_browser_list_retries_missing_userid_after_harvest():
+    """A 400 that says userId is missing is retried only after harvest fills the header."""
     fetches = []
+    harvests = {"n": 0}
+
+    class _Ctx:
+        def cookies(self):
+            return [{"name": "token", "value": "tok"}]
 
     class _Page:
         url = "https://www.carrefouruae.com/mafuae/en"
 
-        def __init__(self, ctx):
-            self.context = ctx
+        def __init__(self):
+            self.context = _Ctx()
 
         def content(self):
-            return '{"posInfo":"food=073_Zone04","polygonId":"DXB_DubProdCty_01","emirateCode":"DUBAI"}'
+            return ""
 
         def evaluate(self, _js, arg=None):
             if arg is None:
-                return {}
-            fetches.append(arg)
-            if arg.get("method") == "GET" and "liteCart" in (arg.get("url") or ""):
-                gets = [f for f in fetches if f.get("method") == "GET" and "liteCart" in (f.get("url") or "")]
-                hdrs = arg.get("headers") or {}
-                if len(gets) == 1:
-                    assert "Content-Type" not in hdrs
-                    assert hdrs.get("appid") != "Android"
-                    return {
-                        "status": 400,
-                        "body": {"meta": {"message": "Bad Request"}},
-                        "akamai": False,
-                    }
+                harvests["n"] += 1
+                if harvests["n"] == 1:
+                    return {"localStorage": {}, "sessionStorage": {}, "cookies": {}}
                 return {
-                    "status": 200,
-                    "body": {
-                        "data": {
-                            "items": [
-                                {
-                                    "id": "743861",
-                                    "name": "Coca-Cola Zero 330ml Can",
-                                    "quantity": 1,
-                                    "price": 1.99,
-                                }
-                            ]
-                        }
-                    },
+                    "localStorage": {"maf.auth": '{"userId":"u9"}'},
+                    "sessionStorage": {},
+                    "cookies": {},
+                }
+            fetches.append(arg)
+            uid = (arg.get("headers") or {}).get("userId")
+            if not uid or uid == "anonymous":
+                return {
+                    "status": 400,
+                    "body": {"error": {"message": "header userId mancante"}},
                     "akamai": False,
                 }
-            return {"status": 404, "body": {}, "akamai": False}
+            return {
+                "status": 200,
+                "body": {
+                    "data": {
+                        "items": [
+                            {
+                                "id": "743861",
+                                "name": "Coca-Cola Zero 330ml Can",
+                                "quantity": 1,
+                                "price": 1.99,
+                            }
+                        ]
+                    }
+                },
+                "akamai": False,
+            }
 
-        def close(self):
-            pass
-
-        def goto(self, *_a, **_k):
-            return None
-
-    _browser_harness(monkeypatch, _Page)
-    monkeypatch.setattr(api, "_cio_browse_ids", lambda ids: [])
-    monkeypatch.setattr(api, "_cio_search", lambda q: [])
-    out = checkout._carrefour_browser_api_cart(
-        email="e@mrg.im",
-        password="x",
-        action="list",
-        items=[],
-    )
-    assert out["ok"] is True
-    assert out["items"][0]["id"] == "743861"
-    assert "Coca-Cola" in (out["items"][0].get("name") or "")
-    assert out["items"][0]["price"] == 1.99
+    listed = checkout._lite_cart_via_page(_Page(), "tok", "", {}, email="", session_user="")
+    assert listed["status"] == 200
     gets = [f for f in fetches if f.get("method") == "GET" and "liteCart" in (f.get("url") or "")]
-    assert len(gets) >= 2, "400 must not be a dead end"
+    assert len(gets) == 2
+    assert all((g.get("headers") or {}).get("userId") for g in gets)
+    assert (gets[0].get("headers") or {}).get("userId") == "anonymous"
+    assert (gets[1].get("headers") or {}).get("userId") == "u9"
+    assert listed["body"]["data"]["items"][0]["id"] == "743861"
 
 
 def test_litecart_400_after_retries_is_not_stamped_akamai(monkeypatch):
@@ -778,3 +776,237 @@ def test_session_from_page_fills_userid_from_storage():
     out = checkout._session_from_page(_Page())
     assert out["token"] == "tok1234567890"
     assert out["user_id"] == "u9"
+
+
+def _jwt_with(payload: dict) -> str:
+    import base64
+    import json
+
+    body = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
+    return f"eyJhbGciOiJub25lIn0.{body}.x"
+
+
+def test_pick_user_id_from_storage_persist_root():
+    uid = checkout._pick_user_id(
+        cookies={"token": "tok"},
+        extra={"localStorage": {"persist:root": json.dumps({"auth": {"userId": "u9"}})}},
+        token="tok",
+        email="e@mrg.im",
+    )
+    assert uid == "u9"
+
+
+def test_pick_user_id_from_customerid_cookie():
+    uid = checkout._pick_user_id(
+        cookies={"token": "tok", "customerId": "c-42"},
+        extra={},
+        token="tok",
+        email="e@mrg.im",
+    )
+    assert uid == "c-42"
+
+
+def test_pick_user_id_from_json_cookie():
+    uid = checkout._pick_user_id(
+        cookies={"info": json.dumps({"user": {"id": "nested-9"}})},
+        extra={},
+        email="e@mrg.im",
+    )
+    assert uid == "nested-9"
+
+
+def test_pick_user_id_from_nuxt_and_datalayer():
+    assert (
+        checkout._pick_user_id(
+            extra={"nuxt": {"state": {"auth": {"user": {"customerId": "nuxt-1"}}}}, "dataLayer": []},
+        )
+        == "nuxt-1"
+    )
+    assert (
+        checkout._pick_user_id(extra={"dataLayer": [{"event": "pageview", "userId": "dl-7"}]})
+        == "dl-7"
+    )
+
+
+def test_pick_user_id_falls_back_to_login_email():
+    assert checkout._pick_user_id(cookies={"token": "tok"}, email="e@mrg.im") == "e@mrg.im"
+
+
+def test_user_id_from_jwt_email_and_sub():
+    assert checkout._user_id_from_token(_jwt_with({"email": "e@mrg.im"})) == "e@mrg.im"
+    assert checkout._user_id_from_token(_jwt_with({"sub": "991122"})) == "991122"
+
+
+def test_session_from_page_storage_only_still_sets_userid_header():
+    class _Ctx:
+        def cookies(self):
+            return [{"name": "token", "value": "tok-only"}]
+
+    class _Page:
+        def __init__(self):
+            self.context = _Ctx()
+
+        def content(self):
+            return ""
+
+        def evaluate(self, _js, arg=None):
+            return {
+                "localStorage": {"maf.auth": json.dumps({"userId": "u-storage"})},
+                "sessionStorage": {},
+                "cookies": {},
+            }
+
+    out = checkout._session_from_page(_Page(), email="e@mrg.im")
+    assert out["user_id"] == "u-storage"
+    h = checkout._browser_headers(out["token"], out["user_id"], {}, method="GET")
+    assert h["userId"] == "u-storage"
+
+
+def test_session_from_page_jwt_only_still_sets_userid_header():
+    token = _jwt_with({"userId": "u-jwt"})
+
+    class _Ctx:
+        def cookies(self):
+            return [{"name": "token", "value": token}]
+
+    class _Page:
+        def __init__(self):
+            self.context = _Ctx()
+
+        def content(self):
+            return ""
+
+        def evaluate(self, _js, arg=None):
+            return {"localStorage": {}, "sessionStorage": {}, "cookies": {}}
+
+    out = checkout._session_from_page(_Page(), email="e@mrg.im")
+    assert out["user_id"] == "u-jwt"
+    h = checkout._browser_headers(out["token"], out["user_id"], {}, method="GET")
+    assert h["userId"] == "u-jwt"
+
+
+def test_header_variants_never_omit_userid():
+    variants = checkout._header_variants("tok", "", {})
+    assert variants
+    assert all(h.get("userId") for h in variants)
+
+
+def test_missing_userid_400_is_not_retried_without_header():
+    fetches = []
+
+    class _Ctx:
+        def cookies(self):
+            return [{"name": "token", "value": "tok"}]
+
+    class _Page:
+        def __init__(self):
+            self.context = _Ctx()
+
+        def content(self):
+            return ""
+
+        def evaluate(self, _js, arg=None):
+            if arg is None:
+                return {"localStorage": {}, "sessionStorage": {}, "cookies": {}}
+            fetches.append(arg)
+            return {
+                "status": 400,
+                "body": {"error": {"message": "header userId mancante"}},
+                "akamai": False,
+            }
+
+    listed = checkout._lite_cart_via_page(_Page(), "tok", "", {}, email="", session_user="")
+    assert listed["status"] == 400
+    gets = [f for f in fetches if f.get("method") == "GET"]
+    assert len(gets) == 1
+    assert (gets[0].get("headers") or {}).get("userId") == "anonymous"
+
+
+def test_browser_list_sends_storage_userid_on_official_get(monkeypatch):
+    from bring_fast.stores import carrefour as api
+
+    fetches = []
+
+    class _Page:
+        url = "https://www.carrefouruae.com/mafuae/en"
+
+        def __init__(self, ctx):
+            self.context = ctx
+
+        def content(self):
+            return '{"posInfo":"food=073_Zone04","polygonId":"DXB_DubProdCty_01","emirateCode":"DUBAI"}'
+
+        def evaluate(self, _js, arg=None):
+            if arg is None:
+                return {
+                    "localStorage": {"persist:root": json.dumps({"user": {"userId": "u-storage"}})},
+                    "sessionStorage": {},
+                    "cookies": {},
+                }
+            fetches.append(arg)
+            if arg.get("method") == "GET" and "liteCart" in (arg.get("url") or ""):
+                assert (arg.get("headers") or {}).get("userId") == "u-storage"
+                return {
+                    "status": 200,
+                    "body": {
+                        "data": {
+                            "items": [
+                                {
+                                    "id": "743861",
+                                    "name": "Coca-Cola Zero 330ml Can",
+                                    "quantity": 1,
+                                    "price": 1.99,
+                                }
+                            ]
+                        }
+                    },
+                    "akamai": False,
+                }
+            return {"status": 404, "body": {}, "akamai": False}
+
+        def close(self):
+            pass
+
+        def goto(self, *_a, **_k):
+            return None
+
+    class _Ctx:
+        pages = []
+
+        def cookies(self):
+            return [{"name": "token", "value": "tok-only"}]
+
+        def storage_state(self, **_k):
+            return None
+
+    ctx = _Ctx()
+    page = _Page(ctx)
+    monkeypatch.setattr(checkout, "_launch_carrefour_cart", lambda: (None, None, ctx, "headless"))
+    monkeypatch.setattr(checkout, "_carrefour_origin_page", lambda _ctx: (page, False))
+    monkeypatch.setattr(
+        checkout,
+        "_ensure_logged_in_page",
+        lambda *_a, **_k: {
+            "logged_in": True,
+            "reused": True,
+            "error": None,
+            "token": "tok-only",
+            "user_id": "",
+        },
+    )
+    monkeypatch.setattr(checkout, "_dismiss", lambda *_a, **_k: None)
+    monkeypatch.setattr(api, "save_browser_cookies", lambda *_a, **_k: None)
+    monkeypatch.setattr(api, "_cio_browse_ids", lambda ids: [])
+    monkeypatch.setattr(api, "_cio_search", lambda q: [])
+    out = checkout._carrefour_browser_api_cart(
+        email="e@mrg.im",
+        password="x",
+        action="list",
+        items=[],
+    )
+    assert out["ok"] is True
+    assert out["items"][0]["id"] == "743861"
+    assert "Coca-Cola" in (out["items"][0].get("name") or "")
+    gets = [f for f in fetches if f.get("method") == "GET" and "liteCart" in (f.get("url") or "")]
+    assert gets
+    assert (gets[0].get("headers") or {}).get("userId") == "u-storage"

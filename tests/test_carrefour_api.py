@@ -833,6 +833,20 @@ def test_browser_cookie_jar_supplies_token(tmp_path, monkeypatch):
     assert jar["user_id"] == "u42"
 
 
+def test_browser_cookie_jar_userid_is_case_insensitive_and_accepts_customerid(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRINGFAST_DATA", str(tmp_path))
+    from bring_fast.stores import carrefour as api
+
+    api.save_browser_cookies(
+        [
+            {"name": "token", "value": "tok", "domain": ".carrefouruae.com"},
+            {"name": "customerId", "value": "c-99", "domain": ".carrefouruae.com"},
+        ]
+    )
+    jar = api.token_from_browser_cookies()
+    assert jar["user_id"] == "c-99"
+
+
 def test_akamai_html_sets_error_code():
     from bring_fast.stores.http import StoreAPIError, json_or_error
 
