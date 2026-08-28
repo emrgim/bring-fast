@@ -20,8 +20,15 @@ def session():
         raise StoreAPIError(
             "curl_cffi is required for store APIs. pip install curl_cffi"
         ) from e
-    # HTTP/2 to RetailSSO often resets; the Android stack falls back to 1.1.
-    return cf.Session(impersonate="chrome124", http_version=CurlHttpVersion.V1_1)
+    # One client: Chrome TLS + Chrome JA3. HTTP/1.1 (HTTP/2 to RetailSSO resets).
+    last = None
+    for name in ("chrome131", "chrome124"):
+        try:
+            return cf.Session(impersonate=name, http_version=CurlHttpVersion.V1_1)
+        except Exception as e:
+            last = e
+            continue
+    raise StoreAPIError(f"curl_cffi Chrome impersonate failed: {last}")
 
 
 def is_akamai_shell(text: str) -> bool:

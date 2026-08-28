@@ -18,15 +18,15 @@ def test_parse_items_from_lite_cart():
     assert items[0]["name"] == "Milk 1L"
 
 
-def test_android_headers_look_like_the_play_store_app():
+def test_headers_do_not_override_chrome_user_agent():
     h = android_headers(token="abc", user_id="99")
     assert h["appid"] == "Android"
     assert h["x-maf-appId"] == "Android"
     assert h["x-maf-storeId"] == "mafuae"
     assert h["userId"] == "99"
     assert h["Authorization"] == "Bearer abc"
-    assert "okhttp" in h["User-Agent"]
-    assert "com.aswat.carrefouruae" in h["User-Agent"]
+    assert "User-Agent" not in h
+    assert "okhttp" not in str(h)
 
 
 def test_akamai_empty_shell_is_detected():

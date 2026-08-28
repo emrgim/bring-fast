@@ -27,11 +27,10 @@ def _device_id() -> str:
 
 
 def android_headers(*, token: str = "", user_id: str = "") -> dict[str, str]:
-    """Headers the Android app sends (x-maf-* + okhttp)."""
+    """JSON/API headers. User-Agent comes from the Chrome TLS session, not okhttp."""
     h = {
         "Accept": "application/json",
         "Content-Type": "application/json",
-        "User-Agent": f"okhttp/4.12.0 {PACKAGE}/{APP_VERSION}",
         "appid": APP_ID,
         "env": "prod",
         "storeid": MARKET,
