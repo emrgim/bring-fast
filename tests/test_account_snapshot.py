@@ -863,3 +863,121 @@ def test_barcode_query_still_searches_carrefour(bf, monkeypatch):
     out = json.loads(bf._call_tool(user, "carrefour_search", {"query": "5449000131805"}))
     assert out["results"][0]["id"] == "2288448"
     assert out["not_search_only"] is True
+
+
+def test_grandiose_remove_by_name_hits_live_cart_not_catalog(bf, monkeypatch):
+    user = _user_with_grandiose(bf)
+    seen = []
+
+    def _live(**kw):
+        seen.append(kw)
+        items = [
+            {"id": "6291021213119", "name": "Blu Sparkling Water 1L", "qty": 24, "item_id": "12118284"},
+            {"id": "5000112668209", "name": "Coca-Cola Zero Calories", "qty": 2, "item_id": "12115690"},
+        ]
+        if kw["action"] == "remove":
+            assert kw["items"][0]["name"] in ("Coca-Cola", "togli la Coca-Cola")
+            items = [i for i in items if i["id"] != "5000112668209"]
+        return {
+            "ok": True,
+            "official_count": len(items),
+            "items": items,
+            "logged_in": True,
+            "token": "t",
+            "user_id": "u",
+        }
+
+    monkeypatch.setattr(bf.checkout, "official_cart", _live)
+    monkeypatch.setattr(
+        bf.catalog,
+        "search",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("Magento remove matches the live cart")),
+    )
+    out = json.loads(bf._call_tool(user, "grandiose_cart", {"action": "remove", "name": "Coca-Cola"}))
+    assert out["success"] is True
+    assert [i["id"] for i in out["items"]] == ["6291021213119"]
+    search_q = json.loads(bf._call_tool(user, "grandiose_search", {"query": "togli la Coca-Cola"}))
+    assert search_q["success"] is True
+    assert seen[-1]["action"] == "remove"
+    assert seen[-1]["items"][0]["name"] == "Coca-Cola"
+
+
+def test_grandiose_remove_missing_sku_is_not_success(bf, monkeypatch):
+    user = _user_with_grandiose(bf)
+    still = [{"id": "5000112668209", "name": "Coca-Cola Zero Calories", "qty": 2, "item_id": "12115690"}]
+
+    def _live(**kw):
+        if kw["action"] == "remove":
+            return {
+                "ok": False,
+                "official_count": 1,
+                "items": still,
+                "logged_in": True,
+                "error": "0000000000000 is not in the official Grandiose cart. Cart has: Coca-Cola Zero Calories.",
+                "token": "t",
+                "user_id": "u",
+            }
+        return {"ok": True, "official_count": 1, "items": still, "logged_in": True, "token": "t", "user_id": "u"}
+
+    monkeypatch.setattr(bf.checkout, "official_cart", _live)
+    out = json.loads(bf._call_tool(user, "grandiose_cart", {"action": "remove", "product_id": "0000000000000"}))
+    assert out["success"] is False
+    assert out["items"][0]["id"] == "5000112668209"
+    assert "not in the official grandiose cart" in (out.get("what_happens") or out.get("error") or "").lower()
+
+
+def test_unioncoop_cart_is_wired_when_enabled(bf, monkeypatch):
+    user = bf.db.create_user("uc@example.com", "secret1")
+    bf.db.set_store_enabled("unioncoop", True)
+    bf.db.set_retailer_account(user["id"], "unioncoop", "shopper@example.com", "store-pass")
+    user = bf.db.get_user_by_id(user["id"])
+    seen = []
+
+    def _live(**kw):
+        seen.append(kw["action"])
+        return {
+            "ok": True,
+            "official_count": 0,
+            "items": [],
+            "logged_in": True,
+            "token": "t",
+            "user_id": "u",
+            "driver": "magento-rest",
+        }
+
+    monkeypatch.setattr(bf.checkout, "official_cart", _live)
+    out = json.loads(bf._call_tool(user, "unioncoop_cart", {"action": "list"}))
+    assert out["success"] is True
+    assert seen == ["list"]
+    snap = json.loads(bf._call_tool(user, "bf_whoami", {}))
+    uc = next(s for s in snap["stores"] if s["store_id"] == "unioncoop")
+    assert "cart" in uc["capabilities"]
+    assert "checkout" in uc["capabilities"]
+    assert "unioncoop_checkout" in uc["tools"]
+
+
+def test_magento_cart_tools_match_wired_drivers(bf):
+    tools = {t["name"]: t["description"].lower() for t in bf.tools_catalog()}
+    g = tools["grandiose_cart"]
+    assert "magento graphql" in g
+    assert "never success if the line is still there" in g
+    assert "does not charge a card" in g
+    assert "orders only on" not in g
+    u = tools["unioncoop_cart"]
+    assert "magento rest" in u
+    assert "varnish-blocked" in u
+    assert "does not charge a card" in u
+    schema = next(t["inputSchema"] for t in bf.tools_catalog() if t["name"] == "grandiose_cart")
+    assert "item_id" in schema["properties"]
+    uc_schema = next(t["inputSchema"] for t in bf.tools_catalog() if t["name"] == "unioncoop_cart")
+    assert "item_id" in uc_schema["properties"]
+    checkout = tools["grandiose_checkout"]
+    assert "does not place the order or charge a card" in checkout
+    assert "unioncoop_checkout" not in tools
+    bf.db.set_store_enabled("unioncoop", True)
+    tools = {t["name"]: t["description"].lower() for t in bf.tools_catalog()}
+    assert "does not place the order or charge a card" in tools["unioncoop_checkout"]
+    bf_cart = tools["bf_cart"]
+    assert "unioncoop_cart" in bf_cart
+    assert "item_id" in next(t["inputSchema"] for t in bf.tools_catalog() if t["name"] == "bf_cart")["properties"]
+

@@ -51,6 +51,28 @@ def test_carrefour_can_fill_a_basket_but_not_check_out(bf, client):
     assert 'class="cap">Receipts' in card
 
 
+def test_unioncoop_card_matches_wired_magento_rest(bf, client):
+    _sign_in(client)
+    page = client.get("/stores").text
+    card = page.split('id="store-unioncoop"')[1].split("</a>")[0]
+    assert 'class="cap">Search' in card
+    assert 'class="cap">Cart' in card
+    assert 'class="cap">Checkout' in card
+    assert 'class="cap">Login' in card
+    assert 'class="cap no">Receipts' in card
+
+
+def test_unioncoop_login_form_appears_when_the_store_is_on(bf, client):
+    _sign_in(client)
+    client.post("/retailers/unioncoop/toggle", follow_redirects=False)
+    page = client.get("/stores/unioncoop").text
+    assert "Turn Union Coop off" in page
+    assert 'type="password"' in page
+    assert "Prepare official checkout on Union Coop" in page
+    assert "Payment stays on the store site" in page
+    assert "No invoice reader for Union Coop yet" in page
+
+
 def test_a_receipts_only_store_says_it_is_there_for_its_invoices(bf, client):
     _sign_in(client)
     page = client.get("/stores").text

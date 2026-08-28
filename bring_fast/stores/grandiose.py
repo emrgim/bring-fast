@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from bring_fast.stores.cart_match import match_cart_line, missing_line_error
 from bring_fast.stores.http import StoreAPIError, json_or_error, session
 
 SITE = "https://www.grandiose.ae"
@@ -324,10 +325,13 @@ def parse_items(cart: dict[str, Any]) -> list[dict[str, Any]]:
         prices = i.get("prices") or {}
         if isinstance(prices, dict):
             price = (prices.get("price") or {}).get("value") or (prices.get("row_total") or {}).get("value")
+        uid = str(i.get("uid") or "")
+        legacy = str(i.get("id") or i.get("item_id") or "")
         out.append(
             {
                 "id": sku,
-                "item_id": str(i.get("id") or i.get("item_id") or ""),
+                "item_id": legacy or uid,
+                "uid": uid,
                 "name": product.get("name") or i.get("name") or sku,
                 "qty": int(i.get("quantity") or i.get("qty") or 1),
                 "price": price,
@@ -338,21 +342,29 @@ def parse_items(cart: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
-def _cart_query() -> str:
+def _item_fields() -> str:
+    # Grandiose Magento 2.4: CartItemInterface.id is deprecated; uid is the live key.
     return """
-    query {
-      customerCart {
-        id
-        total_quantity
-        items {
+          uid
           id
           quantity
           prices { price { value currency } row_total { value currency } }
           product { sku name url_key }
-        }
-        prices { grand_total { value currency } }
-      }
-    }
+    """
+
+
+def _cart_query() -> str:
+    return f"""
+    query {{
+      customerCart {{
+        id
+        total_quantity
+        items {{
+          {_item_fields()}
+        }}
+        prices {{ grand_total {{ value currency }} }}
+      }}
+    }}
     """
 
 
@@ -398,22 +410,20 @@ def add_item(*, token: str, sku: str, qty: int = 1) -> dict[str, Any]:
     cart = customer_cart(token)
     data = graphql(
         token,
-        """
-        mutation Add($cartId: String!, $sku: String!, $qty: Float!) {
-          addProductsToCart(cartId: $cartId, cartItems: [{ sku: $sku, quantity: $qty }]) {
-            cart {
+        f"""
+        mutation Add($cartId: String!, $sku: String!, $qty: Float!) {{
+          addProductsToCart(cartId: $cartId, cartItems: [{{ sku: $sku, quantity: $qty }}]) {{
+            cart {{
               id
               total_quantity
-              items {
-                id quantity
-                prices { price { value currency } row_total { value currency } }
-                product { sku name url_key }
-              }
-              prices { grand_total { value currency } }
-            }
-            user_errors { code message }
-          }
-        }
+              items {{
+                {_item_fields()}
+              }}
+              prices {{ grand_total {{ value currency }} }}
+            }}
+            user_errors {{ code message }}
+          }}
+        }}
         """,
         {"cartId": cart["id"], "sku": sku, "qty": float(qty)},
     )
@@ -433,36 +443,190 @@ def add_item(*, token: str, sku: str, qty: int = 1) -> dict[str, Any]:
     return added
 
 
-def remove_item(*, token: str, item_id: str = "", sku: str = "") -> dict[str, Any]:
-    cart = customer_cart(token)
-    cid = cart["id"]
-    if not item_id and sku:
-        for it in parse_items(cart):
-            if it["id"] == sku:
-                item_id = it.get("item_id") or ""
-                break
-    if not item_id:
-        return cart
-    data = graphql(
-        token,
-        """
-        mutation Rm($cartId: String!, $itemId: Int!) {
-          removeItemFromCart(input: { cart_id: $cartId, cart_item_id: $itemId }) {
-            cart { id total_quantity items { id quantity product { sku name } } }
-          }
-        }
-        """,
-        {"cartId": cid, "itemId": int(item_id)},
-    )
+def _line_key(line: dict[str, Any]) -> str:
+    return str(line.get("uid") or line.get("item_id") or line.get("id") or "")
+
+
+def _still_in_cart(lines: list[dict[str, Any]], line: dict[str, Any]) -> bool:
+    key = _line_key(line)
+    sku = str(line.get("id") or "")
+    for it in lines:
+        if key and _line_key(it) == key:
+            return True
+        if sku and str(it.get("id") or "") == sku:
+            return True
+    return False
+
+
+def _remove_graphql(token: str, cart_id: str, line: dict[str, Any]) -> dict[str, Any]:
+    uid = str(line.get("uid") or "").strip()
+    raw_id = str(line.get("item_id") or "").strip()
+    if uid:
+        data = graphql(
+            token,
+            f"""
+            mutation Rm($cartId: String!, $itemUid: ID!) {{
+              removeItemFromCart(input: {{ cart_id: $cartId, cart_item_uid: $itemUid }}) {{
+                cart {{ id total_quantity items {{ {_item_fields()} }} }}
+              }}
+            }}
+            """,
+            {"cartId": cart_id, "itemUid": uid},
+        )
+    elif raw_id.isdigit():
+        data = graphql(
+            token,
+            f"""
+            mutation Rm($cartId: String!, $itemId: Int!) {{
+              removeItemFromCart(input: {{ cart_id: $cartId, cart_item_id: $itemId }}) {{
+                cart {{ id total_quantity items {{ {_item_fields()} }} }}
+              }}
+            }}
+            """,
+            {"cartId": cart_id, "itemId": int(raw_id)},
+        )
+    elif raw_id:
+        data = graphql(
+            token,
+            f"""
+            mutation Rm($cartId: String!, $itemUid: ID!) {{
+              removeItemFromCart(input: {{ cart_id: $cartId, cart_item_uid: $itemUid }}) {{
+                cart {{ id total_quantity items {{ {_item_fields()} }} }}
+              }}
+            }}
+            """,
+            {"cartId": cart_id, "itemUid": raw_id},
+        )
+    else:
+        raise StoreAPIError("Grandiose cart line has no Magento item uid.", status=400)
     return ((data.get("data") or {}).get("removeItemFromCart") or {}).get("cart") or {}
+
+
+def remove_item(*, token: str, item_id: str = "", sku: str = "", name: str = "") -> dict[str, Any]:
+    cart = customer_cart(token)
+    lines = parse_items(cart)
+    line = match_cart_line(lines, item_id=item_id, sku=sku, name=name)
+    if not line:
+        raise StoreAPIError(
+            missing_line_error(name or sku or item_id, lines, store="Grandiose"),
+            status=404,
+        )
+    updated = _remove_graphql(token, str(cart["id"]), line)
+    leftover = parse_items(updated) if isinstance(updated.get("items"), list) else parse_items(customer_cart(token))
+    if _still_in_cart(leftover, line):
+        raise StoreAPIError(
+            f"{line.get('name') or sku or item_id} was not removed from the official Grandiose cart.",
+            status=502,
+        )
+    return updated or customer_cart(token)
+
+
+def update_item(*, token: str, line: dict[str, Any], qty: int) -> dict[str, Any]:
+    cart = customer_cart(token)
+    uid = str(line.get("uid") or "").strip()
+    raw_id = str(line.get("item_id") or "").strip()
+    if uid:
+        data = graphql(
+            token,
+            f"""
+            mutation Up($cartId: String!, $itemUid: ID!, $qty: Float!) {{
+              updateCartItems(input: {{
+                cart_id: $cartId
+                cart_items: [{{ cart_item_uid: $itemUid, quantity: $qty }}]
+              }}) {{
+                cart {{ id total_quantity items {{ {_item_fields()} }} }}
+              }}
+            }}
+            """,
+            {"cartId": cart["id"], "itemUid": uid, "qty": float(qty)},
+        )
+    elif raw_id.isdigit():
+        data = graphql(
+            token,
+            f"""
+            mutation Up($cartId: String!, $itemId: Int!, $qty: Float!) {{
+              updateCartItems(input: {{
+                cart_id: $cartId
+                cart_items: [{{ cart_item_id: $itemId, quantity: $qty }}]
+              }}) {{
+                cart {{ id total_quantity items {{ {_item_fields()} }} }}
+              }}
+            }}
+            """,
+            {"cartId": cart["id"], "itemId": int(raw_id), "qty": float(qty)},
+        )
+    else:
+        raise StoreAPIError("Grandiose cart line has no Magento item uid to update.", status=400)
+    return ((data.get("data") or {}).get("updateCartItems") or {}).get("cart") or customer_cart(token)
+
+
+def set_item(*, token: str, sku: str = "", qty: int = 1, name: str = "", item_id: str = "") -> dict[str, Any]:
+    cart = customer_cart(token)
+    line = match_cart_line(parse_items(cart), item_id=item_id, sku=sku, name=name)
+    if line:
+        if int(qty) <= 0:
+            return remove_item(token=token, item_id=str(line.get("item_id") or ""), sku=str(line.get("id") or ""))
+        return update_item(token=token, line=line, qty=int(qty))
+    if not sku:
+        raise StoreAPIError(
+            missing_line_error(name or item_id, parse_items(cart), store="Grandiose"),
+            status=404,
+        )
+    return add_item(token=token, sku=sku, qty=int(qty))
 
 
 def clear_cart(*, token: str) -> dict[str, Any]:
     cart = customer_cart(token)
     for it in parse_items(cart):
-        if it.get("item_id"):
-            remove_item(token=token, item_id=it["item_id"])
-    return customer_cart(token)
+        remove_item(
+            token=token,
+            item_id=str(it.get("item_id") or ""),
+            sku=str(it.get("id") or ""),
+            name=str(it.get("name") or ""),
+        )
+    emptied = customer_cart(token)
+    leftover = parse_items(emptied)
+    if leftover:
+        raise StoreAPIError(
+            "Grandiose cart was not emptied. Still has: "
+            + ", ".join(str(it.get("name") or it.get("id")) for it in leftover)
+            + ".",
+            status=502,
+        )
+    return emptied
+
+
+def _cart_payload(
+    *,
+    token: str,
+    user_id: str,
+    reused: bool,
+    cart: dict[str, Any],
+    error: str | None = None,
+    error_code: str | None = None,
+) -> dict[str, Any]:
+    live = parse_items(cart) if cart else []
+    try:
+        oos = out_of_stock_skus(token, str((cart or {}).get("id") or "")) if token and cart else set()
+    except StoreAPIError:
+        oos = set()
+    for row in live:
+        row["available"] = row["id"] not in oos
+    return {
+        "ok": error is None,
+        "official_count": len(live),
+        "items": live,
+        "logged_in": bool(token),
+        "session_reused": reused,
+        "driver": "magento",
+        "client": PACKAGE,
+        "error": error,
+        "error_code": error_code,
+        "token": token,
+        "user_id": user_id,
+        "area": (_AREA or {}).get("area_name"),
+        "inventory_source": (_AREA or {}).get("inventory_source"),
+    }
 
 
 def official_cart(
@@ -498,49 +662,48 @@ def official_cart(
         if action == "clear":
             clear_cart(token=token)
         elif action == "remove":
+            if not items:
+                raise StoreAPIError("product_id, name, or item_id required to remove.", status=400)
             for it in items:
-                remove_item(token=token, sku=str(it.get("id") or ""), item_id=str(it.get("item_id") or ""))
-        elif action in ("add", "set"):
+                remove_item(
+                    token=token,
+                    sku=str(it.get("id") or it.get("sku") or ""),
+                    item_id=str(it.get("item_id") or ""),
+                    name=str(it.get("name") or ""),
+                )
+        elif action == "set":
             for it in items:
-                add_item(token=token, sku=str(it.get("id") or ""), qty=int(it.get("qty") or 1))
+                set_item(
+                    token=token,
+                    sku=str(it.get("id") or it.get("sku") or ""),
+                    qty=int(it.get("qty") or 1),
+                    name=str(it.get("name") or ""),
+                    item_id=str(it.get("item_id") or ""),
+                )
+        elif action == "add":
+            for it in items:
+                add_item(token=token, sku=str(it.get("id") or it.get("sku") or ""), qty=int(it.get("qty") or 1))
         cart = customer_cart(token)
-        live = parse_items(cart)
-        oos = out_of_stock_skus(token, str(cart.get("id") or ""))
-        for row in live:
-            row["available"] = row["id"] not in oos
-        return {
-            "ok": True,
-            "official_count": len(live),
-            "items": live,
-            "logged_in": True,
-            "session_reused": reused,
-            "driver": "magento",
-            "client": PACKAGE,
-            "error": None,
-            "token": token,
-            "user_id": user_id,
-            "area": (_AREA or {}).get("area_name"),
-            "inventory_source": (_AREA or {}).get("inventory_source"),
-        }
+        return _cart_payload(token=token, user_id=user_id, reused=reused, cart=cart)
     except StoreAPIError as e:
         if reused and e.status in (401, 403) and email and password:
             return official_cart(
                 email=email, password=password, action=action, items=items, session_token="", session_user=""
             )
-        return {
-            "ok": False,
-            "official_count": None,
-            "items": [],
-            "logged_in": bool(token),
-            "session_reused": reused,
-            "driver": "magento",
-            "client": PACKAGE,
-            "error": str(e),
-            "token": token,
-            "user_id": user_id,
-            "area": (_AREA or {}).get("area_name"),
-            "inventory_source": (_AREA or {}).get("inventory_source"),
-        }
+        try:
+            cart = customer_cart(token) if token else {}
+        except StoreAPIError:
+            cart = {}
+        out = _cart_payload(
+            token=token,
+            user_id=user_id,
+            reused=reused,
+            cart=cart,
+            error=str(e),
+            error_code=getattr(e, "error_code", None),
+        )
+        out["ok"] = False
+        return out
 
 
 def customer_addresses(token: str) -> list[dict[str, Any]]:
@@ -644,7 +807,9 @@ def prepare_checkout(*, token: str, address_id: int | None = None) -> dict[str, 
             }
             billing_address { firstname lastname street city }
             items {
-              id quantity
+              uid
+              id
+              quantity
               prices { price { value currency } row_total { value currency } }
               product { sku name url_key }
             }
