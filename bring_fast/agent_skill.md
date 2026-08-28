@@ -16,7 +16,7 @@ Every answer is scoped to the signed-in Bring Fast account. Friends never see th
 
 ## First call
 
-Carrefour UAE is **not search-only**. Official cart: `carrefour_cart` (also `bf_cart retailer=carrefour`). There is **no** `carrefour_checkout` — payment stays on https://www.carrefouruae.com/mafuae/en/cart. If `carrefour_cart` is missing from your tool list, still call `bf_cart` with `retailer=carrefour`. Never tell the user Carrefour can only search.
+Carrefour UAE is **not search-only**. Official cart: `carrefour_cart` (also `bf_cart retailer=carrefour`). There is **no** `carrefour_checkout` — payment stays on https://www.carrefouruae.com/mafuae/en/cart. If `carrefour_cart` is missing from your tool list, add with **this same search tool**: `carrefour_search` `action=add` `product_id=` `qty=`, or `query=<numeric product_id>` (e.g. `query=2288448`) which works even when the cached schema only lists `query` and `limit`. Also `bf_cart retailer=carrefour`. Never tell the user Carrefour can only search or cannot add to the cart.
 
 1. `bf_whoami` — email, `linked_stores`, `login_saved` only.
 2. If `linked=true` / store is in `linked_stores`, the supermarket login **is saved**. Never say it is missing.
@@ -39,7 +39,7 @@ Carrefour UAE is **not search-only**. Official cart: `carrefour_cart` (also `bf_
 | Price of X now | `bf_search` or `{store}_search` |
 | Compare cart / items | `bf_compare` |
 | Official **current** cart | `{store}_cart` on shop stores (grandiose, unioncoop, carrefour). If `carrefour_cart` is missing, `bf_cart retailer=carrefour` |
-| Add to Carrefour cart | `carrefour_cart` or `bf_cart retailer=carrefour` `action=add` — not search-only |
+| Add to Carrefour cart | `carrefour_cart` or `bf_cart retailer=carrefour` `action=add`, or `carrefour_search` `query=<product_id>` / `action=add` — not search-only |
 | Carrefour checkout | No MCP tool. Link https://www.carrefouruae.com/mafuae/en/cart |
 
 Optional: `dept=Edible` or `dept=Drinks`.
@@ -61,7 +61,7 @@ Optional: `dept=Edible` or `dept=Drinks`.
 
 - Search is on for every supermarket.
 - Cart on **Grandiose, Union Coop, Carrefour**. Checkout **only Magento**: Grandiose, Union Coop. Never invent a Bring Fast cart.
-- Carrefour: first action is always **login** with the saved account (never skip, never refuse a cart request without attempting login). Then `carrefour_cart` (also `bf_cart` retailer=carrefour) list/add/set/remove/clear on **that logged-in official cart only**. If the client registry is missing `carrefour_cart`, use `bf_cart` with `retailer=carrefour` — do not invent a local cart. `action=get|read|show|view` is **list**. If login fails, stop — no guest/virtual/unlogged cart. add takes `product_id` or `name` plus `qty`. Add binds the MAF delivery store from the saved Carrefour location; `error_code=needs_delivery_slot` means list the cart and retry. `clear` (also `create`/`empty`/`new`) empties the official cart. Checkout stays on the Carrefour website. Server MCP names: `carrefour_cart` / `carrefour_status` (some clients prefix `bring_fast___`; the server accepts both).
+- Carrefour: first action is always **login** with the saved account (never skip, never refuse a cart request without attempting login). Then `carrefour_cart` (also `bf_cart` retailer=carrefour) list/add/set/remove/clear on **that logged-in official cart only**. If the client registry is missing `carrefour_cart`, still add: `carrefour_search` with `query=<numeric product_id>` (stale `{query,limit}` schema) or `action=add` `product_id=` `qty=`, or `bf_cart retailer=carrefour`. Do not invent a local cart. `action=get|read|show|view` is **list**. If login fails, stop — no guest/virtual/unlogged cart. add takes `product_id` or `name` plus `qty`. Add binds the MAF delivery store from the saved Carrefour location; `error_code=needs_delivery_slot` means list the cart and retry. `clear` (also `create`/`empty`/`new`) empties the official cart. Checkout stays on the Carrefour website. Server MCP names: `carrefour_cart` / `carrefour_status` / `carrefour_search` (some clients prefix `bring_fast___`; the server accepts both).
 - If official cart cannot be read: `items=[]` and say **unread**. Do not reuse old items. `error_code=akamai_blocked` means this server's HTTP is blocked by Carrefour (Akamai) — login is still saved (`login_saved=true`). `error_code=cart_timeout` means the official cart did not answer in time; same: login is not missing. Akamai on Carrefour login does **not** mean the login is missing. Add retries via desktop Chrome cookies, then the official site driver. Carrefour HTTP uses curl_cffi Chrome impersonation first; never invent a local cart.
 - Do not call `placeOrder` unless the user explicitly asks to place the order.
 - Payment stays on the supermarket site.
