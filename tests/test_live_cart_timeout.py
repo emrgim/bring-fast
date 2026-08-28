@@ -207,7 +207,7 @@ def test_carrefour_http_probe_leaves_time_for_browser(monkeypatch):
     assert captured["action"] == "add"
 
 
-def test_browser_api_add_posts_entries_then_lists(monkeypatch):
+def test_browser_api_add_posts_additem_then_lists(monkeypatch):
     """In-page fetch must write 743861 then read liteCart — no product-page click."""
     from bring_fast.stores import carrefour as api
 
@@ -286,6 +286,8 @@ def test_browser_api_add_posts_entries_then_lists(monkeypatch):
     gets = [f for f in fetches if f["method"] == "GET" and "liteCart" in f["url"]]
     assert posts and posts[0]["payload"]["productId"] == "743861"
     assert posts[0]["payload"]["quantity"] == 1
+    assert "/addItem" in posts[0]["url"]
+    assert "/entries" not in posts[0]["url"]
     assert gets, "must re-read official liteCart after add"
     assert not any("carrefouruae.com/mafuae/en/p/" in str(f.get("url")) for f in fetches)
 
@@ -348,6 +350,13 @@ def test_browser_api_add_500_is_ok_when_sku_already_in_cart(monkeypatch):
     monkeypatch.setattr(api, "save_browser_cookies", lambda *_a, **_k: None)
     monkeypatch.setattr(
         api,
+        "_cio_browse_ids",
+        lambda ids: [{"value": "Coca-Cola Zero 330ml Can", "data": {"id": "743861", "price": 1.99}}]
+        if "743861" in ids
+        else [],
+    )
+    monkeypatch.setattr(
+        api,
         "_cio_search",
         lambda q: [{"value": "Coca-Cola Zero 330ml Can", "data": {"id": "743861", "price": 1.99}}],
     )
@@ -360,3 +369,152 @@ def test_browser_api_add_500_is_ok_when_sku_already_in_cart(monkeypatch):
     assert out["ok"] is True
     assert out["items"][0]["id"] == "743861"
     assert "Coca-Cola" in (out["items"][0].get("name") or "")
+
+
+def _browser_harness(monkeypatch, page_cls):
+    from bring_fast.stores import carrefour as api
+
+    class _Ctx:
+        pages = []
+
+        def cookies(self):
+            return [
+                {"name": "token", "value": "tok", "domain": ".carrefouruae.com"},
+                {"name": "userId", "value": "u9", "domain": ".carrefouruae.com"},
+            ]
+
+        def storage_state(self, **_k):
+            return None
+
+    ctx = _Ctx()
+    page = page_cls(ctx)
+    monkeypatch.setattr(checkout, "_launch_carrefour_cart", lambda: (None, None, ctx, "headless"))
+    monkeypatch.setattr(checkout, "_carrefour_origin_page", lambda _ctx: (page, False))
+    monkeypatch.setattr(
+        checkout,
+        "_ensure_logged_in_page",
+        lambda *_a, **_k: {"logged_in": True, "reused": True, "error": None, "token": "tok", "user_id": "u9"},
+    )
+    monkeypatch.setattr(checkout, "_dismiss", lambda *_a, **_k: None)
+    monkeypatch.setattr(api, "save_browser_cookies", lambda *_a, **_k: None)
+    monkeypatch.setattr(api, "_cio_browse_ids", lambda ids: [])
+    monkeypatch.setattr(api, "_cio_search", lambda q: [])
+    return page
+
+
+def test_browser_api_add_1592968_qty_2(monkeypatch):
+    fetches = []
+
+    class _Page:
+        url = "https://www.carrefouruae.com/mafuae/en"
+
+        def __init__(self, ctx):
+            self.context = ctx
+
+        def content(self):
+            return '{"posInfo":"food=073_Zone04","polygonId":"DXB_DubProdCty_01","emirateCode":"DUBAI"}'
+
+        def evaluate(self, _js, arg):
+            fetches.append(arg)
+            if arg["method"] == "POST":
+                return {"status": 200, "body": {"data": {"ok": True}}, "akamai": False}
+            if "liteCart" in arg["url"]:
+                return {
+                    "status": 200,
+                    "body": {
+                        "data": {
+                            "items": [
+                                {
+                                    "id": "1592968",
+                                    "name": "Oasis Blu Sparkling Water, 1L Pack of 6",
+                                    "quantity": 2,
+                                    "price": 26.99,
+                                }
+                            ]
+                        }
+                    },
+                    "akamai": False,
+                }
+            return {"status": 404, "body": {}, "akamai": False}
+
+        def close(self):
+            pass
+
+        def goto(self, *_a, **_k):
+            return None
+
+    _browser_harness(monkeypatch, _Page)
+    out = checkout._carrefour_browser_api_cart(
+        email="e@mrg.im",
+        password="x",
+        action="add",
+        items=[
+            {"id": "1592968", "qty": 2, "name": "Oasis Blu Sparkling Water, 1L Pack of 6"}
+        ],
+    )
+    assert out["ok"] is True
+    assert out["items"][0]["id"] == "1592968"
+    assert out["items"][0]["qty"] == 2
+    posts = [f for f in fetches if f["method"] == "POST"]
+    assert posts[0]["payload"]["productId"] == "1592968"
+    assert posts[0]["payload"]["quantity"] == 2
+    assert "/addItem" in posts[0]["url"]
+    assert not any("/entries" in f["url"] and f["method"] == "POST" for f in fetches)
+
+
+def test_browser_api_add_500_restores_snapshot_and_skips_entries(monkeypatch):
+    rows = [
+        {"id": "376161", "name": "Coca-Cola Original", "quantity": 1, "price": 14.99},
+        {"id": "743861", "name": "Coca-Cola Zero", "quantity": 1, "price": 1.99},
+    ]
+    fetches = []
+
+    class _Page:
+        url = "https://www.carrefouruae.com/mafuae/en"
+
+        def __init__(self, ctx):
+            self.context = ctx
+
+        def content(self):
+            return '{"posInfo":"food=073_Zone04","polygonId":"DXB_DubProdCty_01","emirateCode":"DUBAI"}'
+
+        def evaluate(self, _js, arg):
+            fetches.append(arg)
+            if arg["method"] == "POST":
+                assert "/entries" not in arg["url"]
+                pid = str((arg.get("payload") or {}).get("productId") or "")
+                if pid == "1592968":
+                    rows.clear()
+                    return {
+                        "status": 500,
+                        "body": {"error": {"message": "Internal Server Error"}},
+                        "akamai": False,
+                    }
+                rows.append({"id": pid, "quantity": int((arg.get("payload") or {}).get("quantity") or 1)})
+                return {"status": 200, "body": {"data": {"ok": True}}, "akamai": False}
+            if "liteCart" in arg["url"]:
+                return {"status": 200, "body": {"data": {"items": list(rows)}}, "akamai": False}
+            return {"status": 404, "body": {}, "akamai": False}
+
+        def close(self):
+            pass
+
+        def goto(self, *_a, **_k):
+            return None
+
+    _browser_harness(monkeypatch, _Page)
+    out = checkout._carrefour_browser_api_cart(
+        email="e@mrg.im",
+        password="x",
+        action="add",
+        items=[{"id": "1592968", "qty": 2, "name": "Oasis Blu Sparkling Water, 1L Pack of 6"}],
+    )
+    assert out["ok"] is False
+    assert out["maf_error"] == "Internal Server Error"
+    ids = {it["id"] for it in out["items"]}
+    assert ids == {"376161", "743861"}
+    assert "1592968" not in ids
+    posts = [f for f in fetches if f["method"] == "POST"]
+    assert any(f["payload"]["productId"] == "1592968" for f in posts)
+    assert any(f["payload"]["productId"] == "376161" for f in posts)
+    assert not any("/entries" in f["url"] and f["method"] == "POST" for f in fetches)

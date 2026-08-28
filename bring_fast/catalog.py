@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 from urllib.parse import quote
 
@@ -73,36 +74,149 @@ def lookup_carrefour_gtin(code: str) -> dict[str, Any] | None:
     return None
 
 
-def search_carrefour(query: str, limit: int = 8) -> dict[str, Any]:
-    q = quote(query.strip(), safe="")
-    url = f"https://ac.cnstrc.com/search/{q}"
+_PERFUME_QUERY = re.compile(
+    r"\b(parma|profumo|perfume|fragrance|cologne|eau de|edt|edp)\b",
+    re.I,
+)
+_PERFUME_NAME = re.compile(
+    r"\b(parma|profumo|perfume|fragrance|cologne|eau de|edt|edp|mediterraneo)\b",
+    re.I,
+)
+_WATERISH_QUERY = re.compile(
+    r"\b(acqua|water|sparkling|oasis|blu)\b",
+    re.I,
+)
+_PACK6 = re.compile(r"pack of\s*6|\b6\s*x\b|\bx\s*6\b", re.I)
+_ONE_LITRE = re.compile(r"\b1\s*l\b|\b1l\b|\b1000\s*ml\b", re.I)
+
+
+def expand_carrefour_queries(query: str) -> list[str]:
+    """Italian grocery nicknames Constructor.io does not know (Acqua Blu → Oasis Blu)."""
+    q = (query or "").strip()
+    if not q:
+        return []
+    out = [q]
+    low = q.lower()
+    if _PERFUME_QUERY.search(low):
+        return out
+    tokens = [t for t in re.split(r"\s+", low) if t]
+    if "acqua" in tokens:
+        rest = " ".join(t for t in tokens if t != "acqua").strip()
+        if "blu" in tokens:
+            out.append("oasis blu")
+            out.append("blu sparkling water")
+        else:
+            out.append(f"water {rest}".strip() if rest else "water")
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for item in out:
+        key = item.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(item)
+    return uniq
+
+
+def _carrefour_hit_score(query: str, item: dict[str, Any]) -> float:
+    name = str(item.get("name") or "")
+    score = _score_name(query, name)
+    q = (query or "").lower()
+    n = name.lower()
+    ptype = str(item.get("product_type") or "").upper()
+    brand = str(item.get("brand") or item.get("brand_name") or "").lower()
+    if _WATERISH_QUERY.search(q) and not _PERFUME_QUERY.search(q):
+        if _PERFUME_NAME.search(n) or ptype == "NONFOOD":
+            score -= 5.0
+        if ptype == "FOOD":
+            score += 0.6
+        if "oasis" in n and "blu" in n:
+            score += 2.5
+        if brand == "blu" and "water" in n:
+            score += 1.5
+        if _ONE_LITRE.search(n) and _PACK6.search(n):
+            score += 0.8
+        elif _PACK6.search(n):
+            score += 0.3
+        if "sparkling" in n:
+            score += 0.4
+    return score
+
+
+def rank_carrefour_results(query: str, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """FOOD Oasis Blu water above Acqua Di Parma perfume for queries like 'Acqua Blu'."""
+    ranked = [it for it in results if isinstance(it, dict)]
+    ranked.sort(key=lambda it: _carrefour_hit_score(query, it), reverse=True)
+    return ranked
+
+
+def _cio_result_item(it: dict[str, Any]) -> dict[str, Any] | None:
+    d = it.get("data") if isinstance(it.get("data"), dict) else {}
+    pid = str(d.get("id") or d.get("code") or "").strip()
+    if not pid:
+        return None
+    path = d.get("url") or f"/p/{pid}"
+    if not str(path).startswith("http"):
+        path = "https://www.carrefouruae.com/mafuae/en" + str(path)
+    return {
+        "id": pid,
+        "name": it.get("value") or d.get("online_name_en") or d.get("name"),
+        "price": d.get("price"),
+        "currency": d.get("currency") or "AED",
+        "image_url": d.get("image_url") or "",
+        "url": path,
+        "product_type": d.get("product_type") or "",
+        "brand": d.get("brand_name") or d.get("brand") or "",
+    }
+
+
+def _cio_search_raw(query: str, *, limit: int = 8, timeout: float = 12) -> list[dict[str, Any]]:
+    q = quote(str(query).strip(), safe="")
+    if not q:
+        return []
     r = _session().get(
-        url,
+        f"https://ac.cnstrc.com/search/{q}",
         params={
             "key": "key_UzmQuiABmYtLGFME",
             "c": "cio-python-bringfast-1.0",
             "i": "bringfast",
             "s": 1,
             "page": 1,
-            "num_results_per_page": max(1, min(limit, 20)),
+            "num_results_per_page": max(1, min(int(limit or 8), 20)),
         },
-        timeout=25,
+        timeout=timeout,
     )
     r.raise_for_status()
-    items = []
-    for it in ((r.json().get("response") or {}).get("results") or []):
-        d = it.get("data") or {}
-        items.append(
-            {
-                "id": str(d.get("id") or d.get("code") or ""),
-                "name": it.get("value") or d.get("name"),
-                "price": d.get("price"),
-                "currency": d.get("currency") or "AED",
-                "image_url": d.get("image_url") or "",
-                "url": "https://www.carrefouruae.com/mafuae/en" + (d.get("url") or f"/p/{d.get('id')}"),
-            }
-        )
-    return {"retailer": "carrefour", "query": query, "results": items}
+    return list(((r.json().get("response") or {}).get("results") or []))
+
+
+def search_carrefour(query: str, limit: int = 8) -> dict[str, Any]:
+    cap = max(1, min(int(limit or 8), 20))
+    merged: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    last_err: Exception | None = None
+    for q in expand_carrefour_queries(query):
+        try:
+            raw = _cio_search_raw(q, limit=cap)
+        except requests.RequestException as e:
+            last_err = e
+            continue
+        for it in raw:
+            if not isinstance(it, dict):
+                continue
+            item = _cio_result_item(it)
+            if not item:
+                continue
+            pid = item["id"]
+            if pid in merged:
+                continue
+            merged[pid] = item
+            order.append(pid)
+    items = rank_carrefour_results(query, [merged[pid] for pid in order])[:cap]
+    out: dict[str, Any] = {"retailer": "carrefour", "query": query, "results": items}
+    if not items and last_err is not None:
+        out["error"] = str(last_err)
+    return out
 
 
 def search_grandiose(query: str, limit: int = 8) -> dict[str, Any]:
@@ -305,15 +419,13 @@ def _score_name(query: str, name: str) -> float:
 
 
 def best_match(query: str, results: list[dict[str, Any]]) -> dict[str, Any] | None:
-    ranked = []
-    for it in results:
-        if not isinstance(it, dict):
-            continue
-        ranked.append((_score_name(query, str(it.get("name") or "")), it))
-    ranked.sort(key=lambda x: x[0], reverse=True)
-    if not ranked or ranked[0][0] <= 0:
+    ranked = [it for it in results if isinstance(it, dict)]
+    if not ranked:
+        return None
+    ranked.sort(key=lambda it: _carrefour_hit_score(query, it), reverse=True)
+    if _carrefour_hit_score(query, ranked[0]) <= 0:
         return results[0] if results else None
-    return ranked[0][1]
+    return ranked[0]
 
 
 def compare_items(items: list[dict[str, Any]], targets: list[str] | None = None, limit: int = 3) -> dict[str, Any]:

@@ -320,7 +320,7 @@ class _BasketSession:
         return _FakeResp(200, {"data": {"items": []}})
 
 
-def test_add_item_posts_basket_entries(monkeypatch):
+def test_add_item_posts_additem_not_entries(monkeypatch):
     from bring_fast.stores import carrefour as api
 
     fake = _BasketSession()
@@ -331,7 +331,7 @@ def test_add_item_posts_basket_entries(monkeypatch):
     assert out["data"]["ok"] is True
     posts = [c for c in fake.calls if c[0] == "POST"]
     assert posts
-    assert posts[0][1].endswith("/v1/basket/mafuae/en/entries")
+    assert posts[0][1].endswith("/v1/basket/mafuae/en/addItem")
     assert posts[0][2]["productId"] == "11530"
     assert posts[0][2]["quantity"] == 2
     assert posts[0][2]["shopId"] == "0000"
@@ -339,20 +339,75 @@ def test_add_item_posts_basket_entries(monkeypatch):
     assert (posts[0][3] or {}).get("intent") == "SLOTTED"
     assert "User-Agent" not in (posts[0][3] or {})
     assert "okhttp" not in str(posts[0][3] or {})
+    assert not any(c[0] == "POST" and str(c[1]).endswith("/entries") for c in fake.calls)
     home = [c for c in fake.calls if c[0] == "GET" and "liteCart" not in c[1]]
     assert home
     assert home[0][2] is None or "User-Agent" not in (home[0][2] or {})
 
 
-def test_add_item_falls_back_to_additem_when_entries_is_missing(monkeypatch):
+def test_add_item_1592968_qty_2_posts_additem(monkeypatch):
+    """Oasis Blu 1L pack of 6 — two packs, append-only, POS 073."""
+    from bring_fast.stores import carrefour as api
+
+    fake = _BasketSession()
+    monkeypatch.setattr(api, "session", lambda: fake)
+    _patch_loc(monkeypatch, api)
+    monkeypatch.setattr(api, "_product_card", _in_stock_card)
+    out = api.add_item(
+        token="t",
+        user_id="u",
+        product_id="1592968",
+        qty=2,
+        name="Oasis Blu Sparkling Water, 1L Pack of 6",
+    )
+    assert out["data"]["ok"] is True
+    posts = [c for c in fake.calls if c[0] == "POST"]
+    assert posts[0][1].endswith("/v1/basket/mafuae/en/addItem")
+    assert posts[0][2]["productId"] == "1592968"
+    assert posts[0][2]["quantity"] == 2
+    assert posts[0][2]["productName"] == "Oasis Blu Sparkling Water, 1L Pack of 6"
+    assert not any(c[0] == "POST" and str(c[1]).endswith("/entries") for c in fake.calls)
+
+
+def test_add_item_500_does_not_post_entries_or_v8(monkeypatch):
+    from bring_fast.stores import carrefour as api
+
+    class _Five(_BasketSession):
+        def post(self, url, **kwargs):
+            self.calls.append(("POST", url, kwargs.get("json"), kwargs.get("headers")))
+            if "/v1/basket/" in url and url.endswith("/addItem"):
+                return _FakeResp(500, {"error": {"message": "Internal Server Error"}})
+            if url.endswith("/entries"):
+                return _FakeResp(200, {"data": {"wiped": True}})
+            if "/v8/carts/" in url:
+                return _FakeResp(200, {"data": {"ok": True}})
+            return _FakeResp(404, {"meta": {"message": "no"}})
+
+    fake = _Five()
+    monkeypatch.setattr(api, "session", lambda: fake)
+    _patch_loc(monkeypatch, api)
+    monkeypatch.setattr(api, "_product_card", _in_stock_card)
+    with pytest.raises(StoreAPIError) as raised:
+        api.add_item(token="t", user_id="u", product_id="1592968", qty=2, name="Oasis Blu")
+    assert raised.value.status == 500
+    assert "Internal Server Error" in str(raised.value)
+    posts = [c[1] for c in fake.calls if c[0] == "POST"]
+    assert any(u.endswith("/v1/basket/mafuae/en/addItem") for u in posts)
+    assert not any(u.endswith("/entries") for u in posts)
+    assert not any("/v8/carts/" in u for u in posts)
+
+
+def test_add_item_falls_back_to_v8_when_additem_is_missing(monkeypatch):
     from bring_fast.stores import carrefour as api
 
     class _Fallback(_BasketSession):
         def post(self, url, **kwargs):
             self.calls.append(("POST", url, kwargs.get("json"), kwargs.get("headers")))
             if url.endswith("/entries"):
+                raise AssertionError("add must not POST /entries")
+            if "/v1/basket/" in url and url.endswith("/addItem"):
                 return _FakeResp(404, {"meta": {"message": "no proxy"}})
-            if url.endswith("/addItem"):
+            if "/v8/carts/" in url and url.endswith("/addItem"):
                 return _FakeResp(200, {"data": {"ok": True}})
             return _FakeResp(404, {"meta": {"message": "no"}})
 
@@ -362,9 +417,10 @@ def test_add_item_falls_back_to_additem_when_entries_is_missing(monkeypatch):
     monkeypatch.setattr(api, "_product_card", _in_stock_card)
     out = api.add_item(token="t", user_id="u", product_id="11530", qty=1, name="Milk")
     assert out["data"]["ok"] is True
-    paths = [c[1].rsplit("/", 1)[-1] for c in fake.calls if c[0] == "POST"]
-    assert "entries" in paths
-    assert "addItem" in paths
+    posts = [c[1] for c in fake.calls if c[0] == "POST"]
+    assert any("/v1/basket/" in u and u.endswith("/addItem") for u in posts)
+    assert any("/v8/carts/" in u and u.endswith("/addItem") for u in posts)
+    assert not any(u.endswith("/entries") for u in posts)
 
 
 def test_add_item_maps_slotted_intent_to_needs_delivery_slot(monkeypatch):
@@ -429,6 +485,7 @@ def test_product_card_uses_fulfilment_food_pos(monkeypatch):
         }
     }
 
+    monkeypatch.setattr(api, "_cio_browse_ids", lambda ids: payload["response"]["results"])
     monkeypatch.setattr(api, "_cio_search", lambda q: payload["response"]["results"])
     at_073 = api._product_card("1102885", "Jenan Large White Eggs 15 PCS", fulfilment=LOC)
     assert at_073["in_stock"] is True
@@ -444,6 +501,11 @@ def test_product_card_uses_fulfilment_food_pos(monkeypatch):
 def test_product_card_ignores_wrong_constructor_id(monkeypatch):
     from bring_fast.stores import carrefour as api
 
+    monkeypatch.setattr(
+        api,
+        "_cio_browse_ids",
+        lambda ids: [{"value": "Wallpaper", "data": {"id": "999", "stock": [{"pos": "073", "isAvailable": True, "stock_status": "IN_STOCK"}]}}],
+    )
     monkeypatch.setattr(
         api,
         "_cio_search",
@@ -526,15 +588,17 @@ def test_official_cart_add_ok_when_sku_in_cart_despite_500(monkeypatch):
         "lite_cart",
         lambda **k: {"data": {"items": [{"id": "743861", "quantity": 1}]}},
     )
+    catalog = {
+        "743861": {
+            "value": "Coca-Cola Zero 330ml Can",
+            "data": {"id": "743861", "price": 1.99, "ean": "5449000131805"},
+        }
+    }
+    monkeypatch.setattr(api, "_cio_browse_ids", lambda ids: [catalog[i] for i in ids if i in catalog])
     monkeypatch.setattr(
         api,
         "_cio_search",
-        lambda q: [
-            {
-                "value": "Coca-Cola Zero 330ml Can",
-                "data": {"id": "743861", "price": 1.99, "ean": "5449000131805"},
-            }
-        ],
+        lambda q: [catalog[q]] if q in catalog else [],
     )
     out = api.official_cart(
         email="a@b.c", password="x", action="add", items=[{"id": "743861", "qty": 1}]
@@ -550,15 +614,17 @@ def test_official_cart_add_ok_when_sku_in_cart_despite_500(monkeypatch):
 def test_enrich_items_fills_name_and_price_from_catalog(monkeypatch):
     from bring_fast.stores import carrefour as api
 
+    catalog = {
+        "743861": {
+            "value": "Coca-Cola Zero, 330ml, Can",
+            "data": {"id": "743861", "price": 1.99, "ean": "5449000131805"},
+        }
+    }
+    monkeypatch.setattr(api, "_cio_browse_ids", lambda ids: [catalog[i] for i in ids if i in catalog])
     monkeypatch.setattr(
         api,
         "_cio_search",
-        lambda q: [
-            {
-                "value": "Coca-Cola Zero, 330ml, Can",
-                "data": {"id": "743861", "price": 1.99, "ean": "5449000131805"},
-            }
-        ],
+        lambda q: [catalog[q]] if q in catalog else [],
     )
     items = api.enrich_items(
         [{"id": "743861", "name": "", "qty": 1, "price": None, "currency": "AED", "url": ""}]
@@ -571,6 +637,9 @@ def test_enrich_items_fills_name_and_price_from_catalog(monkeypatch):
 def test_enrich_items_skips_catalog_when_payload_has_name_and_price(monkeypatch):
     from bring_fast.stores import carrefour as api
 
+    monkeypatch.setattr(
+        api, "_cio_browse_ids", lambda ids: (_ for _ in ()).throw(AssertionError("catalog must not run"))
+    )
     monkeypatch.setattr(
         api, "_cio_search", lambda q: (_ for _ in ()).throw(AssertionError("catalog must not run"))
     )
@@ -607,6 +676,7 @@ def test_official_cart_list_enriches_bare_ids(monkeypatch):
             "data": {"id": "743861", "price": 1.99},
         },
     }
+    monkeypatch.setattr(api, "_cio_browse_ids", lambda ids: [catalog[i] for i in ids if i in catalog])
     monkeypatch.setattr(api, "_cio_search", lambda q: [catalog[q]] if q in catalog else [])
     out = api.official_cart(
         email="a@b.c", password="x", action="list", items=[], session_token="t", session_user="u"
@@ -811,3 +881,109 @@ def test_official_cart_list_respects_short_timeout(monkeypatch):
         email="a@b.c", password="x", action="list", items=[], session_token="t", session_user="u", timeout=4
     )
     assert seen == [4]
+
+
+def test_official_cart_add_1592968_qty_2_lands(monkeypatch):
+    from bring_fast.stores import carrefour as api
+
+    cart = {"data": {"items": []}}
+    _no_network(monkeypatch, api)
+    _patch_loc(monkeypatch, api)
+    monkeypatch.setattr(
+        api, "login", lambda e, p, **k: {"ok": True, "token": "t", "user_id": "u", "error": None}
+    )
+    monkeypatch.setattr(api, "lite_cart", lambda **k: cart)
+    catalog = {
+        "1592968": {
+            "value": "Oasis Blu Sparkling Water, 1L Pack of 6",
+            "data": {"id": "1592968", "price": 26.99},
+        }
+    }
+    monkeypatch.setattr(api, "_cio_browse_ids", lambda ids: [catalog[i] for i in ids if i in catalog])
+    monkeypatch.setattr(api, "_cio_search", lambda q: [catalog[q]] if q in catalog else [])
+
+    def _add(**kw):
+        assert kw["product_id"] == "1592968"
+        assert kw["qty"] == 2
+        cart["data"]["items"] = [
+            {
+                "id": "1592968",
+                "name": "Oasis Blu Sparkling Water, 1L Pack of 6",
+                "quantity": 2,
+                "price": 26.99,
+            }
+        ]
+        return {"ok": True}
+
+    monkeypatch.setattr(api, "add_item", _add)
+    out = api.official_cart(
+        email="a@b.c",
+        password="x",
+        action="add",
+        items=[{"id": "1592968", "name": "Oasis Blu Sparkling Water, 1L Pack of 6", "qty": 2}],
+    )
+    assert out["ok"] is True
+    assert out["error"] is None
+    assert out["items"][0]["id"] == "1592968"
+    assert out["items"][0]["qty"] == 2
+    assert out["items"][0]["price"] == 26.99
+    assert "Oasis Blu" in out["items"][0]["name"]
+
+
+def test_official_cart_restores_previous_lines_when_add_500_empties(monkeypatch):
+    """POST /entries-style wipe: 4→0 after a failed Blu add must put the old lines back."""
+    from bring_fast.stores import carrefour as api
+    from bring_fast.stores.http import StoreAPIError
+
+    previous = [
+        {"id": "376161", "name": "Coca-Cola Original 330ml x6", "quantity": 1, "price": 14.99},
+        {"id": "743861", "name": "Coca-Cola Zero 330ml Can", "quantity": 1, "price": 1.99},
+    ]
+    rows = list(previous)
+    _no_network(monkeypatch, api)
+    _patch_loc(monkeypatch, api)
+    monkeypatch.setattr(
+        api, "login", lambda e, p, **k: {"ok": True, "token": "t", "user_id": "u", "error": None}
+    )
+    monkeypatch.setattr(api, "lite_cart", lambda **k: {"data": {"items": list(rows)}})
+    monkeypatch.setattr(api, "_cio_browse_ids", lambda ids: [])
+    monkeypatch.setattr(api, "_cio_search", lambda q: [])
+
+    def _add(**kw):
+        pid = str(kw["product_id"])
+        if pid == "1592968":
+            rows.clear()
+            raise StoreAPIError("Internal Server Error", status=500, maf_error="Internal Server Error")
+        rows.append(
+            {
+                "id": pid,
+                "name": kw.get("name") or pid,
+                "quantity": int(kw.get("qty") or 1),
+                "price": 1.99 if pid == "743861" else 14.99,
+            }
+        )
+        return {"ok": True}
+
+    monkeypatch.setattr(api, "add_item", _add)
+    out = api.official_cart(
+        email="a@b.c",
+        password="x",
+        action="add",
+        items=[{"id": "1592968", "name": "Oasis Blu Sparkling Water, 1L Pack of 6", "qty": 2}],
+    )
+    assert out["ok"] is False
+    assert out["maf_error"] == "Internal Server Error"
+    assert out.get("error_code") == "cart_restored"
+    ids = {it["id"] for it in out["items"]}
+    assert ids == {"376161", "743861"}
+    assert "1592968" not in ids
+    assert out["official_count"] == 2
+
+
+def test_cart_was_emptied():
+    from bring_fast.stores.carrefour import cart_was_emptied
+
+    before = [{"id": "376161"}, {"id": "743861"}]
+    assert cart_was_emptied(before, []) is True
+    assert cart_was_emptied(before, [{"id": "1592968"}]) is False
+    assert cart_was_emptied([], []) is False
