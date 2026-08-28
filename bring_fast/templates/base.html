@@ -163,7 +163,11 @@
       margin:0; padding:8px 14px;
       border-bottom:1px solid var(--line);
     }
-    nav.is-compact .brand span, nav.is-compact .user { display:none; }
+    /* Compact-on-scroll shrinks the mark and drops the tagline. The address
+       can go; Sign out and the theme chip stay — hiding .user would leave no
+       way out of the account once the page has moved, including on a phone
+       Buys scroll where the spend pin also sticks under this header. */
+    nav.is-compact .brand span, nav.is-compact .user .who { display:none; }
     nav.is-compact .mark { width:32px; height:32px; font-size:13px; }
     .brand { display:flex; align-items:center; gap:12px; color:var(--ink); text-decoration:none; }
     .mark {
@@ -273,7 +277,7 @@
     .danger { color:var(--ink); border-color:var(--line); text-decoration:underline; text-underline-offset:2px; }
     .user { color:var(--muted); font-size:13px; }
     .user a { color:var(--ink); }
-    .nav-right { display:flex; align-items:center; gap:12px; flex-wrap:wrap; justify-content:flex-end; }
+    .nav-right { display:flex; align-items:center; gap:12px; flex-wrap:wrap; justify-content:flex-end; flex-shrink:0; }
     /* The theme chip is inverted against the page, so Light is a dark tile
        and Dark is a light one. A ghost outline disappears into the header. */
     .nav-right .theme-toggle {
@@ -581,10 +585,12 @@
       .app-head .filters { margin:0; padding:8px 0; }
       nav.topnav .tabs { display:none !important; }
       /* The dock carries the tabs on a phone, but signing out has to stay
-         reachable: the address is the only thing that goes. */
-      nav.topnav .user { font-size:11px; }
+         reachable: the address is the only thing that goes. Compact-on-scroll
+         must not hide this block either — that is a normal finger scroll, not
+         the installed-app pinch that parks the sticky header off-screen. */
+      nav.topnav .user { font-size:11px; flex-shrink:0; }
       nav.topnav .user .who { display:none; }
-      nav.topnav .nav-right { gap:10px; }
+      nav.topnav .nav-right { gap:10px; flex-shrink:0; }
       nav.topnav .brand span { display:none; }
       nav.topnav .brand b { font-size:16px; }
       nav.topnav .mark { width:34px; height:34px; font-size:12px; }
@@ -891,6 +897,8 @@
       var head=document.querySelector(".app-head");
       if(!nav) return;
       function sync(){
+        /* Shrink the mark after a short scroll. Do not hide Sign out: that
+           stays in .user, and compact only drops the address (.who). */
         nav.classList.toggle("is-compact", window.scrollY>24);
         var box=head||nav;
         document.documentElement.style.setProperty("--sticky-top", box.offsetHeight+"px");
