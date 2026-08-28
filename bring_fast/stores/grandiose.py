@@ -326,11 +326,15 @@ def parse_items(cart: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(prices, dict):
             price = (prices.get("price") or {}).get("value") or (prices.get("row_total") or {}).get("value")
         uid = str(i.get("uid") or "")
-        legacy = str(i.get("id") or i.get("item_id") or "")
+        # Magento CartItemInterface.id is the numeric quote item id (e.g. 12115690).
+        # That is not a UID and not the EAN (`id` / sku in our payload).
+        magento_id = str(i.get("id") or i.get("item_id") or "").strip()
+        if magento_id and not magento_id.isdigit():
+            magento_id = ""
         out.append(
             {
                 "id": sku,
-                "item_id": legacy or uid,
+                "item_id": magento_id,
                 "uid": uid,
                 "name": product.get("name") or i.get("name") or sku,
                 "qty": int(i.get("quantity") or i.get("qty") or 1),

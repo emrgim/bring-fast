@@ -39,7 +39,7 @@ Carrefour UAE is **not search-only**. Official cart: `carrefour_cart` (also `bf_
 | Price of X now | `bf_search` or `{store}_search` |
 | Compare cart / items | `bf_compare` |
 | Official **current** cart | `{store}_cart` on shop stores (grandiose, unioncoop, carrefour). If `carrefour_cart` is missing, `bf_cart retailer=carrefour` |
-| Magento remove | `{store}_cart action=remove` with `name` / `product_id` / `item_id` against the live cart. "togli la Coca-Cola" must hit the Coca-Cola line. Never success if the line is still there. Do not invent SKUs. |
+| Magento remove | `{store}_cart action=remove` with `name` / `product_id` / `item_id` against the live cart. `item_id` is Magento's numeric quote item id (e.g. 12115690), not a UID; `id` is the EAN. "take out the Coca-Cola" / "togli la Coca-Cola" / "Coca-Cola Zero" must hit that line even if action was list. Never success if the line is still there. Do not invent SKUs. |
 | Magento checkout | `{store}_checkout` on Grandiose / Union Coop when enabled. Prepares official Magento checkout only. Payment stays on the store site. |
 | Add to Carrefour cart | `carrefour_cart` or `bf_cart retailer=carrefour` `action=add`, or `carrefour_search` `query=<product_id>` / `action=add` — not search-only |
 | Carrefour checkout | No MCP tool. Link https://www.carrefouruae.com/mafuae/en/cart |

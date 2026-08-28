@@ -902,6 +902,56 @@ def test_grandiose_remove_by_name_hits_live_cart_not_catalog(bf, monkeypatch):
     assert seen[-1]["items"][0]["name"] == "Coca-Cola"
 
 
+def test_grandiose_take_out_without_action_remove_still_removes(bf, monkeypatch):
+    """Food keeper listed the cart; the chat said take out Coca-Cola and never sent action=remove."""
+    user = _user_with_grandiose(bf)
+    seen = []
+
+    def _live(**kw):
+        seen.append(kw)
+        items = [
+            {"id": "6291021213119", "name": "Blu Sparkling Water 1L", "qty": 24, "item_id": "12118284"},
+            {"id": "5000112668209", "name": "Coca-Cola Zero Calories", "qty": 2, "item_id": "12115690"},
+        ]
+        if kw["action"] == "remove":
+            items = [i for i in items if i["id"] != "5000112668209"]
+        return {
+            "ok": True,
+            "official_count": len(items),
+            "items": items,
+            "logged_in": True,
+            "token": "t",
+            "user_id": "u",
+        }
+
+    monkeypatch.setattr(bf.checkout, "official_cart", _live)
+    monkeypatch.setattr(
+        bf.catalog,
+        "search",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("Magento remove matches the live cart")),
+    )
+    listed = json.loads(bf._call_tool(user, "grandiose_cart", {"action": "list"}))
+    assert listed["success"] is True
+    assert "5000112668209" in [i["id"] for i in listed["items"]]
+
+    out = json.loads(
+        bf._call_tool(user, "grandiose_cart", {"action": "list", "name": "take out the Coca-Cola"})
+    )
+    assert out["success"] is True
+    assert [i["id"] for i in out["items"]] == ["6291021213119"]
+    assert seen[-1]["action"] == "remove"
+    assert seen[-1]["items"][0]["name"] == "Coca-Cola"
+
+    search_q = json.loads(bf._call_tool(user, "grandiose_search", {"query": "take out the Coca-Cola"}))
+    assert search_q["success"] is True
+    assert seen[-1]["action"] == "remove"
+
+    zero = json.loads(bf._call_tool(user, "grandiose_cart", {"action": "remove", "name": "Coca-Cola Zero"}))
+    assert zero["success"] is True
+    assert seen[-1]["action"] == "remove"
+    assert seen[-1]["items"][0]["name"] == "Coca-Cola Zero"
+
+
 def test_grandiose_remove_missing_sku_is_not_success(bf, monkeypatch):
     user = _user_with_grandiose(bf)
     still = [{"id": "5000112668209", "name": "Coca-Cola Zero Calories", "qty": 2, "item_id": "12115690"}]

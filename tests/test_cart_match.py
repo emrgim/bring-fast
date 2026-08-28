@@ -16,6 +16,18 @@ def test_coca_cola_name_hits_zero_calories_line():
     assert hit["item_id"] == "12115690"
 
 
+def test_coca_cola_zero_hits_the_same_line():
+    hit = match_cart_line(LIVE, name="Coca-Cola Zero")
+    assert hit["id"] == "5000112668209"
+    assert hit["item_id"] == "12115690"
+
+
+def test_take_out_the_coca_cola_hits_the_coke_line():
+    hit = match_cart_line(LIVE, name="take out the Coca-Cola")
+    assert hit["item_id"] == "12115690"
+    assert hit["id"] == "5000112668209"
+
+
 def test_togli_la_coca_cola_hits_the_coke_line():
     hit = match_cart_line(LIVE, name="togli la Coca-Cola")
     assert hit["id"] == "5000112668209"
@@ -35,6 +47,13 @@ def test_exact_sku_hits_coke():
 def test_item_id_hits_coke():
     hit = match_cart_line(LIVE, item_id="12115690")
     assert hit["id"] == "5000112668209"
+
+
+def test_numeric_item_id_is_not_the_ean():
+    """item_id is Magento's quote item id; the EAN lives on id/sku."""
+    assert match_cart_line(LIVE, item_id="5000112668209") is None
+    hit = match_cart_line(LIVE, sku="5000112668209")
+    assert hit["item_id"] == "12115690"
 
 
 def test_coca_cola_does_not_hit_blu_or_chips():

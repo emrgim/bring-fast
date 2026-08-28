@@ -19,6 +19,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import __version__, catalog, checkout, compare, db, forecast, mcp_skill, purchases, update
+from .stores.cart_match import peel_remove_name
 
 HOST = os.environ.get("BRINGFAST_HOST", "127.0.0.1")
 PORT = int(os.environ.get("BRINGFAST_PORT", "8877"))
@@ -1715,27 +1716,8 @@ def _qty_from_search_args(args: dict[str, Any], *, use_limit: bool) -> int:
     return 1
 
 
-_REMOVE_QUERY_PREFIXES = (
-    "remove from the cart ",
-    "remove from cart ",
-    "togli dal carrello ",
-    "togli la ",
-    "togli il ",
-    "togli l'",
-    "togli ",
-    "remove ",
-    "take out ",
-)
-
-
 def _strip_remove_query(query: str) -> str | None:
-    q = query.strip()
-    low = q.lower()
-    for prefix in _REMOVE_QUERY_PREFIXES:
-        if low.startswith(prefix):
-            rest = q[len(prefix) :].strip()
-            return rest or None
-    return None
+    return peel_remove_name(query)
 
 
 def _strip_add_query(query: str) -> str | None:
@@ -1761,6 +1743,11 @@ def _search_args_as_cart(args: dict[str, Any]) -> dict[str, Any] | None:
     action = str(args.get("action") or "").strip().lower()
     if action in _CART_ACTION_ALIASES:
         action = _CART_ACTION_ALIASES[action]
+    query = str(args.get("query") or args.get("q") or args.get("name") or "").strip()
+    # Take-out phrasing wins even when a stale client sent action=list.
+    rest = _strip_remove_query(query)
+    if rest:
+        return {"action": "remove", "name": rest, "item_id": str(args.get("item_id") or "")}
     if action in ("list", "add", "set", "remove", "clear"):
         out = dict(args)
         out["action"] = action
@@ -1843,7 +1830,19 @@ def _decorate_shop_search(sid: str, block: dict[str, Any]) -> dict[str, Any]:
     return block
 
 
+def _promote_takeout_to_remove(args: dict[str, Any]) -> dict[str, Any]:
+    """Food keeper often lists the cart (action=list) while the chat says take it out."""
+    out = dict(args)
+    blob = str(out.get("query") or out.get("q") or out.get("name") or "").strip()
+    rest = peel_remove_name(blob)
+    if rest:
+        out["action"] = "remove"
+        out["name"] = rest
+    return out
+
+
 def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> str:
+    args = _promote_takeout_to_remove(args)
     action = (args.get("action") or "list").lower()
     action = _CART_ACTION_ALIASES.get(action, action)
     if action not in ("list", "add", "set", "remove", "clear"):

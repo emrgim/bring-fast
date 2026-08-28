@@ -137,6 +137,8 @@ def test_official_cart_list_after_login(monkeypatch):
     assert out["driver"] == "magento"
     assert out["items"][1]["name"] == "Coca-Cola Zero Calories"
     assert out["items"][1]["id"] == COKE_SKU
+    assert out["items"][1]["item_id"] == "12115690"
+    assert out["items"][1]["uid"] == "MTIxMTU2OTA="
     assert out["official_count"] == 3
 
 
@@ -185,6 +187,16 @@ def test_remove_coca_cola_hits_zero_calories(monkeypatch):
     assert out["ok"] is True
     assert COKE_SKU not in [i["id"] for i in out["items"]]
     assert out["official_count"] == 2
+
+
+def test_remove_coca_cola_zero_hits_numeric_item_id(monkeypatch):
+    from bring_fast.stores import grandiose as api
+
+    state = _patch_session(monkeypatch, api, _raw_cart())
+    out = official_cart(email="a@b.c", password="x", action="remove", items=[{"name": "Coca-Cola Zero"}])
+    assert out["ok"] is True
+    assert COKE_SKU not in [i["id"] for i in out["items"]]
+    assert any(c[1].get("itemUid") == "MTIxMTU2OTA=" or c[1].get("itemId") == 12115690 for c in state["calls"])
 
 
 def test_remove_by_sku(monkeypatch):
