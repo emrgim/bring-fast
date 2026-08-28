@@ -51,8 +51,12 @@ def _new_impersonate(name: str):
     return cf.Session(impersonate=name, http_version=CurlHttpVersion.V1_1)
 
 
-def chrome_session(existing=None):
-    """One Chrome client. Replay browser cookies, then GET homepage."""
+def chrome_session(existing=None, *, warm: bool = True):
+    """One Chrome client. Replay browser cookies; GET homepage only when warm=True.
+
+    Cart *list* must not pay for a homepage round-trip — Grok times out. Add/set still
+    warm so Akamai cookies exist before posInfo + SLOTTED writes.
+    """
     if existing is not None:
         apply_browser_cookies(existing)
         return existing
@@ -67,6 +71,8 @@ def chrome_session(existing=None):
 
     s = session()
     apply_browser_cookies(s)
+    if not warm:
+        return s
     if warmed(s):
         return s
     for name in CHROME_IMPERSONATE:
@@ -484,10 +490,17 @@ def _auth(email: str, password: str, *, client=None) -> dict[str, Any]:
     return login(email, password, client=client)
 
 
-def lite_cart(*, token: str, user_id: str, fulfilment: dict[str, Any] | None = None, client=None) -> dict[str, Any]:
+def lite_cart(
+    *,
+    token: str,
+    user_id: str,
+    fulfilment: dict[str, Any] | None = None,
+    client=None,
+    timeout: float = 20,
+) -> dict[str, Any]:
     if not token or not user_id:
         raise StoreAPIError("liteCart needs auth token and userId.")
-    s = chrome_session(client)
+    s = chrome_session(client, warm=False)
     loc = fulfilment if fulfilment is not None else resolve_fulfilment(token=token, user_id=user_id, client=s)
     headers = android_headers(token=token, user_id=user_id, fulfilment=loc)
     last_err: StoreAPIError | None = None
@@ -503,7 +516,7 @@ def lite_cart(*, token: str, user_id: str, fulfilment: dict[str, Any] | None = N
                     "longitude": loc.get("lng") if loc.get("lng") is not None else LNG,
                 },
                 headers=headers,
-                timeout=20,
+                timeout=timeout,
             )
             body = json_or_error(resp, "liteCart")
         except StoreAPIError as e:
@@ -857,6 +870,11 @@ def _loc_fields(loc: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_CART_READ = frozenset({"list", "get", "read", "show", "view", "items", "contents"})
+_CART_CLEAR = frozenset({"clear", "create", "empty", "new"})
+_CART_SLOT = frozenset({"add", "set"})
+
+
 def official_cart(
     *,
     email: str,
@@ -866,9 +884,14 @@ def official_cart(
     session_token: str = "",
     session_user: str = "",
     client=None,
+    timeout: float = 25,
 ) -> dict[str, Any]:
-    """Official account cart. One Chrome session for homepage + liteCart + at most one login POST."""
-    s = chrome_session(client)
+    """Official account cart. List is token + liteCart only; add/set also bind posInfo."""
+    action = (action or "list").strip().lower()
+    if action in _CART_READ:
+        action = "list"
+    needs_slot = action in _CART_SLOT
+    s = chrome_session(client, warm=needs_slot)
     token, user_id = session_token, session_user
     if not (token and user_id):
         jar = token_from_browser_cookies()
@@ -892,12 +915,16 @@ def official_cart(
             }
         token, user_id = auth["token"], auth["user_id"]
     loc: dict[str, Any] = {}
+    read_timeout = max(6.0, min(float(timeout or 25), 12.0)) if not needs_slot else 20.0
     try:
-        loc = resolve_fulfilment(token=token, user_id=user_id, client=s)
+        if needs_slot:
+            loc = resolve_fulfilment(token=token, user_id=user_id, client=s)
         item_errors: list[dict[str, Any]] = []
         added = 0
-        if action in ("clear", "create", "empty", "new"):
-            current = parse_items(lite_cart(token=token, user_id=user_id, fulfilment=loc, client=s))
+        if action in _CART_CLEAR:
+            current = parse_items(
+                lite_cart(token=token, user_id=user_id, fulfilment=loc, client=s, timeout=read_timeout)
+            )
             ids = [str(it.get("id") or "") for it in current if it.get("id")]
             if ids:
                 remove_items(token=token, user_id=user_id, product_ids=ids, fulfilment=loc, client=s)
@@ -905,7 +932,7 @@ def official_cart(
             ids = [str(it.get("id") or "") for it in items if it.get("id")]
             if ids:
                 remove_items(token=token, user_id=user_id, product_ids=ids, fulfilment=loc, client=s)
-        elif action in ("add", "set"):
+        elif needs_slot:
             for it in items:
                 try:
                     add_item(
@@ -930,7 +957,7 @@ def official_cart(
                             "maf_error": e.maf_error,
                         }
                     )
-        body = lite_cart(token=token, user_id=user_id, fulfilment=loc, client=s)
+        body = lite_cart(token=token, user_id=user_id, fulfilment=loc, client=s, timeout=read_timeout)
         live = parse_items(body)
         ok = True
         error = None
@@ -967,6 +994,7 @@ def official_cart(
                 session_token="",
                 session_user="",
                 client=s,
+                timeout=timeout,
             )
         err = AKAMAI_UNREAD if _is_akamai(e) else str(e)
         return {

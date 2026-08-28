@@ -1244,13 +1244,16 @@ def _store_tools() -> list[dict[str, Any]]:
         {
             "name": "bf_cart",
             "description": (
-                "Official cart. retailer must be an enabled shop store "
-                "(grandiose, unioncoop, or carrefour). "
-                "Waitrose and Spinneys are search-only. "
-                "action=list|add|set|remove|clear. add needs product_id or name, plus qty. "
+                "Official supermarket account cart (not a local Bring Fast cart). "
+                "retailer=grandiose|unioncoop|carrefour. Waitrose and Spinneys are search-only. "
+                "action=list|add|set|remove|clear. "
+                "list aliases: get, read, show, view. add needs product_id or name, plus qty. "
+                "Use this when carrefour_cart / grandiose_cart is missing from the client tool list: "
+                "bf_cart retailer=carrefour action=list reads the official Carrefour UAE cart. "
                 "Carrefour add binds the MAF delivery store from the account location; "
                 "error_code=needs_delivery_slot means list the cart and retry. "
-                "clear (also create/empty/new) empties the official cart."
+                "clear (also create/empty/new) empties the official cart. "
+                "Checkout stays Magento-only (Grandiose, Union Coop)."
             ),
             "inputSchema": {
                 "type": "object",
@@ -1378,9 +1381,10 @@ def _store_tools() -> list[dict[str, Any]]:
             extra = " Search only — not used for orders."
             if r.get("shop"):
                 extra = (
-                    " Official cart available if the store is enabled. Checkout stays on the website."
+                    f" Official cart: {sid}_cart / {sid}_status (also bf_cart retailer={sid}). "
+                    "Checkout stays on the website."
                     if not db.store_can_checkout(sid)
-                    else " Magento: cart/checkout available if the store is enabled."
+                    else f" Magento cart: {sid}_cart / {sid}_status (also bf_cart retailer={sid})."
                 )
             tools.append(
                 {
@@ -1393,15 +1397,21 @@ def _store_tools() -> list[dict[str, Any]]:
                     },
                 }
             )
-        if not (r.get("shop") and db.is_store_enabled(sid)):
+        # Search stays listed even when the dashboard toggle is off. Cart/status
+        # are listed whenever the store is a shop so MCP clients that cache
+        # tools/list still see carrefour_cart — call-time checks enabled/shop.
+        # Checkout stays hidden until the store is enabled (Magento only).
+        if not r.get("shop"):
             continue
         cart_desc = (
-            f"{name} official Magento cart. action=list|add|set|remove|clear. "
+            f"{name} official Magento cart. action=list|add|set|remove|clear "
+            "(list aliases: get, read, show, view). "
             "Orders only on Grandiose and Union Coop."
             if db.store_can_checkout(sid)
             else (
-                f"{name} official account cart — this is the shopping list Grok can fill. "
-                "action=list|add|set|remove|clear. "
+                f"{name} official account cart — the supermarket shopping list, not a local copy. "
+                "MCP name: {sid}_cart (also bf_cart retailer={sid} if this tool is missing from the client). "
+                "action=list|add|set|remove|clear. list aliases: get, read, show, view. "
                 "add needs product_id or name, plus qty. "
                 "Add binds the delivery store from the Carrefour account location (posInfo / SLOTTED). "
                 "If add returns error_code=needs_delivery_slot, list the cart to refresh the area, then retry. "
@@ -1426,7 +1436,7 @@ def _store_tools() -> list[dict[str, Any]]:
                 },
             }
         )
-        if db.store_can_checkout(sid):
+        if db.store_can_checkout(sid) and db.is_store_enabled(sid):
             tools.append(
                 {
                     "name": f"{sid}_checkout",
@@ -1440,7 +1450,10 @@ def _store_tools() -> list[dict[str, Any]]:
         tools.append(
             {
                 "name": f"{sid}_status",
-                "description": f"Saved {name} login and live official cart for THIS user.",
+                "description": (
+                    f"Saved {name} login and live official cart for THIS user. "
+                    f"MCP name: {sid}_status (also {sid}_cart action=list)."
+                ),
                 "inputSchema": {"type": "object", "properties": {}},
             }
         )
@@ -1498,8 +1511,12 @@ def _store_snapshot(user: dict[str, Any], retailer: str) -> dict[str, Any]:
             ([f"{retailer}_search"] if s.get("search") else [])
             + (
                 [f"{retailer}_cart", f"{retailer}_status"]
-                + ([f"{retailer}_checkout"] if db.store_can_checkout(retailer) else [])
-                if s.get("shop") and s.get("enabled")
+                + (
+                    [f"{retailer}_checkout"]
+                    if db.store_can_checkout(retailer) and s.get("enabled")
+                    else []
+                )
+                if s.get("shop")
                 else []
             )
         ),
@@ -1577,12 +1594,33 @@ def _resolve_cart_line(retailer: str, args: dict[str, Any]) -> tuple[str, str, l
     return str(hit.get("id") or ""), str(hit.get("name") or name), others, None
 
 
+_CART_ACTION_ALIASES = {
+    "create": "clear",
+    "empty": "clear",
+    "new": "clear",
+    "get": "list",
+    "read": "list",
+    "show": "list",
+    "view": "list",
+    "items": "list",
+    "contents": "list",
+}
+
+
 def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> str:
     action = (args.get("action") or "list").lower()
-    if action in ("create", "empty", "new"):
-        action = "clear"
+    action = _CART_ACTION_ALIASES.get(action, action)
     if action not in ("list", "add", "set", "remove", "clear"):
-        return json.dumps({"success": False, "error": f"unknown action {action}", "store_id": retailer})
+        return json.dumps(
+            {
+                "success": False,
+                "error": (
+                    f"unknown action {action}. "
+                    "Use list|add|set|remove|clear (list aliases: get, read, show, view)."
+                ),
+                "store_id": retailer,
+            }
+        )
     picked = None
     also_matched: list[dict[str, Any]] = []
     payload: list[dict[str, Any]] = []
@@ -2013,7 +2051,7 @@ async def _dispatch(user: dict[str, Any], message: Any) -> dict[str, Any] | None
             {
                 "protocolVersion": asked if asked in SUPPORTED_PROTOCOL_VERSIONS else LATEST_PROTOCOL_VERSION,
                 "capabilities": {
-                    "tools": {"listChanged": False},
+                    "tools": {"listChanged": True},
                     "prompts": {"listChanged": False},
                     "resources": {"listChanged": False},
                 },
