@@ -620,6 +620,29 @@ def _cio_search(query: str) -> list[dict[str, Any]]:
         return []
 
 
+def _cio_browse_ids(ids: list[str]) -> list[dict[str, Any]]:
+    """Lookup Constructor.io rows by product id. Does not invent SKUs."""
+    pids = [str(i).strip() for i in ids if str(i).strip()]
+    if not pids:
+        return []
+    try:
+        import requests
+
+        r = requests.get(
+            "https://ac.cnstrc.com/browse/items",
+            params={
+                "key": "key_UzmQuiABmYtLGFME",
+                "c": "cio-python-bringfast-1.0",
+                "i": "bringfast",
+                "ids": ",".join(pids[:20]),
+            },
+            timeout=4,
+        )
+        return list(((r.json().get("response") or {}).get("results") or []))
+    except Exception:
+        return []
+
+
 def _stock_at_pos(stock: Any, pos: str) -> dict[str, Any] | None:
     if not pos:
         return None
@@ -629,6 +652,22 @@ def _stock_at_pos(stock: Any, pos: str) -> dict[str, Any] | None:
     if not isinstance(stock, list):
         return None
     return next((row for row in stock if isinstance(row, dict) and str(row.get("pos") or "") == str(pos)), None)
+
+
+def _apply_cio_card(it: dict[str, Any], card: dict[str, Any], *, product_id: str, pos: str) -> bool:
+    d = it.get("data") or {}
+    if str(d.get("id") or "") != str(product_id):
+        return False
+    card["name"] = it.get("value") or d.get("online_name_en") or card["name"]
+    card["image"] = d.get("image_url") or card["image"]
+    here = _stock_at_pos(d.get("stock"), pos)
+    if here is not None:
+        status = str(here.get("stock_status") or here.get("stock") or "").upper()
+        available = here.get("isAvailable")
+        if available is None:
+            available = "OUT" not in status
+        card["in_stock"] = bool(available) and "OUT" not in status
+    return True
 
 
 def _product_card(product_id: str, name: str = "", *, fulfilment: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -641,6 +680,9 @@ def _product_card(product_id: str, name: str = "", *, fulfilment: dict[str, Any]
         "in_stock": True,
         "pos": pos,
     }
+    for it in _cio_browse_ids([str(product_id)]):
+        if _apply_cio_card(it, card, product_id=str(product_id), pos=pos):
+            return card
     queries = []
     if name and name != str(product_id):
         queries.append(name)
@@ -651,19 +693,8 @@ def _product_card(product_id: str, name: str = "", *, fulfilment: dict[str, Any]
             continue
         seen.add(q)
         for it in _cio_search(q):
-            d = it.get("data") or {}
-            if str(d.get("id") or "") != str(product_id):
-                continue
-            card["name"] = it.get("value") or d.get("online_name_en") or card["name"]
-            card["image"] = d.get("image_url") or card["image"]
-            here = _stock_at_pos(d.get("stock"), pos)
-            if here is not None:
-                status = str(here.get("stock_status") or here.get("stock") or "").upper()
-                available = here.get("isAvailable")
-                if available is None:
-                    available = "OUT" not in status
-                card["in_stock"] = bool(available) and "OUT" not in status
-            return card
+            if _apply_cio_card(it, card, product_id=str(product_id), pos=pos):
+                return card
     return card
 
 
@@ -744,6 +775,8 @@ def _basket(
             last_err = e
             if e.status in (401, 403) or _is_akamai(e):
                 raise
+            if method.lower() == "post" and (e.status or 0) >= 500:
+                raise
             continue
         except Exception as e:
             last_err = StoreAPIError(f"{type(e).__name__}")
@@ -753,6 +786,8 @@ def _basket(
         msg = _err_message(body, f"{what} HTTP {resp.status_code}")
         last_err = StoreAPIError(msg, status=resp.status_code, body=body, maf_error=msg)
         if resp.status_code in (401, 403) or _is_akamai(last_err):
+            raise last_err
+        if method.lower() == "post" and resp.status_code >= 500:
             raise last_err
     raise last_err or StoreAPIError(f"{what} failed")
 
@@ -778,6 +813,8 @@ def _v8_add_item(
             last_err = e
             if e.status in (401, 403) or _is_akamai(e):
                 raise
+            if (e.status or 0) >= 500:
+                raise
             continue
         except Exception as e:
             last_err = StoreAPIError(f"{type(e).__name__}")
@@ -787,6 +824,8 @@ def _v8_add_item(
         msg = _err_message(body, f"v8add HTTP {resp.status_code}")
         last_err = StoreAPIError(msg, status=resp.status_code, body=body, maf_error=msg)
         if resp.status_code in (401, 403) or _is_akamai(last_err):
+            raise last_err
+        if resp.status_code >= 500:
             raise last_err
     raise last_err or StoreAPIError("v8 add failed")
 
@@ -829,31 +868,35 @@ def add_item(
     }
     add_loc = {**loc, "intent": "SLOTTED"}
     last_err: StoreAPIError | None = None
-    for path in ("entries", "addItem"):
-        try:
-            return _basket(
-                "post",
-                path,
-                token=token,
-                user_id=user_id,
-                payload=payload,
-                what="add",
-                fulfilment=add_loc,
-                client=s,
-            )
-        except StoreAPIError as e:
-            last_err = e
-            if e.status in (401, 403, 409) or _is_akamai(e):
-                raise
-            continue
+    # POST /entries is the delete/replace resource (remove_items DELETEs it). A 500
+    # there can commit an empty basket — never use it to append a line.
+    try:
+        return _basket(
+            "post",
+            "addItem",
+            token=token,
+            user_id=user_id,
+            payload=payload,
+            what="add",
+            fulfilment=add_loc,
+            client=s,
+        )
+    except StoreAPIError as e:
+        last_err = e
+        if e.status in (401, 403, 409) or _is_akamai(e):
+            raise
+        if _is_purchase_intent_error(e):
+            raise _slot_error(e)
+        if (e.status or 0) >= 500:
+            raise
     try:
         return _v8_add_item(token=token, user_id=user_id, payload=payload, fulfilment=add_loc, client=s)
     except StoreAPIError as e:
         last_err = e
         if e.status in (401, 403, 409) or _is_akamai(e):
             raise
-    if last_err and _is_purchase_intent_error(last_err):
-        raise _slot_error(last_err)
+        if _is_purchase_intent_error(e):
+            raise _slot_error(e)
     raise last_err or StoreAPIError("add item failed")
 
 
@@ -998,29 +1041,69 @@ def ids_in_cart(requested: list[dict[str, Any]], live: list[dict[str, Any]]) -> 
     return all(pid in have for pid in wanted)
 
 
+def _hit_from_cio(it: dict[str, Any], pid: str) -> dict[str, Any] | None:
+    d = it.get("data") or {}
+    if not isinstance(d, dict):
+        return None
+    ids = {
+        str(d.get("id") or ""),
+        str(d.get("code") or ""),
+        str(d.get("ean") or ""),
+    }
+    if pid not in ids:
+        return None
+    name = _first_str(it.get("value"), d.get("online_name_en"), d.get("name"))
+    price = _first_price(d.get("price"), d.get("selling_price"), d.get("sellingPrice"))
+    url = d.get("url") or ""
+    if url and not str(url).startswith("http"):
+        url = f"{SITE}/{MARKET}/{LANG}{url}"
+    return {"id": pid, "name": name, "price": price, "url": url or f"{SITE}/{MARKET}/{LANG}/p/{pid}"}
+
+
 def _catalog_hit(product_id: str) -> dict[str, Any] | None:
     """Name/price from Constructor.io for an id already in the cart. Does not invent SKUs."""
     pid = str(product_id or "").strip()
     if not pid:
         return None
-    for it in _cio_search(pid):
-        d = it.get("data") or {}
-        if not isinstance(d, dict):
-            continue
-        ids = {
-            str(d.get("id") or ""),
-            str(d.get("code") or ""),
-            str(d.get("ean") or ""),
-        }
-        if pid not in ids:
-            continue
-        name = _first_str(it.get("value"), d.get("online_name_en"), d.get("name"))
-        price = _first_price(d.get("price"), d.get("selling_price"), d.get("sellingPrice"))
-        url = d.get("url") or ""
-        if url and not str(url).startswith("http"):
-            url = f"{SITE}/{MARKET}/{LANG}{url}"
-        return {"id": pid, "name": name, "price": price, "url": url or f"{SITE}/{MARKET}/{LANG}/p/{pid}"}
+    for it in list(_cio_browse_ids([pid])) + list(_cio_search(pid)):
+        hit = _hit_from_cio(it, pid)
+        if hit:
+            return hit
     return None
+
+
+def cart_was_emptied(before: list[dict[str, Any]], after: list[dict[str, Any]]) -> bool:
+    """True when a write left a previously non-empty official cart with no lines."""
+    had = [str(it.get("id") or "") for it in before if str(it.get("id") or "").strip()]
+    have = [str(it.get("id") or "") for it in after if str(it.get("id") or "").strip()]
+    return bool(had) and not have
+
+
+def restore_cart_snapshot(
+    snapshot: list[dict[str, Any]],
+    *,
+    token: str,
+    user_id: str,
+    fulfilment: dict[str, Any] | None = None,
+    client=None,
+) -> None:
+    """Re-append snapshot lines via addItem only. Never POST /entries (that can wipe again)."""
+    for it in snapshot:
+        pid = str(it.get("id") or "").strip()
+        if not pid:
+            continue
+        try:
+            add_item(
+                token=token,
+                user_id=user_id,
+                product_id=pid,
+                qty=int(it.get("qty") or 1),
+                name=str(it.get("name") or ""),
+                fulfilment=fulfilment,
+                client=client,
+            )
+        except StoreAPIError:
+            continue
 
 
 def enrich_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1115,6 +1198,7 @@ def official_cart(
             loc = resolve_fulfilment(token=token, user_id=user_id, client=s)
         item_errors: list[dict[str, Any]] = []
         added = 0
+        snapshot: list[dict[str, Any]] = []
         if action in _CART_CLEAR:
             current = parse_items(
                 lite_cart(token=token, user_id=user_id, fulfilment=loc, client=s, timeout=read_timeout)
@@ -1127,6 +1211,12 @@ def official_cart(
             if ids:
                 remove_items(token=token, user_id=user_id, product_ids=ids, fulfilment=loc, client=s)
         elif needs_slot:
+            try:
+                snapshot = parse_items(
+                    lite_cart(token=token, user_id=user_id, fulfilment=loc, client=s, timeout=read_timeout)
+                )
+            except StoreAPIError:
+                snapshot = []
             for it in items:
                 try:
                     add_item(
@@ -1153,6 +1243,12 @@ def official_cart(
                     )
         body = lite_cart(token=token, user_id=user_id, fulfilment=loc, client=s, timeout=read_timeout)
         live = enrich_items(parse_items(body))
+        restored = False
+        if needs_slot and cart_was_emptied(snapshot, live):
+            restore_cart_snapshot(snapshot, token=token, user_id=user_id, fulfilment=loc, client=s)
+            body = lite_cart(token=token, user_id=user_id, fulfilment=loc, client=s, timeout=read_timeout)
+            live = enrich_items(parse_items(body))
+            restored = not cart_was_emptied(snapshot, live)
         ok = True
         error = None
         error_code = None
@@ -1163,6 +1259,14 @@ def official_cart(
             error = item_errors[0]["error"]
             error_code = item_errors[0].get("error_code")
             maf_error = item_errors[0].get("maf_error")
+            if restored:
+                error_code = error_code or "cart_restored"
+            elif snapshot and not live:
+                error_code = error_code or "cart_emptied"
+                error = (
+                    f"{error} The previous cart was emptied by that write; "
+                    "restore did not put the old lines back."
+                )
         elif landed:
             item_errors = []
         return {

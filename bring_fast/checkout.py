@@ -1036,15 +1036,18 @@ def _add_via_page(page, headers: dict[str, str], loc: dict[str, Any], item: dict
     h = dict(headers)
     h["intent"] = "SLOTTED"
     last: dict[str, Any] = {}
+    # POST /entries can replace the basket and 500 with an empty cart. Append only.
     for path in (
-        f"/v1/basket/{api.MARKET}/{api.LANG}/entries",
         f"/v1/basket/{api.MARKET}/{api.LANG}/addItem",
         f"/v8/carts/{api.MARKET}/{api.LANG}/STANDARD/addItem",
     ):
         last = _origin_fetch(page, "POST", path, payload=payload, headers=h)
         if last.get("akamai"):
             return last
-        if int(last.get("status") or 0) < 400:
+        status = int(last.get("status") or 0)
+        if status < 400:
+            return last
+        if status != 404:
             return last
     return last
 
@@ -1119,6 +1122,7 @@ def _carrefour_browser_api_cart(
             act = "list"
         add_err = None
         add_code = None
+        snapshot: list[dict[str, Any]] = []
         if act in ("clear", "create", "empty", "new"):
             listed = _origin_fetch(page, "GET", _lite_cart_path(loc), headers=headers)
             live_items = api.parse_items(listed.get("body"))
@@ -1144,6 +1148,8 @@ def _carrefour_browser_api_cart(
         elif act in ("add", "set"):
             add_err = None
             add_code = None
+            snap_listed = _origin_fetch(page, "GET", _lite_cart_path(loc), headers=headers)
+            snapshot = api.parse_items(snap_listed.get("body")) if not snap_listed.get("akamai") else []
             for it in items:
                 last = _add_via_page(page, headers, loc, it)
                 if last.get("akamai"):
@@ -1186,6 +1192,13 @@ def _carrefour_browser_api_cart(
                 "user_id": user_id,
             }
         live_items = api.enrich_items(api.parse_items(listed.get("body")))
+        if act in ("add", "set") and api.cart_was_emptied(snapshot, live_items):
+            for old in snapshot:
+                _add_via_page(page, headers, loc, old)
+            listed = _origin_fetch(page, "GET", _lite_cart_path(loc), headers=headers)
+            live_items = api.enrich_items(api.parse_items(listed.get("body")))
+            if add_err and live_items:
+                add_code = add_code or "cart_restored"
         if act in ("add", "set") and add_err and not api.ids_in_cart(items, live_items):
             return {
                 "ok": False,

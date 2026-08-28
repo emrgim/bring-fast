@@ -553,6 +553,94 @@ def test_carrefour_search_add_743861_hits_official_cart(bf, monkeypatch):
     assert live.calls[0]["timeout"] <= 32
 
 
+def test_carrefour_search_add_1592968_qty_2_hits_official_cart(bf, monkeypatch):
+    """Food keeper: 2 packs of Oasis Blu 1L x6 (product_id=1592968)."""
+    user = _link_carrefour(bf, "bluadd@example.com")
+    live = _ok_add("1592968")
+    monkeypatch.setattr(bf.checkout, "official_cart", live)
+    out = json.loads(
+        bf._call_tool(
+            user,
+            "carrefour_search",
+            {
+                "action": "add",
+                "product_id": "1592968",
+                "qty": 2,
+                "name": "Oasis Blu Sparkling Water, 1L Pack of 6",
+            },
+        )
+    )
+    assert out["success"] is True
+    assert live.calls[0]["action"] == "add"
+    assert live.calls[0]["items"][0]["id"] == "1592968"
+    assert live.calls[0]["items"][0]["qty"] == 2
+    assert out["items"][0]["id"] == "1592968"
+
+
+def test_carrefour_search_acqua_blu_returns_oasis_water_pack(bf, monkeypatch):
+    user = bf.db.create_user("acqua@example.com", "secret1")
+
+    def fake_raw(query, **_k):
+        q = str(query).lower()
+        if q == "acqua blu":
+            return [
+                {
+                    "value": "Acqua Di Parma Blu Mediterraneo Mirto Di Panarea 10ml",
+                    "data": {
+                        "id": "8028713572821",
+                        "price": 60.38,
+                        "product_type": "NONFOOD",
+                        "brand_name": "Acqua Di Parma",
+                    },
+                }
+            ]
+        return [
+            {
+                "value": "Oasis Blu Sparkling Water, 1L Pack of 6",
+                "data": {"id": "1592968", "price": 26.99, "product_type": "FOOD", "brand_name": "Blu"},
+            }
+        ]
+
+    monkeypatch.setattr(bf.catalog, "_cio_search_raw", fake_raw)
+    out = json.loads(bf._call_tool(user, "carrefour_search", {"query": "Acqua Blu", "limit": 8}))
+    assert out["results"][0]["id"] == "1592968"
+    assert "Oasis Blu" in out["results"][0]["name"]
+    assert out["results"][0]["price"] == 26.99
+    assert out["not_search_only"] is True
+
+
+def test_carrefour_add_1592968_empty_cart_after_500_is_not_success(bf, monkeypatch):
+    """1.10.11 SKU-in-items success must not fire when the write left the cart empty."""
+    user = _link_carrefour(bf, "emptyblu@example.com")
+
+    def _live(**kw):
+        return {
+            "ok": False,
+            "official_count": 0,
+            "items": [],
+            "logged_in": True,
+            "session_reused": True,
+            "driver": "chrome",
+            "maf_error": "Internal Server Error",
+            "item_errors": [{"id": "1592968", "maf_error": "Internal Server Error"}],
+            "token": "t",
+            "user_id": "u",
+        }
+
+    monkeypatch.setattr(bf.checkout, "official_cart", _live)
+    out = json.loads(
+        bf._call_tool(
+            user,
+            "carrefour_search",
+            {"action": "add", "product_id": "1592968", "qty": 2},
+        )
+    )
+    assert out["success"] is False
+    assert out["official_ok"] is False
+    assert out["items"] == []
+    assert out["maf_error"] == "Internal Server Error"
+
+
 def test_carrefour_search_add_743861_success_despite_internal_error(bf, monkeypatch):
     """MAF Internal Server Error is a false negative when 743861 is already in the cart."""
     from bring_fast.stores import carrefour as api
@@ -562,6 +650,7 @@ def test_carrefour_search_add_743861_success_despite_internal_error(bf, monkeypa
         "376161": {"value": "Coca-Cola Original 330ml x6", "data": {"id": "376161", "price": 14.99}},
         "743861": {"value": "Coca-Cola Zero 330ml Can", "data": {"id": "743861", "price": 1.99}},
     }
+    monkeypatch.setattr(api, "_cio_browse_ids", lambda ids: [catalog[i] for i in ids if i in catalog])
     monkeypatch.setattr(api, "_cio_search", lambda q: [catalog[q]] if q in catalog else [])
 
     def _live(**kw):
@@ -605,6 +694,7 @@ def test_carrefour_cart_list_includes_name_and_price(bf, monkeypatch):
         "2311515": {"value": "Epson EcoTank L3351", "data": {"id": "2311515", "price": 599}},
         "7630477854474": {"value": "Nespresso Inissia Coffee Machine", "data": {"id": "7630477854474", "ean": "7630477854474", "price": 408}},
     }
+    monkeypatch.setattr(api, "_cio_browse_ids", lambda ids: [catalog[i] for i in ids if i in catalog])
     monkeypatch.setattr(api, "_cio_search", lambda q: [catalog[q]] if q in catalog else [])
 
     def _live(**kw):
