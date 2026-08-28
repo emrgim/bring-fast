@@ -130,9 +130,9 @@ class _FakeSession:
 
 
 def _no_network(monkeypatch, api, fake=None):
-    """official_cart always warms a Chrome session; keep unit tests off the network."""
+    """Keep official_cart unit tests off the network (warm homepage is skipped on list)."""
     sess = fake or _FakeSession()
-    monkeypatch.setattr(api, "chrome_session", lambda existing=None: existing or sess)
+    monkeypatch.setattr(api, "chrome_session", lambda existing=None, **_k: existing or sess)
     return sess
 
 
@@ -238,9 +238,34 @@ def test_official_cart_list_after_login(monkeypatch):
     assert out["client"] == "com.aswat.carrefouruae"
     assert out["items"][0]["name"] == "Pasta"
     assert out["official_count"] == 1
-    assert out["delivery_address"] == "Element Meaisam 731"
-    assert out["food_pos"] == "073"
-    assert out["polygon_id"] == "DXB_DubProdCty_01"
+
+
+def test_official_cart_list_skips_fulfilment(monkeypatch):
+    """Grok times out if list waits on homepage + addresses + posInfo. Those are add-only."""
+    from bring_fast.stores import carrefour as api
+
+    _no_network(monkeypatch, api)
+    monkeypatch.setattr(
+        api,
+        "resolve_fulfilment",
+        lambda **k: (_ for _ in ()).throw(AssertionError("list must not resolve fulfilment")),
+    )
+    monkeypatch.setattr(
+        api,
+        "lite_cart",
+        lambda **k: {"data": {"items": [{"id": "1", "name": "Pasta", "quantity": 1, "price": 4}]}},
+    )
+    out = api.official_cart(
+        email="a@b.c", password="x", action="list", items=[], session_token="t", session_user="u"
+    )
+    assert out["ok"] is True
+    assert out["items"][0]["name"] == "Pasta"
+    assert out.get("food_pos") in (None, "")
+    got = api.official_cart(
+        email="a@b.c", password="x", action="get", items=[], session_token="t", session_user="u"
+    )
+    assert got["ok"] is True
+    assert got["official_count"] == 1
 
 
 class _BasketSession:

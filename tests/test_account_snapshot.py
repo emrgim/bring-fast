@@ -73,7 +73,9 @@ def test_search_tools_exist_for_every_store(bf):
     assert "waitrose_search" in names
     assert "spinneys_search" in names
     assert "bf_compare" in names
-    assert "unioncoop_cart" not in names
+    assert "unioncoop_cart" in names
+    assert "unioncoop_status" in names
+    assert "unioncoop_checkout" not in names
     assert "carrefour_cart" in names
     assert "carrefour_status" in names
     assert "carrefour_checkout" not in names
@@ -168,6 +170,36 @@ def test_searching_every_store_skips_the_one_with_no_catalog(bf, monkeypatch):
     assert "careem" not in asked
     assert "mcdonalds" not in asked
     assert "grandiose" in asked
+
+
+def test_cart_get_alias_lists_the_official_carrefour_cart(bf, monkeypatch):
+    user = bf.db.create_user("get@example.com", "secret1")
+    bf.db.set_retailer_account(user["id"], "carrefour", "e@mrg.im", "store-pass")
+    user = bf.db.get_user_by_id(user["id"])
+    seen = []
+
+    def _live(**kw):
+        seen.append(kw["action"])
+        return {
+            "ok": True,
+            "official_count": 1,
+            "items": [{"id": "1102885", "name": "Eggs", "qty": 1, "price": 12}],
+            "logged_in": True,
+            "session_reused": True,
+            "driver": "chrome",
+            "token": "t",
+            "user_id": "u",
+        }
+
+    monkeypatch.setattr(bf.checkout, "official_cart", _live)
+    out = json.loads(bf._call_tool(user, "bf_cart", {"retailer": "carrefour", "action": "get"}))
+    assert seen == ["list"]
+    assert out["success"] is True
+    assert out["items"][0]["name"] == "Eggs"
+    seen.clear()
+    again = json.loads(bf._call_tool(user, "carrefour_cart", {"action": "read"}))
+    assert seen == ["list"]
+    assert again["success"] is True
 
 
 def test_carrefour_cart_adds_by_name(bf, monkeypatch):

@@ -709,6 +709,7 @@ def official_cart(
             items=items,
             session_token=session_token,
             session_user=session_user,
+            timeout=timeout,
         )
     if store == "grandiose":
         from bring_fast.stores import grandiose as grandiose_api
