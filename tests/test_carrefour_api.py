@@ -177,6 +177,7 @@ def test_expired_token_does_not_retry_login_on_akamai_403(monkeypatch):
     assert called == []
     assert out["ok"] is False
     assert "Akamai" in (out.get("error") or "")
+    assert out.get("error_code") == "akamai_blocked"
 
 
 def test_akamai_403_html_does_not_count_as_invalid_token(monkeypatch):
@@ -196,6 +197,7 @@ def test_akamai_403_html_does_not_count_as_invalid_token(monkeypatch):
     )
     assert called == []
     assert out["ok"] is False
+    assert out.get("error_code") == "akamai_blocked"
 
 
 def test_login_uses_one_customers_login_post_on_warmed_chrome(monkeypatch):
@@ -616,3 +618,15 @@ def test_browser_cookie_jar_supplies_token(tmp_path, monkeypatch):
     jar = api.token_from_browser_cookies()
     assert jar["token"] == "tok-from-chrome"
     assert jar["user_id"] == "u42"
+
+
+def test_akamai_html_sets_error_code():
+    from bring_fast.stores.http import StoreAPIError, json_or_error
+
+    class _Resp:
+        status_code = 200
+        text = "<!DOCTYPE html>\n<html>\n<body>\n<p></p>\n</body>\n</html>"
+
+    with pytest.raises(StoreAPIError) as raised:
+        json_or_error(_Resp(), "liteCart")
+    assert raised.value.error_code == "akamai_blocked"

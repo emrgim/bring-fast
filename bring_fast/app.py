@@ -1535,7 +1535,7 @@ def _account_snapshot(user: dict[str, Any]) -> dict[str, Any]:
             "linked=true / login_saved=true means the supermarket login is saved. "
             "Do not say a store has no login when it is in linked_stores. "
             "The only cart is the official store account cart. "
-            "Official cart (add/list/clear) on Grandiose, Union Coop, and Carrefour. "
+            "Official cart (add/list/clear) on Grandiose, Union Coop, and Carrefour — not search-only. "
             "Checkout only on Magento: Grandiose and Union Coop. "
             "Waitrose and Spinneys are search-only — not tested for orders. "
             "Careem is receipts-only: its emailed invoices are read into purchases, "
@@ -1577,21 +1577,30 @@ def _store_ctx(user: dict[str, Any], retailer: str, items: list | None = None, t
     }
 
 
-def _resolve_cart_line(retailer: str, args: dict[str, Any]) -> tuple[str, str, list[dict[str, Any]], str | None]:
-    """product_id or a catalog name. Returns id, name, other matches, error."""
+def _resolve_cart_line(retailer: str, args: dict[str, Any]) -> tuple[str, str, list[dict[str, Any]], str | None, str]:
+    """product_id or a catalog name. Returns id, name, other matches, error, url."""
     pid = str(args.get("product_id") or args.get("id") or args.get("sku") or "").strip()
     name = str(args.get("name") or args.get("query") or args.get("q") or "").strip()
+    url = str(args.get("url") or "").strip()
     if pid:
-        return pid, name or pid, [], None
+        if not url and retailer == "carrefour":
+            url = f"https://www.carrefouruae.com/mafuae/en/p/{pid}"
+        return pid, name or pid, [], None, url
     if not name:
-        return "", "", [], "product_id or name required"
+        return "", "", [], "product_id or name required", ""
     found = catalog.search(retailer, name, 5)
     results = [r for r in (found.get("results") or []) if isinstance(r, dict) and r.get("id")]
     if not results:
-        return "", name, [], f"No {retailer} product matched {name!r}."
+        return "", name, [], f"No {retailer} product matched {name!r}.", ""
     hit = catalog.best_match(name, results) or results[0]
     others = [r for r in results if str(r.get("id")) != str(hit.get("id"))][:4]
-    return str(hit.get("id") or ""), str(hit.get("name") or name), others, None
+    return (
+        str(hit.get("id") or ""),
+        str(hit.get("name") or name),
+        others,
+        None,
+        url or str(hit.get("url") or ""),
+    )
 
 
 _CART_ACTION_ALIASES = {
@@ -1625,7 +1634,7 @@ def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> s
     also_matched: list[dict[str, Any]] = []
     payload: list[dict[str, Any]] = []
     if action in ("add", "set", "remove"):
-        pid, pname, also_matched, err = _resolve_cart_line(retailer, args)
+        pid, pname, also_matched, err, page_url = _resolve_cart_line(retailer, args)
         if err:
             return json.dumps({"success": False, "error": err, "store_id": retailer})
         picked = {"id": pid, "name": pname}
@@ -1635,18 +1644,22 @@ def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> s
                 "name": pname,
                 "qty": 0 if action == "remove" else int(args.get("qty") or 1),
                 "price": args.get("price"),
-                "url": args.get("url") or "",
+                "url": args.get("url") or page_url or "",
             }
         ]
     creds = db.get_retailer_secret(user["id"], retailer) or {}
     try:
+        if retailer == "carrefour":
+            timeout = 16 if action == "list" else 38
+        else:
+            timeout = 25 if action == "list" else 40
         live = checkout.official_cart(
             store=retailer,
             email=creds.get("email") or "",
             password=creds.get("password") or "",
             action=action,
             items=payload,
-            timeout=25 if action == "list" else 40,
+            timeout=timeout,
             session_token=creds.get("auth_token") or "",
             session_user=creds.get("store_user_id") or "",
         )
@@ -1656,7 +1669,8 @@ def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> s
         ctx["official_count"] = None
         ctx["official_ok"] = False
         ctx["live_cart_ok"] = False
-        ctx["store_login_ok"] = None
+        ctx["store_login_ok"] = bool(ctx.get("login_saved"))
+        ctx["error_code"] = "cart_timeout"
         return json.dumps(
             {
                 "success": False,
@@ -1665,7 +1679,8 @@ def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> s
                 "item_count": 0,
                 "what_happens": str(e),
                 "note": (
-                    "Official cart was not read. Bring Fast does not keep a local copy. "
+                    "Official cart was not read in time (error_code=cart_timeout). "
+                    "This is not a missing login. "
                     f"login_saved={ctx['login_saved']}."
                 ),
             },
@@ -1694,6 +1709,16 @@ def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> s
         if also_matched:
             ctx["also_matched"] = [{"id": r.get("id"), "name": r.get("name")} for r in also_matched]
     if not live.get("ok"):
+        note = (
+            "A live cart failure does not mean the supermarket login is missing. "
+            f"login_saved={ctx['login_saved']}."
+        )
+        if ctx.get("error_code") == "akamai_blocked" or "akamai" in str(live.get("error") or "").lower():
+            note = (
+                "Carrefour cart is enabled. HTTP from this server was blocked by Akamai "
+                "(error_code=akamai_blocked). Login is still saved. "
+                f"login_saved={ctx['login_saved']}."
+            )
         return json.dumps(
             {
                 "success": False,
@@ -1702,10 +1727,7 @@ def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> s
                 "item_count": sum(int(i.get("qty") or 1) for i in items),
                 "live_cart_ok": False,
                 "what_happens": live.get("error") or "Could not read or update the live store cart.",
-                "note": (
-                    "A live cart failure does not mean the supermarket login is missing. "
-                    f"login_saved={ctx['login_saved']}."
-                ),
+                "note": note,
             },
             ensure_ascii=False,
         )

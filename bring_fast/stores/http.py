@@ -51,9 +51,17 @@ def is_akamai_shell(text: str) -> bool:
 def json_or_error(resp, what: str) -> Any:
     text = resp.text or ""
     if is_akamai_shell(text):
-        raise StoreAPIError(f"{what}: Akamai blocked the HTTP API (empty HTML).", status=resp.status_code)
+        raise StoreAPIError(
+            f"{what}: Akamai blocked the HTTP API (empty HTML).",
+            status=resp.status_code,
+            error_code="akamai_blocked",
+        )
     if "access denied" in text.lower() and resp.status_code in (403, 200):
-        raise StoreAPIError(f"{what}: Akamai access denied.", status=resp.status_code)
+        raise StoreAPIError(
+            f"{what}: Akamai access denied.",
+            status=resp.status_code,
+            error_code="akamai_blocked",
+        )
     try:
         return resp.json()
     except Exception as e:

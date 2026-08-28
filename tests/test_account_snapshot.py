@@ -378,4 +378,52 @@ def test_carrefour_akamai_unread_keeps_login_saved(bf, monkeypatch):
     assert "akamai" in out["what_happens"].lower()
     assert "unread" in out["what_happens"].lower()
     assert "login_saved=True" in out["note"]
-    assert "does not mean the supermarket login is missing" in out["note"]
+    assert "does not mean the supermarket login is missing" in out["note"] or "akamai_blocked" in out["note"]
+
+
+def test_carrefour_add_passes_product_page_url(bf, monkeypatch):
+    user = bf.db.create_user("coke@example.com", "secret1")
+    bf.db.set_retailer_account(user["id"], "carrefour", "e@mrg.im", "store-pass")
+    user = bf.db.get_user_by_id(user["id"])
+    seen = []
+
+    def _live(**kw):
+        seen.append(kw)
+        return {
+            "ok": True,
+            "official_count": 1,
+            "items": [{"id": "2288448", "name": "Coke Zero", "qty": 1, "price": 7.49}],
+            "logged_in": True,
+            "session_reused": True,
+            "driver": "chrome",
+            "token": "t",
+            "user_id": "u",
+        }
+
+    monkeypatch.setattr(bf.checkout, "official_cart", _live)
+    out = json.loads(
+        bf._call_tool(user, "carrefour_cart", {"action": "add", "product_id": "2288448", "qty": 1})
+    )
+    assert out["success"] is True
+    assert seen[0]["items"][0]["id"] == "2288448"
+    assert seen[0]["items"][0]["url"].endswith("/p/2288448")
+
+
+def test_carrefour_list_timeout_keeps_login_saved(bf, monkeypatch):
+    user = bf.db.create_user("to@example.com", "secret1")
+    bf.db.set_retailer_account(user["id"], "carrefour", "e@mrg.im", "store-pass")
+    user = bf.db.get_user_by_id(user["id"])
+
+    def boom(**_kw):
+        raise bf.checkout.LiveCartTimeout(
+            "Live carrefour cart exceeded 16s. The supermarket login is still saved; "
+            "the official cart was not read. error_code=cart_timeout."
+        )
+
+    monkeypatch.setattr(bf.checkout, "official_cart", boom)
+    out = json.loads(bf._call_tool(user, "carrefour_cart", {"action": "list"}))
+    assert out["success"] is False
+    assert out["error_code"] == "cart_timeout"
+    assert out["login_saved"] is True
+    assert out["store_login_ok"] is True
+    assert "cart_timeout" in out["note"]
