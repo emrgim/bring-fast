@@ -57,7 +57,7 @@ Optional: `dept=Edible` or `dept=Drinks`.
 
 - Search is on for every supermarket.
 - Cart on **Grandiose, Union Coop, Carrefour**. Checkout **only Magento**: Grandiose, Union Coop. Never invent a Bring Fast cart.
-- Carrefour: `carrefour_cart` action=list|add|set|remove|clear. add takes `product_id` or `name` plus `qty`. `clear` (also `create`/`empty`/`new`) empties the official cart. Checkout stays on the Carrefour website.
+- Carrefour: `carrefour_cart` action=list|add|set|remove|clear. **Only Emil’s logged-in official account cart.** First check login. If not logged in, do not add anything (no guest, no virtual, no unlogged browser session). add takes `product_id` or `name` plus `qty`. `clear` empties the official cart. Checkout stays on the Carrefour website.
 - If official cart cannot be read: `items=[]` and say **unread**. Do not reuse old items. Akamai on Carrefour login does **not** mean the login is missing (`login_saved` stays true). Carrefour HTTP uses curl_cffi Chrome impersonation (same TLS + UA); never a real Chrome window.
 - Do not call `placeOrder` unless the user explicitly asks to place the order.
 - Payment stays on the supermarket site.
