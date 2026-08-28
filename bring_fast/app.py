@@ -1227,7 +1227,8 @@ def _store_tools() -> list[dict[str, Any]]:
             "name": "bf_search",
             "description": (
                 "Search ALL supermarkets for price comparison. "
-                "Orders (cart/checkout) only on Magento: Grandiose and Union Coop."
+                "Official cart on Grandiose, Union Coop, and Carrefour when enabled. "
+                "Checkout only on Magento: Grandiose and Union Coop."
             ),
             "inputSchema": {
                 "type": "object",
@@ -1242,8 +1243,11 @@ def _store_tools() -> list[dict[str, Any]]:
         {
             "name": "bf_cart",
             "description": (
-                "Official cart. retailer must be an enabled Magento store (grandiose or unioncoop). "
-                "Carrefour, Waitrose and Spinneys are search-only."
+                "Official cart. retailer must be an enabled shop store "
+                "(grandiose, unioncoop, or carrefour). "
+                "Waitrose and Spinneys are search-only. "
+                "action=list|add|set|remove|clear. add needs product_id or name, plus qty. "
+                "clear (also create/empty/new) empties the official cart."
             ),
             "inputSchema": {
                 "type": "object",
@@ -1262,8 +1266,8 @@ def _store_tools() -> list[dict[str, Any]]:
             "name": "bf_compare",
             "description": (
                 "Compare a cart or named items across stores. "
-                "source=grandiose reads the official Magento cart, then searches the other catalogs. "
-                "Search only — does not add anything. Orders stay on Grandiose/Union Coop."
+                "source=grandiose or carrefour reads the official cart, then searches the other catalogs. "
+                "Search only — does not add anything. Checkout stays on Grandiose/Union Coop."
             ),
             "inputSchema": {
                 "type": "object",
@@ -1368,17 +1372,17 @@ def _store_tools() -> list[dict[str, Any]]:
         # tool: a listed tool that can only answer with an error is worse than
         # no tool at all.
         if r.get("search"):
+            extra = " Search only — not used for orders."
+            if r.get("shop"):
+                extra = (
+                    " Official cart available if the store is enabled. Checkout stays on the website."
+                    if not db.store_can_checkout(sid)
+                    else " Magento: cart/checkout available if the store is enabled."
+                )
             tools.append(
                 {
                     "name": f"{sid}_search",
-                    "description": (
-                        f"Search products at {name}."
-                        + (
-                            " Magento: cart/checkout available if the store is enabled."
-                            if r.get("shop")
-                            else " Search only — not used for orders."
-                        )
-                    ),
+                    "description": f"Search products at {name}.{extra}",
                     "inputSchema": {
                         "type": "object",
                         "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}},
@@ -1388,26 +1392,37 @@ def _store_tools() -> list[dict[str, Any]]:
             )
         if not (r.get("shop") and db.is_store_enabled(sid)):
             continue
-        tools.extend(
-            [
-                {
-                    "name": f"{sid}_cart",
-                    "description": (
-                        f"{name} official Magento cart. action=list|add|set|remove|clear. "
-                        "Orders only on Grandiose and Union Coop."
-                    ),
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "action": {"type": "string"},
-                            "product_id": {"type": "string"},
-                            "name": {"type": "string"},
-                            "qty": {"type": "integer"},
-                            "price": {"type": "number"},
-                        },
-                        "required": ["action"],
+        cart_desc = (
+            f"{name} official Magento cart. action=list|add|set|remove|clear. "
+            "Orders only on Grandiose and Union Coop."
+            if db.store_can_checkout(sid)
+            else (
+                f"{name} official account cart — this is the shopping list Grok can fill. "
+                "action=list|add|set|remove|clear. "
+                "add needs product_id or name, plus qty. "
+                "clear (also create/empty/new) empties the cart into a fresh list. "
+                f"Checkout stays on the {name} website."
+            )
+        )
+        tools.append(
+            {
+                "name": f"{sid}_cart",
+                "description": cart_desc,
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string"},
+                        "product_id": {"type": "string"},
+                        "name": {"type": "string"},
+                        "qty": {"type": "integer"},
+                        "price": {"type": "number"},
                     },
+                    "required": ["action"],
                 },
+            }
+        )
+        if db.store_can_checkout(sid):
+            tools.append(
                 {
                     "name": f"{sid}_checkout",
                     "description": (
@@ -1415,13 +1430,14 @@ def _store_tools() -> list[dict[str, Any]]:
                         "Does not place the order until asked."
                     ),
                     "inputSchema": {"type": "object", "properties": {}},
-                },
-                {
-                    "name": f"{sid}_status",
-                    "description": f"Saved {name} login and live official cart for THIS user.",
-                    "inputSchema": {"type": "object", "properties": {}},
-                },
-            ]
+                }
+            )
+        tools.append(
+            {
+                "name": f"{sid}_status",
+                "description": f"Saved {name} login and live official cart for THIS user.",
+                "inputSchema": {"type": "object", "properties": {}},
+            }
         )
     return tools
 
@@ -1469,13 +1485,15 @@ def _store_snapshot(user: dict[str, Any], retailer: str) -> dict[str, Any]:
         "receipts_only": bool(s.get("receipts") and not s.get("search")),
         "capabilities": (
             (["search"] if s.get("search") else [])
-            + (["cart", "checkout"] if s.get("shop") else [])
+            + (["cart"] if s.get("shop") else [])
+            + (["checkout"] if db.store_can_checkout(retailer) else [])
             + (["receipts"] if s.get("receipts") else [])
         ),
         "tools": (
             ([f"{retailer}_search"] if s.get("search") else [])
             + (
-                [f"{retailer}_cart", f"{retailer}_checkout", f"{retailer}_status"]
+                [f"{retailer}_cart", f"{retailer}_status"]
+                + ([f"{retailer}_checkout"] if db.store_can_checkout(retailer) else [])
                 if s.get("shop") and s.get("enabled")
                 else []
             )
@@ -1495,8 +1513,9 @@ def _account_snapshot(user: dict[str, Any]) -> dict[str, Any]:
             "linked=true / login_saved=true means the supermarket login is saved. "
             "Do not say a store has no login when it is in linked_stores. "
             "The only cart is the official store account cart. "
-            "Orders (add to cart / checkout) only on Magento: Grandiose and Union Coop. "
-            "Carrefour, Waitrose and Spinneys are search-only — not tested for orders. "
+            "Official cart (add/list/clear) on Grandiose, Union Coop, and Carrefour. "
+            "Checkout only on Magento: Grandiose and Union Coop. "
+            "Waitrose and Spinneys are search-only — not tested for orders. "
             "Careem is receipts-only: its emailed invoices are read into purchases, "
             "and it has no catalog to search and nothing to compare. "
             "Never invent or report a Bring Fast local cart or awaiting_official_payment order."
@@ -1536,26 +1555,47 @@ def _store_ctx(user: dict[str, Any], retailer: str, items: list | None = None, t
     }
 
 
+def _resolve_cart_line(retailer: str, args: dict[str, Any]) -> tuple[str, str, list[dict[str, Any]], str | None]:
+    """product_id or a catalog name. Returns id, name, other matches, error."""
+    pid = str(args.get("product_id") or args.get("id") or args.get("sku") or "").strip()
+    name = str(args.get("name") or args.get("query") or args.get("q") or "").strip()
+    if pid:
+        return pid, name or pid, [], None
+    if not name:
+        return "", "", [], "product_id or name required"
+    found = catalog.search(retailer, name, 5)
+    results = [r for r in (found.get("results") or []) if isinstance(r, dict) and r.get("id")]
+    if not results:
+        return "", name, [], f"No {retailer} product matched {name!r}."
+    hit = catalog.best_match(name, results) or results[0]
+    others = [r for r in results if str(r.get("id")) != str(hit.get("id"))][:4]
+    return str(hit.get("id") or ""), str(hit.get("name") or name), others, None
+
+
 def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> str:
     action = (args.get("action") or "list").lower()
+    if action in ("create", "empty", "new"):
+        action = "clear"
     if action not in ("list", "add", "set", "remove", "clear"):
         return json.dumps({"success": False, "error": f"unknown action {action}", "store_id": retailer})
-    if action in ("add", "set") and not args.get("product_id"):
-        return json.dumps({"success": False, "error": "product_id required", "store_id": retailer})
-    creds = db.get_retailer_secret(user["id"], retailer) or {}
-    payload = []
-    if action in ("add", "set"):
+    picked = None
+    also_matched: list[dict[str, Any]] = []
+    payload: list[dict[str, Any]] = []
+    if action in ("add", "set", "remove"):
+        pid, pname, also_matched, err = _resolve_cart_line(retailer, args)
+        if err:
+            return json.dumps({"success": False, "error": err, "store_id": retailer})
+        picked = {"id": pid, "name": pname}
         payload = [
             {
-                "id": str(args.get("product_id")),
-                "name": args.get("name") or args.get("product_id"),
-                "qty": int(args.get("qty") or 1),
+                "id": pid,
+                "name": pname,
+                "qty": 0 if action == "remove" else int(args.get("qty") or 1),
                 "price": args.get("price"),
                 "url": args.get("url") or "",
             }
         ]
-    elif action == "remove":
-        payload = [{"id": str(args.get("product_id") or ""), "qty": 0}]
+    creds = db.get_retailer_secret(user["id"], retailer) or {}
     try:
         live = checkout.official_cart(
             store=retailer,
@@ -1598,6 +1638,10 @@ def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> s
     ctx["store_login_ok"] = bool(live.get("logged_in"))
     ctx["store_session_reused"] = bool(live.get("session_reused"))
     ctx["driver"] = live.get("driver") or "http"
+    if picked:
+        ctx["picked"] = picked
+        if also_matched:
+            ctx["also_matched"] = [{"id": r.get("id"), "name": r.get("name")} for r in also_matched]
     if not live.get("ok"):
         return json.dumps(
             {
@@ -1691,7 +1735,12 @@ def _normalize_tool(name: str, args: dict[str, Any]) -> tuple[str, dict[str, Any
             return f"{sid}_checkout", args
         if sid in n and "status" in n:
             return f"{sid}_status", args
-        if sid in n and "cart" in n:
+        if sid in n and (
+            "cart" in n
+            or n == f"{sid}_list"
+            or n.endswith(f"{sid}_shopping_list")
+            or n.endswith(f"{sid}_lista")
+        ):
             return f"{sid}_cart", args
     retailer = (args.get("retailer") or args.get("store") or "").lower()
     if n == "bf_checkout" and retailer in ids:
@@ -1824,7 +1873,7 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
             return json.dumps(
                 {
                     "success": False,
-                    "error": "Cart only on Magento stores: grandiose or unioncoop. Others are search-only.",
+                    "error": "Cart on grandiose, unioncoop, or carrefour when the store is enabled. Others are search-only.",
                 }
             )
         return _mutate_cart(user, retailer, args)
@@ -1850,16 +1899,19 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
                 return json.dumps(
                     {
                         "success": False,
-                        "error": f"{name} is search-only. Cart/checkout only on Grandiose and Union Coop.",
+                        "error": f"{name} is search-only. Official cart on Grandiose, Union Coop, and Carrefour.",
                     }
                 )
             return _mutate_cart(user, sid, args)
         if name == f"{sid}_checkout":
-            if not r.get("shop"):
+            if not db.store_can_checkout(sid):
                 return json.dumps(
                     {
                         "success": False,
-                        "error": f"{name} is search-only. Cart/checkout only on Grandiose and Union Coop.",
+                        "error": (
+                            f"{name} is not wired. Fill the official cart with {sid}_cart; "
+                            "checkout stays on the supermarket website."
+                        ),
                     }
                 )
             return _checkout_store(user, sid)
@@ -1868,7 +1920,7 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
                 return json.dumps(
                     {
                         "success": False,
-                        "error": f"{name} is search-only. Cart/checkout only on Grandiose and Union Coop.",
+                        "error": f"{name} is search-only. Official cart on Grandiose, Union Coop, and Carrefour.",
                     }
                 )
             snap = _store_snapshot(user, sid)
@@ -1895,7 +1947,7 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
         {
             "success": False,
             "error": f"unknown tool {name}",
-            "use": "bf_search with query=... or grandiose_search / grandiose_cart",
+            "use": "bf_search with query=... or grandiose_search / grandiose_cart / carrefour_cart",
             "available": [t["name"] for t in tools_catalog()],
         }
     )

@@ -26,8 +26,15 @@ def test_retailers_have_logos_and_urls():
         "careem",
         "mcdonalds",
     }
-    assert {r["id"] for r in db.RETAILERS if r.get("enabled")} == {"grandiose"}
-    assert {r["id"] for r in db.RETAILERS if r.get("shop")} == {"grandiose", "unioncoop"}
+    assert {r["id"] for r in db.RETAILERS if r.get("enabled")} == {"grandiose", "carrefour"}
+    assert {r["id"] for r in db.RETAILERS if r.get("shop")} == {"grandiose", "unioncoop", "carrefour"}
+    assert {r["id"] for r in db.RETAILERS if r.get("checkout")} == {"grandiose", "unioncoop"}
+    assert db.store_can_shop("carrefour") is True
+    assert db.store_can_checkout("carrefour") is False
+    assert db.store_can_shop("grandiose") is True
+    assert db.store_can_checkout("grandiose") is True
+    assert db.store_can_shop("waitrose") is False
+    assert db.store_can_checkout("waitrose") is False
     for r in db.RETAILERS:
         assert r["url"].startswith("https://")
         assert r["logo"].startswith("/static/")

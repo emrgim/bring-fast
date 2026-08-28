@@ -32,6 +32,7 @@ RETAILERS = [
         "receipts": True,
         "login": True,
         "shop": True,
+        "checkout": True,
     },
     {
         "id": "unioncoop",
@@ -46,6 +47,7 @@ RETAILERS = [
         "receipts": False,
         "login": False,
         "shop": True,
+        "checkout": True,
     },
     {
         "id": "carrefour",
@@ -55,11 +57,12 @@ RETAILERS = [
         "color": "#004e9f",
         "cart_url": "https://www.carrefouruae.com/mafuae/en",
         "checkout_url": "https://www.carrefouruae.com/mafuae/en/cart",
-        "enabled": False,
+        "enabled": True,
         "search": True,
         "receipts": True,
         "login": True,
-        "shop": False,
+        "shop": True,
+        "checkout": False,
     },
     {
         "id": "waitrose",
@@ -74,6 +77,7 @@ RETAILERS = [
         "receipts": False,
         "login": True,
         "shop": False,
+        "checkout": False,
     },
     {
         "id": "spinneys",
@@ -88,6 +92,7 @@ RETAILERS = [
         "receipts": False,
         "login": True,
         "shop": False,
+        "checkout": False,
     },
     {
         "id": "mmi",
@@ -102,6 +107,7 @@ RETAILERS = [
         "receipts": True,
         "login": True,
         "shop": False,
+        "checkout": False,
     },
     {
         "id": "africaneastern",
@@ -116,6 +122,7 @@ RETAILERS = [
         "receipts": True,
         "login": True,
         "shop": False,
+        "checkout": False,
     },
     {
         # Food delivery, not a supermarket: the menu is per restaurant and per
@@ -133,6 +140,7 @@ RETAILERS = [
         "receipts": True,
         "login": False,
         "shop": False,
+        "checkout": False,
     },
     {
         # Counter food, not a supermarket: the menu is per restaurant and
@@ -150,6 +158,7 @@ RETAILERS = [
         "receipts": True,
         "login": False,
         "shop": False,
+        "checkout": False,
     },
 ]
 
@@ -648,10 +657,11 @@ def list_retailer_accounts(user_id: int) -> list[dict[str, Any]]:
 """What a store can do here, in the order the cards read it out.
 
 Search and price comparison read public catalog pages, so they go together and
-a store without a catalog to read has neither. Cart and checkout are Magento
-stores we have tested. Receipts is a parser for that store's invoices, and
-login is a saved store account, which is what receipts and carts are read with.
-A store can be receipts alone: its invoices are read, and nothing else.
+a store without a catalog to read has neither. Cart is a wired official basket
+(Magento or the Carrefour Android APIs). Checkout is Magento stores we have
+tested. Receipts is a parser for that store's invoices, and login is a saved
+store account, which is what receipts and carts are read with. A store can be
+receipts alone: its invoices are read, and nothing else.
 """
 CAPABILITIES = [
     ("search", "Search"),
@@ -671,7 +681,7 @@ def store_capabilities(retailer: str) -> list[dict[str, Any]]:
             "search": bool(r.get("search")),
             "compare": bool(r.get("search")),
             "cart": bool(r.get("shop")),
-            "checkout": bool(r.get("shop")),
+            "checkout": bool(r["checkout"]) if "checkout" in r else bool(r.get("shop")),
             "receipts": bool(r.get("receipts")),
             "login": bool(r.get("login")),
         }
@@ -714,8 +724,18 @@ def enabled_retailers() -> list[dict[str, Any]]:
 
 
 def store_can_shop(retailer: str) -> bool:
-    """Cart/checkout only for Magento stores we tested: Grandiose and Union Coop."""
+    """Official cart: Magento (Grandiose, Union Coop) or Carrefour Android APIs."""
     return bool(next((r.get("shop") for r in RETAILERS if r["id"] == retailer), False))
+
+
+def store_can_checkout(retailer: str) -> bool:
+    """Place-order from here. Magento only: Grandiose and Union Coop."""
+    for r in RETAILERS:
+        if r["id"] == retailer:
+            if "checkout" in r:
+                return bool(r.get("checkout"))
+            return bool(r.get("shop"))
+    return False
 
 
 def store_can_search(retailer: str) -> bool:

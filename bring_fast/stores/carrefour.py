@@ -254,10 +254,52 @@ def _product_card(product_id: str, name: str = "") -> dict[str, Any]:
     return card
 
 
-def add_item(*, token: str, user_id: str, product_id: str, qty: int = 1, name: str = "") -> dict[str, Any]:
-    """POST the live RetailSSO addItem proxy. Do not hit /v1/basket/.../item (Apigee 404)."""
+def _err_message(body: Any, fallback: str) -> str:
+    if not isinstance(body, dict):
+        return fallback
+    err_obj = body.get("error")
+    if isinstance(err_obj, dict):
+        msg = str(err_obj.get("message") or "")
+        if msg:
+            return msg
+    meta = body.get("meta")
+    if isinstance(meta, dict):
+        msg = str(meta.get("message") or "")
+        if msg:
+            return msg
+    return fallback
+
+
+def _basket(method: str, path: str, *, token: str, user_id: str, payload: dict[str, Any] | None, what: str) -> dict[str, Any]:
+    """Call BasketControllerV5 on either host. Chrome is not used."""
     s = session()
     headers = android_headers(token=token, user_id=user_id)
+    last_err: StoreAPIError | None = None
+    for host in API_HOSTS:
+        url = f"{host}/v1/basket/{MARKET}/{LANG}/{path}"
+        try:
+            resp = getattr(s, method)(url, json=payload, headers=headers, timeout=12)
+            body = json_or_error(resp, what)
+        except StoreAPIError as e:
+            last_err = e
+            continue
+        except Exception as e:
+            last_err = StoreAPIError(f"{type(e).__name__}")
+            continue
+        if resp.status_code < 400:
+            return body if isinstance(body, dict) else {"data": body}
+        last_err = StoreAPIError(
+            _err_message(body, f"{what} HTTP {resp.status_code}"),
+            status=resp.status_code,
+            body=body,
+        )
+        if resp.status_code in (401, 403):
+            raise last_err
+    raise last_err or StoreAPIError(f"{what} failed")
+
+
+def add_item(*, token: str, user_id: str, product_id: str, qty: int = 1, name: str = "") -> dict[str, Any]:
+    """POST BasketControllerV5.addItem. Prefer /entries on the site host; RetailSSO addItem is the fallback."""
     card = _product_card(str(product_id), name)
     if card.get("in_stock") is False:
         raise StoreAPIError(
@@ -276,20 +318,35 @@ def add_item(*, token: str, user_id: str, product_id: str, qty: int = 1, name: s
         "latitude": LAT,
         "longitude": LNG,
     }
-    url = f"https://api-prod.retailsso.com/v1/basket/{MARKET}/{LANG}/addItem"
-    resp = s.post(url, json=payload, headers=headers, timeout=12)
-    body = json_or_error(resp, "add")
-    if resp.status_code < 400:
-        return body
-    err = ""
-    if isinstance(body, dict):
-        err_obj = body.get("error")
-        if isinstance(err_obj, dict):
-            err = str(err_obj.get("message") or "")
-        meta = body.get("meta")
-        if not err and isinstance(meta, dict):
-            err = str(meta.get("message") or "")
-    raise StoreAPIError(err or f"add item HTTP {resp.status_code}", status=resp.status_code, body=body)
+    last_err: StoreAPIError | None = None
+    for path in ("entries", "addItem"):
+        try:
+            return _basket("post", path, token=token, user_id=user_id, payload=payload, what="add")
+        except StoreAPIError as e:
+            last_err = e
+            if e.status in (401, 403, 409):
+                raise
+            continue
+    raise last_err or StoreAPIError("add item failed")
+
+
+def remove_items(*, token: str, user_id: str, product_ids: list[str]) -> dict[str, Any]:
+    """DELETE BasketControllerV5.deleteProducts with DeleteProductRequestV5."""
+    ids = [str(pid) for pid in product_ids if str(pid).strip()]
+    if not ids:
+        return {}
+    last_err: StoreAPIError | None = None
+    for payload in ({"productIds": ids}, {"productId": ids[0]} if len(ids) == 1 else None):
+        if payload is None:
+            continue
+        try:
+            return _basket("delete", "entries", token=token, user_id=user_id, payload=payload, what="delete")
+        except StoreAPIError as e:
+            last_err = e
+            if e.status in (401, 403):
+                raise
+            continue
+    raise last_err or StoreAPIError("delete items failed")
 
 
 def parse_items(body: Any) -> list[dict[str, Any]]:
@@ -343,7 +400,16 @@ def official_cart(
             }
         token, user_id = auth["token"], auth["user_id"]
     try:
-        if action in ("add", "set"):
+        if action in ("clear", "create", "empty", "new"):
+            current = parse_items(lite_cart(token=token, user_id=user_id))
+            ids = [str(it.get("id") or "") for it in current if it.get("id")]
+            if ids:
+                remove_items(token=token, user_id=user_id, product_ids=ids)
+        elif action == "remove":
+            ids = [str(it.get("id") or "") for it in items if it.get("id")]
+            if ids:
+                remove_items(token=token, user_id=user_id, product_ids=ids)
+        elif action in ("add", "set"):
             for it in items:
                 add_item(
                     token=token,

@@ -74,7 +74,9 @@ def test_search_tools_exist_for_every_store(bf):
     assert "spinneys_search" in names
     assert "bf_compare" in names
     assert "unioncoop_cart" not in names
-    assert "carrefour_cart" not in names
+    assert "carrefour_cart" in names
+    assert "carrefour_status" in names
+    assert "carrefour_checkout" not in names
 
 
 def test_toggle_enables_unioncoop_tools(bf):
@@ -90,19 +92,31 @@ def test_toggle_enables_unioncoop_tools(bf):
     assert "grandiose" in ids
 
 
-def test_non_magento_store_is_search_only(bf):
+def test_carrefour_offers_cart_but_not_checkout(bf):
     user = bf.db.create_user("h@example.com", "secret1")
     names = {t["name"] for t in bf.tools_catalog()}
     assert "carrefour_search" in names
-    assert "carrefour_cart" not in names
+    assert "carrefour_cart" in names
+    assert "carrefour_status" in names
     assert "carrefour_checkout" not in names
-    out = json.loads(bf._call_tool(user, "carrefour_cart", {"action": "list"}))
+    out = json.loads(bf._call_tool(user, "carrefour_checkout", {}))
     assert out["success"] is False
-    assert "search-only" in out["error"].lower() or "magento" in out["error"].lower()
+    assert "carrefour_cart" in out["error"].lower()
     snap = json.loads(bf._call_tool(user, "bf_whoami", {}))
     carrefour = next(s for s in snap["stores"] if s["store_id"] == "carrefour")
-    assert carrefour["capabilities"] == ["search", "receipts"]
-    assert "union coop" in snap["note"].lower()
+    assert carrefour["capabilities"] == ["search", "cart", "receipts"]
+    assert "carrefour_cart" in carrefour["tools"]
+    assert "carrefour_checkout" not in carrefour["tools"]
+
+
+def test_waitrose_is_still_search_only(bf):
+    user = bf.db.create_user("h2@example.com", "secret1")
+    names = {t["name"] for t in bf.tools_catalog()}
+    assert "waitrose_search" in names
+    assert "waitrose_cart" not in names
+    out = json.loads(bf._call_tool(user, "waitrose_cart", {"action": "list"}))
+    assert out["success"] is False
+    assert "search-only" in out["error"].lower()
 
 
 def test_a_receipts_only_store_is_never_offered_a_search_tool(bf):
@@ -154,3 +168,79 @@ def test_searching_every_store_skips_the_one_with_no_catalog(bf, monkeypatch):
     assert "careem" not in asked
     assert "mcdonalds" not in asked
     assert "grandiose" in asked
+
+
+def test_carrefour_cart_adds_by_name(bf, monkeypatch):
+    user = bf.db.create_user("list@example.com", "secret1")
+    bf.db.set_retailer_account(user["id"], "carrefour", "shopper@example.com", "store-pass")
+    user = bf.db.get_user_by_id(user["id"])
+
+    monkeypatch.setattr(
+        bf.catalog,
+        "search",
+        lambda sid, query, limit: {
+            "retailer": sid,
+            "query": query,
+            "results": [{"id": "11530", "name": "Almarai Fresh Milk 1L", "price": 6.5}],
+        },
+    )
+    monkeypatch.setattr(
+        bf.checkout,
+        "official_cart",
+        lambda **kw: {
+            "ok": True,
+            "official_count": 1,
+            "items": [{"id": "11530", "name": "Almarai Fresh Milk 1L", "qty": 2, "price": 6.5}],
+            "logged_in": True,
+            "session_reused": False,
+            "driver": "android",
+            "token": "t",
+            "user_id": "u",
+        },
+    )
+    out = json.loads(bf._call_tool(user, "carrefour_cart", {"action": "add", "name": "milk", "qty": 2}))
+    assert out["success"] is True
+    assert out["picked"]["id"] == "11530"
+    assert out["items"][0]["qty"] == 2
+
+    aliased = json.loads(bf._call_tool(user, "carrefour_list", {"action": "list"}))
+    assert aliased["success"] is True
+    assert aliased["action"] == "list"
+
+
+def test_carrefour_cart_add_without_id_or_name_fails(bf):
+    user = bf.db.create_user("noid@example.com", "secret1")
+    out = json.loads(bf._call_tool(user, "carrefour_cart", {"action": "add", "qty": 1}))
+    assert out["success"] is False
+    assert "product_id or name" in out["error"]
+
+
+def test_carrefour_cart_create_empties_the_official_basket(bf, monkeypatch):
+    user = bf.db.create_user("empty@example.com", "secret1")
+    seen = []
+
+    def _live(**kw):
+        seen.append(kw["action"])
+        return {
+            "ok": True,
+            "official_count": 0,
+            "items": [],
+            "logged_in": True,
+            "session_reused": False,
+            "driver": "android",
+            "token": "t",
+            "user_id": "u",
+        }
+
+    monkeypatch.setattr(bf.checkout, "official_cart", _live)
+    for alias in ("create", "empty", "new", "clear"):
+        out = json.loads(bf._call_tool(user, "carrefour_cart", {"action": alias}))
+        assert out["success"] is True
+        assert out["action"] == "clear"
+        assert out["items"] == []
+    assert seen == ["clear", "clear", "clear", "clear"]
+
+    listed = json.loads(bf._call_tool(user, "carrefour_shopping_list", {"action": "list"}))
+    assert listed["success"] is True
+    italian = json.loads(bf._call_tool(user, "carrefour_lista", {"action": "list"}))
+    assert italian["success"] is True
