@@ -1757,16 +1757,28 @@ def run_checkout(
     password: str,
     address: str,
     items: list[dict[str, Any]],
+    action: str = "prepare",
+    payment_method: str = "",
 ) -> dict[str, Any]:
     if store == "grandiose":
         from bring_fast.stores import grandiose as grandiose_api
 
-        live = grandiose_api.official_checkout(email=email, password=password)
+        live = grandiose_api.official_checkout(
+            email=email,
+            password=password,
+            action=action,
+            payment_method=payment_method,
+        )
         return live
     if store == "unioncoop":
         from bring_fast.stores import unioncoop as unioncoop_api
 
-        live = unioncoop_api.official_checkout(email=email, password=password)
+        live = unioncoop_api.official_checkout(
+            email=email,
+            password=password,
+            action=action,
+            payment_method=payment_method,
+        )
         return live
     return _in_thread(
         _run_checkout_sync,

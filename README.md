@@ -182,7 +182,9 @@ Search and price comparison read public catalog pages, so they go together and a
 store with no catalog has neither. Cart is a wired official basket — Magento
 GraphQL for Grandiose, Magento REST for Union Coop (GraphQL there is
 Varnish-blocked), the Android APIs for Carrefour. Checkout prepares the official
-Magento cart and leaves payment on the store site. Receipts means there is a
+Magento cart. Grandiose can place with Magento `placeOrder` when asked (`ccod` /
+`cashondelivery` — on-delivery, no card number in Bring Fast). Union Coop REST
+checkout prepares only. Receipts means there is a
 parser for that store's invoices, and login means a saved store account, which is
 what receipts and baskets are read with.
 
@@ -231,7 +233,8 @@ Custom connector URL: `https://<your-host>/mcp`
 
 Grok discovers OAuth and opens the Bring Fast login. Friends register their own Bring Fast account; they never see another user’s stores.
 
-Official checkout stays on each supermarket site.
+Official checkout stays on each supermarket site. Grandiose Magento `ccod` /
+`cashondelivery` place the order on grandiose.ae without taking a card number.
 
 ## Tests
 

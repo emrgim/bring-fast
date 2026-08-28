@@ -816,7 +816,7 @@ def store_can_shop(retailer: str) -> bool:
 
 
 def store_can_checkout(retailer: str) -> bool:
-    """Prepare official Magento checkout (Grandiose GraphQL, Union Coop REST). Does not charge."""
+    """Official Magento checkout. Grandiose GraphQL can place ccod/cashondelivery; Union Coop REST prepares only. Does not charge a card."""
     for r in RETAILERS:
         if r["id"] == retailer:
             if "checkout" in r:

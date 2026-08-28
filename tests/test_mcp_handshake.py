@@ -149,11 +149,15 @@ def test_tools_list_is_reachable_after_the_handshake(client, token):
     tools = client.post("/mcp", headers=auth(token),
                         json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).json()["result"]["tools"]
     names = {t["name"] for t in tools}
-    assert {"bf_search", "bf_stores", "bf_compare", "bf_spend", "bf_products", "bf_shopping_list", "bf_product", "bf_orders", "grandiose_cart", "unioncoop_search", "unioncoop_cart", "carrefour_search", "carrefour_cart", "carrefour_status"} <= names
+    assert {"bf_search", "bf_stores", "bf_compare", "bf_spend", "bf_products", "bf_shopping_list", "bf_product", "bf_orders", "grandiose_cart", "grandiose_checkout", "unioncoop_search", "unioncoop_cart", "carrefour_search", "carrefour_cart", "carrefour_status"} <= names
     assert "carrefour_checkout" not in names
     assert "unioncoop_checkout" not in names
     assert "spinneys_checkout" not in names
     assert all(t["inputSchema"]["type"] == "object" for t in tools)
+    gco = next(t for t in tools if t["name"] == "grandiose_checkout")
+    assert "action" in gco["inputSchema"]["properties"]
+    assert "payment_method" in gco["inputSchema"]["properties"]
+    assert "ccod" in gco["description"]
 
 
 def test_discovery_advertises_the_public_host_not_localhost(client):
