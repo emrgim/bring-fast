@@ -45,6 +45,42 @@ def test_signing_out_stays_reachable_on_a_phone(bf, client):
     assert "nav.topnav .user { display:none" not in html
     assert "nav.topnav .user .who { display:none; }" in html
     assert '<span class="who">app@example.com · </span><a href="/logout">Sign out</a>' in html
+    assert 'data-theme-toggle' in html[html.index('<nav class="topnav">') : html.index("</nav>")]
+
+
+def test_signing_out_stays_in_the_header_while_scrolling(bf, client):
+    """Compact-on-scroll must not swallow Sign out, on Buys or any shared header."""
+    _signed_in(bf, client, "scrollout@example.com")
+
+    for path in ("/dashboard", "/purchases", "/stores"):
+        html = client.get(path).text
+        head = html[html.index('<header class="app-head">') : html.index("</header>")]
+        nav = head[head.index('<nav class="topnav">') : head.index("</nav>")]
+
+        assert '<a href="/logout">Sign out</a>' in nav, path
+        assert 'data-theme-toggle' in nav, path
+        # Compact drops the tagline and the address. It must not hide .user,
+        # which is the Sign out link itself.
+        assert "nav.is-compact .brand span, nav.is-compact .user .who { display:none; }" in html, path
+        assert "nav.is-compact .user { display:none" not in html, path
+        assert "nav.is-compact .user," not in html, path
+        assert "nav.classList.toggle(\"is-compact\", window.scrollY>24)" in html, path
+        # Actions stay in the header row instead of shrinking off the edge.
+        assert "flex-shrink:0" in html[html.index(".nav-right {") : html.index(".nav-right .theme-toggle")], path
+
+    buys = client.get("/purchases").text
+    # The Buys compact bar sticks *under* the header after the average, so
+    # Sign out stays in the title row rather than moving into the pin.
+    pin = buys[buys.index(".spend-pin {") : buys.index(".spend-pin.on")]
+    head_css = buys[buys.index(".app-head {") : buys.index("nav {")]
+    assert "z-index:40" in head_css
+    assert "z-index:35" in pin
+    assert "position:fixed" in pin
+    assert 'id="spend-pin"' in buys
+    assert "Sign out" not in buys[buys.index('id="spend-pin"') : buys.index('<div class="purchases-board">')]
+    phone = buys[buys.index("@media (max-width:720px)") :]
+    assert "nav.topnav .user { display:none" not in phone
+    assert "nav.topnav .user .who { display:none; }" in phone
 
 
 def test_a_landscape_notch_never_clips_a_row(bf, client):
