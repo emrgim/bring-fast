@@ -6,7 +6,10 @@ calls only — never override User-Agent (Akamai 403 if TLS Chrome + okhttp).
 
 from __future__ import annotations
 
+import json
+import os
 import uuid
+from pathlib import Path
 from typing import Any
 
 from bring_fast.stores.http import StoreAPIError, is_akamai_shell, json_or_error, session
@@ -41,8 +44,9 @@ def _new_impersonate(name: str):
 
 
 def chrome_session(existing=None):
-    """One Chrome client. GET the homepage first so Akamai cookies (_abck, bm_sz) stick."""
+    """One Chrome client. Replay browser cookies, then GET homepage."""
     if existing is not None:
+        apply_browser_cookies(existing)
         return existing
 
     def warmed(s) -> bool:
@@ -54,6 +58,7 @@ def chrome_session(existing=None):
         return not is_akamai_shell(text)
 
     s = session()
+    apply_browser_cookies(s)
     if warmed(s):
         return s
     for name in CHROME_IMPERSONATE:
@@ -61,9 +66,67 @@ def chrome_session(existing=None):
             alt = _new_impersonate(name)
         except Exception:
             continue
+        apply_browser_cookies(alt)
         if warmed(alt):
             return alt
     return s
+
+
+def _cookie_file() -> Path:
+    root = Path(os.environ.get("BRINGFAST_DATA", Path.home() / ".bring-fast"))
+    return root / "carrefour-net" / "cookies.json"
+
+
+def save_browser_cookies(cookies: list[dict[str, Any]]) -> None:
+    path = _cookie_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(cookies))
+    os.chmod(path, 0o600)
+
+
+def apply_browser_cookies(s) -> None:
+    """Replay the desktop Chrome cookie jar (token, _abck, ak_bmsc) onto curl_cffi."""
+    path = _cookie_file()
+    if not path.is_file():
+        return
+    try:
+        cookies = json.loads(path.read_text())
+    except Exception:
+        return
+    if not isinstance(cookies, list):
+        return
+    for c in cookies:
+        if not isinstance(c, dict) or not c.get("name"):
+            continue
+        domain = c.get("domain") or ".carrefouruae.com"
+        try:
+            s.cookies.set(c["name"], c.get("value") or "", domain=domain)
+        except Exception:
+            try:
+                s.cookies.set(c["name"], c.get("value") or "")
+            except Exception:
+                pass
+
+
+def token_from_browser_cookies() -> dict[str, str]:
+    path = _cookie_file()
+    out = {"token": "", "user_id": ""}
+    if not path.is_file():
+        return out
+    try:
+        cookies = json.loads(path.read_text())
+    except Exception:
+        return out
+    if not isinstance(cookies, list):
+        return out
+    for c in cookies:
+        if not isinstance(c, dict):
+            continue
+        if c.get("name") == "token":
+            out["token"] = str(c.get("value") or "")
+        if c.get("name") == "userId":
+            out["user_id"] = str(c.get("value") or "")
+    return out
 
 
 def android_headers(*, token: str = "", user_id: str = "") -> dict[str, str]:
@@ -205,6 +268,10 @@ def harvest_token_from_login_page(email: str, password: str) -> dict[str, Any]:
             cookies = {}
         captured["token"] = captured["token"] or cookies.get("token") or ""
         captured["user_id"] = captured["user_id"] or cookies.get("userId") or cookies.get("customerId") or ""
+        try:
+            save_browser_cookies(list(context.cookies()))
+        except Exception:
+            pass
         if captured["token"] and captured["user_id"]:
             return {"ok": True, "token": captured["token"], "user_id": captured["user_id"], "error": None}
         text = ""
@@ -460,6 +527,10 @@ def official_cart(
     """Official account cart. One Chrome session for homepage + liteCart + at most one login POST."""
     s = chrome_session(client)
     token, user_id = session_token, session_user
+    if not (token and user_id):
+        jar = token_from_browser_cookies()
+        token = token or jar.get("token") or ""
+        user_id = user_id or jar.get("user_id") or ""
     reused = bool(token and user_id)
     if not reused:
         auth = _auth(email, password, client=s)

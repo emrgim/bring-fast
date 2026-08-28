@@ -384,3 +384,19 @@ def test_chrome_session_skips_akamai_empty_homepage(monkeypatch):
     monkeypatch.setattr(api, "_new_impersonate", lambda name: _Real())
     s = api.chrome_session()
     assert isinstance(s, _Real)
+
+
+def test_browser_cookie_jar_supplies_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRINGFAST_DATA", str(tmp_path))
+    from bring_fast.stores import carrefour as api
+
+    api.save_browser_cookies(
+        [
+            {"name": "token", "value": "tok-from-chrome", "domain": ".carrefouruae.com"},
+            {"name": "userId", "value": "u42", "domain": ".carrefouruae.com"},
+            {"name": "_abck", "value": "akamai", "domain": ".carrefouruae.com"},
+        ]
+    )
+    jar = api.token_from_browser_cookies()
+    assert jar["token"] == "tok-from-chrome"
+    assert jar["user_id"] == "u42"
