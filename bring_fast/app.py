@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import secrets
 import sys
 from pathlib import Path
@@ -1247,6 +1248,8 @@ def _store_tools() -> list[dict[str, Any]]:
                 "(grandiose, unioncoop, or carrefour). "
                 "Waitrose and Spinneys are search-only. "
                 "action=list|add|set|remove|clear. add needs product_id or name, plus qty. "
+                "Carrefour add binds the MAF delivery store from the account location; "
+                "error_code=needs_delivery_slot means list the cart and retry. "
                 "clear (also create/empty/new) empties the official cart."
             ),
             "inputSchema": {
@@ -1400,6 +1403,8 @@ def _store_tools() -> list[dict[str, Any]]:
                 f"{name} official account cart — this is the shopping list Grok can fill. "
                 "action=list|add|set|remove|clear. "
                 "add needs product_id or name, plus qty. "
+                "Add binds the delivery store from the Carrefour account location (posInfo / SLOTTED). "
+                "If add returns error_code=needs_delivery_slot, list the cart to refresh the area, then retry. "
                 "clear (also create/empty/new) empties the cart into a fresh list. "
                 f"Checkout stays on the {name} website."
             )
@@ -1640,6 +1645,12 @@ def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> s
         ctx["store_login_ok"] = True
     ctx["store_session_reused"] = bool(live.get("session_reused"))
     ctx["driver"] = live.get("driver") or "http"
+    if live.get("delivery_address"):
+        ctx["delivery_address"] = live["delivery_address"]
+    for key in ("error_code", "maf_error", "item_errors", "food_pos", "area", "polygon_id", "pos"):
+        val = live.get(key)
+        if val not in (None, "", []):
+            ctx[key] = val
     if picked:
         ctx["picked"] = picked
         if also_matched:
@@ -1695,9 +1706,11 @@ def _checkout_store(user: dict[str, Any], sid: str) -> str:
 def _normalize_tool(name: str, args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     raw = (name or "").strip()
     n = raw.lower().replace("-", "_").replace(" ", "_")
+    n = re.sub(r"_+", "_", n).strip("_")
     for prefix in ("bring_fast_", "bringfast_", "fast_bring_", "fastbring_"):
         if n.startswith(prefix):
-            n = n[len(prefix) :]
+            n = n[len(prefix) :].strip("_")
+            break
     aliases = {
         "search": "bf_search",
         "product_search": "bf_search",
