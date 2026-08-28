@@ -307,6 +307,93 @@ def test_search_returns_catalog_hits(monkeypatch):
     assert out["results"][0]["name"] == "Coca-Cola Zero Calories"
 
 
+PAYMENTS = [
+    {"code": "ccod", "title": "Credit/Debit Card on Delivery"},
+    {"code": "cashondelivery", "title": "Cash On Delivery"},
+]
+
+
+def _addr():
+    return [
+        {
+            "id": 1,
+            "firstname": "E",
+            "lastname": "M",
+            "street": ["Element Me'aisam 731"],
+            "city": "Dubai",
+            "default_shipping": True,
+        }
+    ]
+
+
+def _checkout_gql(cart, *, methods=None, order_number="000000456", refuse_place=None):
+    methods = methods if methods is not None else PAYMENTS
+    calls = []
+
+    def _gql(token, query, variables=None):
+        calls.append((query, variables or {}))
+        q = " ".join(query.split())
+        if "placeOrder" in q:
+            if refuse_place:
+                raise StoreAPIError(refuse_place, status=400)
+            return {"data": {"placeOrder": {"order": {"order_number": order_number}}}}
+        if "setPaymentMethodOnCart" in q:
+            return {
+                "data": {
+                    "setPaymentMethodOnCart": {
+                        "cart": {"selected_payment_method": {"code": (variables or {}).get("m"), "title": "Credit/Debit Card on Delivery"}}
+                    }
+                }
+            }
+        if "cart(cart_id" in query or "available_payment_methods" in q:
+            return {
+                "data": {
+                    "cart": {
+                        **cart,
+                        "available_payment_methods": methods,
+                        "selected_payment_method": {},
+                        "shipping_addresses": [
+                            {
+                                "firstname": "E",
+                                "lastname": "M",
+                                "street": ["Element Me'aisam 731"],
+                                "city": "Dubai",
+                                "selected_shipping_method": {
+                                    "carrier_code": "tablerate",
+                                    "method_code": "bestway",
+                                    "method_title": "Home Delivery",
+                                    "amount": {"value": 0, "currency": "AED"},
+                                },
+                                "available_shipping_methods": [
+                                    {
+                                        "carrier_code": "tablerate",
+                                        "method_code": "bestway",
+                                        "method_title": "Home Delivery",
+                                        "amount": {"value": 0, "currency": "AED"},
+                                    }
+                                ],
+                            }
+                        ],
+                        "prices": {"grand_total": {"value": 48, "currency": "AED"}},
+                    }
+                }
+            }
+        return {"data": {}}
+
+    return _gql, calls
+
+
+def _patch_checkout(monkeypatch, api, cart=None, **gql_kw):
+    cart = cart if cart is not None else _raw_cart()
+    monkeypatch.setattr(api, "login", lambda e, p: {"ok": True, "token": "t", "user_id": "u", "error": None})
+    monkeypatch.setattr(api, "ensure_delivery_area", lambda: {"area_name": "IMPZ"})
+    monkeypatch.setattr(api, "customer_cart", lambda token: cart)
+    monkeypatch.setattr(api, "customer_addresses", lambda token: _addr())
+    gql, calls = _checkout_gql(cart, **gql_kw)
+    monkeypatch.setattr(api, "graphql", gql)
+    return calls
+
+
 def test_official_checkout_empty_cart(monkeypatch):
     from bring_fast.stores import grandiose as api
 
@@ -315,6 +402,7 @@ def test_official_checkout_empty_cart(monkeypatch):
     monkeypatch.setattr(api, "customer_cart", lambda token: {"id": "c1", "items": []})
     out = api.official_checkout(email="a@b.c", password="x")
     assert out["ok"] is False
+    assert out["placed"] is not True
     assert "empty" in (out.get("error") or "").lower()
 
 
@@ -322,33 +410,115 @@ def test_official_checkout_prepare_does_not_place(monkeypatch):
     from bring_fast.stores import grandiose as api
 
     cart = _raw_cart()
-    monkeypatch.setattr(api, "login", lambda e, p: {"ok": True, "token": "t", "user_id": "u", "error": None})
-    monkeypatch.setattr(api, "ensure_delivery_area", lambda: {"area_name": "IMPZ"})
-    monkeypatch.setattr(api, "customer_cart", lambda token: cart)
-    monkeypatch.setattr(
-        api,
-        "customer_addresses",
-        lambda token: [{"id": 1, "firstname": "E", "lastname": "M", "street": ["Element"], "city": "Dubai", "default_shipping": True}],
-    )
-
-    def _gql(token, query, variables=None):
-        if "cart(cart_id" in query:
-            return {
-                "data": {
-                    "cart": {
-                        **cart,
-                        "available_payment_methods": [{"code": "checkmo", "title": "Check"}],
-                        "shipping_addresses": [{}],
-                        "prices": {"grand_total": {"value": 10, "currency": "AED"}},
-                    }
-                }
-            }
-        return {"data": {}}
-
-    monkeypatch.setattr(api, "graphql", _gql)
+    calls = _patch_checkout(monkeypatch, api, cart)
     out = api.official_checkout(email="a@b.c", password="x")
     assert out["ok"] is True
     assert out["placed"] is False
     assert out["payment_completed"] is False
     assert "grandiose.ae" in (out.get("checkout_url") or "")
     assert "no order is placed" in (out.get("what_happens") or "").lower()
+    blob = " ".join(c[0] for c in calls)
+    assert "placeOrder" not in blob
+    assert "setPaymentMethodOnCart" not in blob
+
+
+def test_official_checkout_prepare_ignores_payment_method(monkeypatch):
+    from bring_fast.stores import grandiose as api
+
+    calls = _patch_checkout(monkeypatch, api)
+    out = api.official_checkout(email="a@b.c", password="x", action="prepare", payment_method="ccod")
+    assert out["ok"] is True
+    assert out["placed"] is False
+    blob = " ".join(c[0] for c in calls)
+    assert "placeOrder" not in blob
+    assert "setPaymentMethodOnCart" not in blob
+
+
+def test_official_checkout_place_ccod_issues_place_order(monkeypatch):
+    from bring_fast.stores import grandiose as api
+
+    calls = _patch_checkout(monkeypatch, api, order_number="000000456")
+    out = api.official_checkout(email="a@b.c", password="x", action="place", payment_method="ccod")
+    assert out["ok"] is True
+    assert out["placed"] is True
+    assert out["order_id"] == "000000456"
+    assert out["payment_completed"] is False
+    assert out["payment_method"] == "ccod"
+    assert out["stage"] == "placed"
+    blob = " ".join(c[0] for c in calls)
+    assert "setPaymentMethodOnCart" in blob
+    assert "placeOrder" in blob
+    assert any((c[1] or {}).get("m") == "ccod" for c in calls)
+
+
+def test_official_checkout_place_cashondelivery(monkeypatch):
+    from bring_fast.stores import grandiose as api
+
+    calls = _patch_checkout(monkeypatch, api, order_number="000000789")
+    out = api.official_checkout(email="a@b.c", password="x", action="place", payment_method="cashondelivery")
+    assert out["placed"] is True
+    assert out["order_id"] == "000000789"
+    assert any((c[1] or {}).get("m") == "cashondelivery" for c in calls)
+
+
+def test_official_checkout_unknown_method_is_not_placed(monkeypatch):
+    from bring_fast.stores import grandiose as api
+
+    calls = _patch_checkout(monkeypatch, api)
+    out = api.official_checkout(email="a@b.c", password="x", action="place", payment_method="checkmo")
+    assert out["ok"] is False
+    assert out["placed"] is not True
+    assert "ccod" in (out.get("error") or "").lower()
+    blob = " ".join(c[0] for c in calls)
+    assert "placeOrder" not in blob
+    assert "setPaymentMethodOnCart" not in blob
+
+
+def test_official_checkout_place_missing_method_is_not_placed(monkeypatch):
+    from bring_fast.stores import grandiose as api
+
+    calls = _patch_checkout(monkeypatch, api)
+    out = api.official_checkout(email="a@b.c", password="x", action="place")
+    assert out["ok"] is False
+    assert out["placed"] is not True
+    assert "payment_method" in (out.get("error") or "").lower()
+    blob = " ".join(c[0] for c in calls)
+    assert "placeOrder" not in blob
+
+
+def test_official_checkout_place_empty_cart_is_not_placed(monkeypatch):
+    from bring_fast.stores import grandiose as api
+
+    empty = {"id": "c1", "items": [], "total_quantity": 0}
+    calls = _patch_checkout(monkeypatch, api, empty)
+    out = api.official_checkout(email="a@b.c", password="x", action="place", payment_method="ccod")
+    assert out["ok"] is False
+    assert out["placed"] is not True
+    assert "empty" in (out.get("error") or "").lower()
+    blob = " ".join(c[0] for c in calls)
+    assert "placeOrder" not in blob
+
+
+def test_official_checkout_method_not_on_cart_is_not_placed(monkeypatch):
+    from bring_fast.stores import grandiose as api
+
+    calls = _patch_checkout(monkeypatch, api, methods=[{"code": "cashondelivery", "title": "Cash On Delivery"}])
+    out = api.official_checkout(email="a@b.c", password="x", action="place", payment_method="ccod")
+    assert out["ok"] is False
+    assert out["placed"] is not True
+    assert "not available" in (out.get("error") or "").lower()
+    blob = " ".join(c[0] for c in calls)
+    assert "placeOrder" not in blob
+    assert "setPaymentMethodOnCart" not in blob
+
+
+def test_official_checkout_magento_refuse_is_not_placed(monkeypatch):
+    from bring_fast.stores import grandiose as api
+
+    calls = _patch_checkout(monkeypatch, api, refuse_place="Unable to place order: shipping method is missing.")
+    out = api.official_checkout(email="a@b.c", password="x", action="place", payment_method="ccod")
+    assert out["ok"] is False
+    assert out["placed"] is not True
+    assert "unable to place order" in (out.get("error") or "").lower()
+    blob = " ".join(c[0] for c in calls)
+    assert "placeOrder" in blob

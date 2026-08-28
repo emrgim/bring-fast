@@ -3,7 +3,9 @@
 The storefront is Magento 2 Luma (theme Ktpl/unioncoop) with Algolia search.
 GraphQL on www.unioncoop.ae is Varnish-blocked (405), so cart/login/checkout
 use Magento REST `/rest/V1`, not Grandiose's GraphQL (no GetNearestLocation,
-no gagstore confirm, no cart_item_uid). Checkout does not place the order.
+no gagstore confirm, no cart_item_uid). Checkout prepares only; Magento REST
+place (shipping-information + payment-information) is not wired, so there is
+no action=place.
 """
 
 from __future__ import annotations
@@ -376,7 +378,29 @@ def prepare_checkout(*, token: str) -> dict[str, Any]:
     }
 
 
-def official_checkout(*, email: str, password: str, session_token: str = "") -> dict[str, Any]:
+def official_checkout(
+    *,
+    email: str,
+    password: str,
+    session_token: str = "",
+    action: str = "prepare",
+    payment_method: str = "",
+) -> dict[str, Any]:
+    a = (action or "prepare").strip().lower()
+    if a in ("place", "order", "placeorder", "place_order"):
+        return {
+            "ok": False,
+            "stage": "checkout",
+            "driver": "magento-rest",
+            "error": (
+                "unioncoop_checkout prepares Magento REST checkout only. "
+                "Placing the order is not wired (shipping and payment REST are not bound). "
+                "Payment stays on unioncoop.ae."
+            ),
+            "checkout_url": CHECKOUT_URL,
+            "payment_completed": False,
+            "placed": False,
+        }
     token = session_token
     if not token:
         auth = login(email, password)
@@ -387,6 +411,8 @@ def official_checkout(*, email: str, password: str, session_token: str = "") -> 
                 "driver": "magento-rest",
                 "error": auth.get("error") or "Union Coop login failed.",
                 "checkout_url": CHECKOUT_URL,
+                "payment_completed": False,
+                "placed": False,
             }
         token = auth["token"]
     try:
@@ -398,6 +424,8 @@ def official_checkout(*, email: str, password: str, session_token: str = "") -> 
             "driver": "magento-rest",
             "error": str(e),
             "checkout_url": CHECKOUT_URL,
+            "payment_completed": False,
+            "placed": False,
         }
 
 

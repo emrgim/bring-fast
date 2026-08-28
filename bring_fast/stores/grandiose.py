@@ -20,6 +20,8 @@ CONFIRM_URL = f"{SITE}/gagstore/deliverymode/confirm/"
 CHECKOUT_URL = f"{SITE}/checkout/"
 PACKAGE = "net.grandiose.retail"
 DELIVERY_NOTE = "Leave with security. Do not ring, call, or leave at the door."
+# Magento on-delivery methods. ccod = card at the door — Bring Fast never takes PAN.
+PLACE_PAYMENT_METHODS = frozenset({"ccod", "cashondelivery"})
 # Element Meaisam / Dubai Production City — same point as Carrefour.
 LAT = 25.0321285
 LNG = 55.1912732
@@ -731,6 +733,82 @@ def customer_addresses(token: str) -> list[dict[str, Any]]:
     return [r for r in rows if isinstance(r, dict)]
 
 
+def checkout_action(action: str | None) -> str:
+    a = (action or "prepare").strip().lower()
+    if a in ("", "prepare", "ready"):
+        return "prepare"
+    if a in ("place", "order", "placeorder", "place_order"):
+        return "place"
+    raise StoreAPIError(
+        f"Unknown checkout action {action!r}. Use action=prepare or action=place.",
+        status=400,
+        error_code="checkout_action_unknown",
+    )
+
+
+def place_payment_method(code: str | None) -> str:
+    m = (code or "").strip().lower()
+    if m in PLACE_PAYMENT_METHODS:
+        return m
+    raise StoreAPIError(
+        "action=place needs payment_method=ccod or cashondelivery. "
+        "ccod is Magento card-on-delivery — Bring Fast never takes a card number. "
+        f"Got {code!r}.",
+        status=400,
+        error_code="payment_method_missing" if not m else "payment_method_unknown",
+    )
+
+
+def set_payment_method(*, token: str, cart_id: str, code: str) -> dict[str, Any]:
+    data = graphql(
+        token,
+        """
+        mutation($c: String!, $m: String!) {
+          setPaymentMethodOnCart(input: { cart_id: $c, payment_method: { code: $m } }) {
+            cart { selected_payment_method { code title } }
+          }
+        }
+        """,
+        {"c": cart_id, "m": code},
+    )
+    return ((data.get("data") or {}).get("setPaymentMethodOnCart") or {}).get("cart") or {}
+
+
+def place_order(*, token: str, cart_id: str) -> str:
+    """Magento GraphQL placeOrder. No card PAN — method must already be on-delivery."""
+    query = """
+    mutation($c: String!) {
+      placeOrder(input: { cart_id: $c }) {
+        order { order_number }
+      }
+    }
+    """
+    try:
+        data = graphql(token, query, {"c": cart_id})
+    except StoreAPIError as e:
+        msg = str(e)
+        if "Cannot query field" in msg:
+            data = graphql(
+                token,
+                """
+                mutation($c: String!) {
+                  placeOrder(input: { cart_id: $c }) {
+                    orderV2 { number }
+                  }
+                }
+                """,
+                {"c": cart_id},
+            )
+        else:
+            raise
+    payload = ((data.get("data") or {}).get("placeOrder") or {})
+    order = payload.get("order") or payload.get("orderV2") or {}
+    number = str(order.get("order_number") or order.get("order_id") or order.get("number") or "").strip()
+    if not number:
+        raise StoreAPIError("Magento placeOrder returned no order id.", status=502, body=payload)
+    return number
+
+
 def prepare_checkout(*, token: str, address_id: int | None = None) -> dict[str, Any]:
     """Bind official customer address + Home Delivery. Does not place the order."""
     ensure_delivery_area()
@@ -856,12 +934,58 @@ def prepare_checkout(*, token: str, address_id: int | None = None) -> dict[str, 
         "what_happens": (
             "Official Grandiose cart is ready to pay. Methods on the account: "
             + pay_txt
-            + ". Payment stays on grandiose.ae — no order is placed until you say so."
+            + ". Payment stays on grandiose.ae — no order is placed until you say so. "
+            "To place: action=place payment_method=ccod or cashondelivery "
+            "(card/cash on delivery; Bring Fast never takes a card number)."
         ),
     }
 
 
-def official_checkout(*, email: str, password: str, session_token: str = "") -> dict[str, Any]:
+def place_checkout(*, token: str, payment_method: str, address_id: int | None = None) -> dict[str, Any]:
+    """Set Magento on-delivery method and placeOrder. Does not collect a card number."""
+    method = place_payment_method(payment_method)
+    ready = prepare_checkout(token=token, address_id=address_id)
+    methods = [p for p in (ready.get("payment_methods") or []) if isinstance(p, dict)]
+    codes = [str(p.get("code") or "") for p in methods]
+    if method not in codes:
+        listed = ", ".join(f"{p.get('title')} ({p.get('code')})" for p in methods)
+        raise StoreAPIError(
+            f"payment_method={method} is not available on this Grandiose cart. "
+            f"Methods: {listed or 'none'}.",
+            status=409,
+            error_code="payment_method_unavailable",
+        )
+    cart = customer_cart(token)
+    cid = str(cart.get("id") or "")
+    if not cid:
+        raise StoreAPIError("Grandiose customerCart missing.", status=409)
+    set_payment_method(token=token, cart_id=cid, code=method)
+    order_id = place_order(token=token, cart_id=cid)
+    title = next((p.get("title") for p in methods if str(p.get("code") or "") == method), method)
+    return {
+        **ready,
+        "ok": True,
+        "stage": "placed",
+        "placed": True,
+        "payment_completed": False,
+        "order_id": order_id,
+        "payment_method": method,
+        "selected_payment_method": {"code": method, "title": title},
+        "what_happens": (
+            f"Order {order_id} placed on grandiose.ae with {title} ({method}). "
+            "Bring Fast did not take a card number. Payment stays with Grandiose at delivery."
+        ),
+    }
+
+
+def official_checkout(
+    *,
+    email: str,
+    password: str,
+    session_token: str = "",
+    action: str = "prepare",
+    payment_method: str = "",
+) -> dict[str, Any]:
     token = session_token
     if not token:
         auth = login(email, password)
@@ -872,15 +996,28 @@ def official_checkout(*, email: str, password: str, session_token: str = "") -> 
                 "driver": "magento",
                 "error": auth.get("error") or "Grandiose login failed.",
                 "checkout_url": CHECKOUT_URL,
+                "payment_completed": False,
+                "placed": False,
             }
         token = auth["token"]
     try:
+        kind = checkout_action(action)
+        if kind == "place":
+            return place_checkout(token=token, payment_method=payment_method)
         return prepare_checkout(token=token)
     except StoreAPIError as e:
+        kind = "place"
+        try:
+            kind = checkout_action(action)
+        except StoreAPIError:
+            kind = "checkout"
         return {
             "ok": False,
-            "stage": "checkout",
+            "stage": "place" if kind == "place" else "checkout",
             "driver": "magento",
             "error": str(e),
+            "error_code": getattr(e, "error_code", None),
             "checkout_url": CHECKOUT_URL,
+            "payment_completed": False,
+            "placed": False,
         }

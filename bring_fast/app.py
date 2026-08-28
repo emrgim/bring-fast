@@ -1235,8 +1235,9 @@ def _store_tools() -> list[dict[str, Any]]:
             "description": (
                 "Search ALL supermarkets for price comparison. "
                 "Official cart on Grandiose, Union Coop, and Carrefour when enabled. "
-                "Checkout prepares official Magento checkout (Grandiose, Union Coop); "
-                "payment stays on the store site."
+                "Checkout: grandiose_checkout action=prepare (default) or "
+                "action=place payment_method=ccod|cashondelivery (Magento placeOrder; no card number). "
+                "Union Coop prepares only. Payment stays on the store site."
             ),
             "inputSchema": {
                 "type": "object",
@@ -1262,8 +1263,9 @@ def _store_tools() -> list[dict[str, Any]]:
                 "Carrefour add binds the MAF delivery store from the account location; "
                 "error_code=needs_delivery_slot means list the cart and retry. "
                 "clear (also create/empty/new) empties the official cart. "
-                "Checkout prepares official Magento checkout (Grandiose, Union Coop); "
-                "payment stays on the store site. MCP does not charge a card."
+                "Checkout: grandiose_checkout action=prepare (default) or "
+                "action=place payment_method=ccod|cashondelivery (Magento placeOrder; no card number). "
+                "Union Coop prepares only. MCP does not charge a card."
             ),
             "inputSchema": {
                 "type": "object",
@@ -1402,7 +1404,12 @@ def _store_tools() -> list[dict[str, Any]]:
                     + (
                         "Checkout stays on the website."
                         if not db.store_can_checkout(sid)
-                        else f"Prepare Magento checkout with {sid}_checkout; payment stays on the store site."
+                        else (
+                            f"Prepare or place Magento checkout with {sid}_checkout "
+                            "(action=place payment_method=ccod|cashondelivery). MCP does not charge a card."
+                            if sid == "grandiose"
+                            else f"Prepare Magento checkout with {sid}_checkout; payment stays on the store site."
+                        )
                     )
                 )
                 props.update(
@@ -1442,8 +1449,12 @@ def _store_tools() -> list[dict[str, Any]]:
                 f"{name} official {driver} cart. action=list|add|set|remove|clear "
                 "(list aliases: get, read, show, view). "
                 "Remove matches a live cart line by sku, item_id, or name — never success if the line is still there. "
-                f"Prepare checkout with {sid}_checkout when the store is enabled; payment stays on the store site. "
-                "MCP does not charge a card."
+                + (
+                    f"Checkout: {sid}_checkout action=prepare (default) or "
+                    "action=place payment_method=ccod|cashondelivery. MCP does not charge a card."
+                    if sid == "grandiose"
+                    else f"Prepare checkout with {sid}_checkout when the store is enabled; payment stays on the store site. MCP does not charge a card."
+                )
             )
         else:
             cart_desc = (
@@ -1475,14 +1486,39 @@ def _store_tools() -> list[dict[str, Any]]:
             }
         )
         if db.store_can_checkout(sid) and db.is_store_enabled(sid):
+            if sid == "grandiose":
+                checkout_desc = (
+                    "Official Grandiose Magento checkout. "
+                    "action=prepare (default) binds address + Home Delivery and lists methods; does not place. "
+                    "action=place payment_method=ccod|cashondelivery sets the Magento method and calls placeOrder. "
+                    "ccod is card-on-delivery — Bring Fast never takes a card number. "
+                    "Does not charge a card."
+                )
+                checkout_schema: dict[str, Any] = {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "description": "prepare (default) or place",
+                        },
+                        "payment_method": {
+                            "type": "string",
+                            "description": "ccod or cashondelivery; required for action=place",
+                        },
+                    },
+                }
+            else:
+                checkout_desc = (
+                    f"Prepare official {name} Magento REST checkout. "
+                    "Does not place the order or charge a card. Payment stays on the store site. "
+                    "There is no action=place on this tool."
+                )
+                checkout_schema = {"type": "object", "properties": {}}
             tools.append(
                 {
                     "name": f"{sid}_checkout",
-                    "description": (
-                        f"Prepare official {name} checkout on the Magento customer cart. "
-                        "Does not place the order or charge a card. Payment stays on the store site."
-                    ),
-                    "inputSchema": {"type": "object", "properties": {}},
+                    "description": checkout_desc,
+                    "inputSchema": checkout_schema,
                 }
             )
         tools.append(
@@ -2046,12 +2082,21 @@ def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> s
     return _ok(**ctx)
 
 
-def _checkout_store(user: dict[str, Any], sid: str) -> str:
+def _checkout_store(user: dict[str, Any], sid: str, args: dict[str, Any] | None = None) -> str:
+    args = args or {}
+    action = str(args.get("action") or "prepare")
+    payment_method = str(args.get("payment_method") or args.get("method") or "")
     listed = json.loads(_mutate_cart(user, sid, {"action": "list"}))
     if not listed.get("success"):
+        listed["placed"] = False
+        listed["payment_completed"] = False
         return json.dumps(listed, ensure_ascii=False)
     if not listed.get("items"):
+        listed["success"] = False
         listed["ready"] = False
+        listed["placed"] = False
+        listed["payment_completed"] = False
+        listed["error"] = listed.get("error") or "Official cart is empty."
         listed["what_happens"] = "Store cart is empty."
         return json.dumps(listed, ensure_ascii=False)
     creds = db.get_retailer_secret(user["id"], sid) or {}
@@ -2061,16 +2106,36 @@ def _checkout_store(user: dict[str, Any], sid: str) -> str:
         password=creds.get("password") or "",
         address=creds.get("address") or "",
         items=listed.get("items") or [],
+        action=action,
+        payment_method=payment_method,
     )
+    ok = bool(live.get("ok"))
+    placed = bool(live.get("placed"))
     listed.update(
         {
-            "ready": bool(live.get("ok")),
+            "success": ok,
+            "ready": ok,
+            "placed": placed,
+            "order_id": live.get("order_id"),
             "payment_completed": bool(live.get("payment_completed")),
+            "stage": live.get("stage"),
+            "payment_methods": live.get("payment_methods"),
+            "payment_method": live.get("payment_method"),
+            "grand_total": live.get("grand_total"),
+            "currency": live.get("currency") or listed.get("currency"),
+            "shipping_method": live.get("shipping_method"),
             "live_checkout": live,
             "checkout_url": live.get("final_url") or listed.get("checkout_url"),
             "what_happens": live.get("what_happens") or live.get("error"),
+            "error": None if ok else (live.get("error") or listed.get("error")),
+            "error_code": live.get("error_code"),
         }
     )
+    if live.get("delivery_address"):
+        listed["delivery_address"] = live["delivery_address"]
+    if live.get("items"):
+        listed["items"] = live["items"]
+        listed["item_count"] = sum(int(i.get("qty") or 1) for i in live["items"] if isinstance(i, dict))
     return json.dumps(listed, ensure_ascii=False)
 
 
@@ -2315,7 +2380,7 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
                         ),
                     }
                 )
-            return _checkout_store(user, sid)
+            return _checkout_store(user, sid, args)
         if name == f"{sid}_status":
             if not r.get("shop"):
                 return json.dumps(

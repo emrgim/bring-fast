@@ -269,13 +269,23 @@ def test_checkout_prepare_empty(monkeypatch):
 
 
 def test_checkout_prepare_does_not_place(monkeypatch):
-    _patch(monkeypatch)
+    state = _patch(monkeypatch)
     out = api.official_checkout(email="a@b.c", password="x")
     assert out["ok"] is True
     assert out["placed"] is False
     assert out["payment_completed"] is False
     assert out["checkout_url"] == "https://www.unioncoop.ae/checkout/"
     assert "no order is placed" in (out.get("what_happens") or "").lower()
+    assert not any("payment-information" in str(c[1]) or "/order" in str(c[1]) for c in state["calls"])
+
+
+def test_checkout_place_is_not_wired(monkeypatch):
+    state = _patch(monkeypatch)
+    out = api.official_checkout(email="a@b.c", password="x", action="place", payment_method="ccod")
+    assert out["ok"] is False
+    assert out["placed"] is not True
+    assert "not wired" in (out.get("error") or "").lower()
+    assert not any("payment-information" in str(c[1]) or c[0] == "PUT" for c in state["calls"])
 
 
 def test_login_posts_magento_customer_token(monkeypatch):

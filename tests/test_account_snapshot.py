@@ -1064,12 +1064,162 @@ def test_magento_cart_tools_match_wired_drivers(bf):
     uc_schema = next(t["inputSchema"] for t in bf.tools_catalog() if t["name"] == "unioncoop_cart")
     assert "item_id" in uc_schema["properties"]
     checkout = tools["grandiose_checkout"]
-    assert "does not place the order or charge a card" in checkout
+    assert "action=place" in checkout
+    assert "ccod" in checkout
+    assert "cashondelivery" in checkout
+    assert "does not charge a card" in checkout
+    schema = next(t["inputSchema"] for t in bf.tools_catalog() if t["name"] == "grandiose_checkout")
+    assert "action" in schema["properties"]
+    assert "payment_method" in schema["properties"]
     assert "unioncoop_checkout" not in tools
     bf.db.set_store_enabled("unioncoop", True)
     tools = {t["name"]: t["description"].lower() for t in bf.tools_catalog()}
     assert "does not place the order or charge a card" in tools["unioncoop_checkout"]
+    assert "no action=place" in tools["unioncoop_checkout"]
+    uc_schema = next(t["inputSchema"] for t in bf.tools_catalog() if t["name"] == "unioncoop_checkout")
+    assert "payment_method" not in uc_schema.get("properties", {})
     bf_cart = tools["bf_cart"]
     assert "unioncoop_cart" in bf_cart
     assert "item_id" in next(t["inputSchema"] for t in bf.tools_catalog() if t["name"] == "bf_cart")["properties"]
+
+
+COKE_CAN = {
+    "id": "5449000131812",
+    "name": "Coca-Cola Can Zero 330ml",
+    "qty": 4,
+    "price": 12,
+}
+
+
+def _live_cart_coke(**kw):
+    return {
+        "ok": True,
+        "official_count": 1,
+        "items": [dict(COKE_CAN)],
+        "logged_in": True,
+        "token": "t",
+        "user_id": "u",
+        "driver": "magento",
+    }
+
+
+def test_grandiose_checkout_prepare_does_not_place(bf, monkeypatch):
+    user = _user_with_grandiose(bf)
+    seen = []
+
+    def _run(**kw):
+        seen.append(kw)
+        return {
+            "ok": True,
+            "placed": False,
+            "payment_completed": False,
+            "stage": "payment",
+            "grand_total": 48,
+            "currency": "AED",
+            "items": [dict(COKE_CAN)],
+            "payment_methods": [
+                {"code": "ccod", "title": "Credit/Debit Card on Delivery"},
+                {"code": "cashondelivery", "title": "Cash On Delivery"},
+            ],
+            "what_happens": "Payment stays on grandiose.ae — no order is placed until you say so.",
+            "final_url": "https://www.grandiose.ae/checkout/",
+        }
+
+    monkeypatch.setattr(bf.checkout, "official_cart", _live_cart_coke)
+    monkeypatch.setattr(bf.checkout, "run_checkout", _run)
+    out = json.loads(bf._call_tool(user, "grandiose_checkout", {}))
+    assert out["success"] is True
+    assert out["placed"] is False
+    assert out["payment_completed"] is False
+    assert seen[0]["action"] == "prepare"
+    assert "placeOrder" not in json.dumps(seen)
+
+
+def test_grandiose_checkout_place_ccod_returns_order_id(bf, monkeypatch):
+    user = _user_with_grandiose(bf)
+    seen = []
+
+    def _run(**kw):
+        seen.append(kw)
+        return {
+            "ok": True,
+            "placed": True,
+            "payment_completed": False,
+            "stage": "placed",
+            "order_id": "000000456",
+            "payment_method": "ccod",
+            "grand_total": 48,
+            "currency": "AED",
+            "items": [dict(COKE_CAN)],
+            "what_happens": "Order 000000456 placed on grandiose.ae with Credit/Debit Card on Delivery (ccod).",
+            "final_url": "https://www.grandiose.ae/checkout/",
+        }
+
+    monkeypatch.setattr(bf.checkout, "official_cart", _live_cart_coke)
+    monkeypatch.setattr(bf.checkout, "run_checkout", _run)
+    out = json.loads(
+        bf._call_tool(user, "grandiose_checkout", {"action": "place", "payment_method": "ccod"})
+    )
+    assert out["success"] is True
+    assert out["placed"] is True
+    assert out["order_id"] == "000000456"
+    assert out["payment_completed"] is False
+    assert seen[0]["action"] == "place"
+    assert seen[0]["payment_method"] == "ccod"
+
+
+def test_grandiose_checkout_empty_cart_is_not_placed(bf, monkeypatch):
+    user = _user_with_grandiose(bf)
+    seen = []
+
+    def _live(**kw):
+        return {
+            "ok": True,
+            "official_count": 0,
+            "items": [],
+            "logged_in": True,
+            "token": "t",
+            "user_id": "u",
+            "driver": "magento",
+        }
+
+    def _run(**kw):
+        seen.append(kw)
+        raise AssertionError("empty cart must not call Magento placeOrder")
+
+    monkeypatch.setattr(bf.checkout, "official_cart", _live)
+    monkeypatch.setattr(bf.checkout, "run_checkout", _run)
+    out = json.loads(
+        bf._call_tool(user, "grandiose_checkout", {"action": "place", "payment_method": "ccod"})
+    )
+    assert out["placed"] is not True
+    assert out["success"] is False
+    assert "empty" in (out.get("what_happens") or out.get("error") or "").lower()
+    assert seen == []
+
+
+def test_grandiose_checkout_unknown_method_is_not_placed(bf, monkeypatch):
+    user = _user_with_grandiose(bf)
+
+    def _run(**kw):
+        return {
+            "ok": False,
+            "placed": False,
+            "payment_completed": False,
+            "stage": "place",
+            "error": (
+                "action=place needs payment_method=ccod or cashondelivery. "
+                "ccod is Magento card-on-delivery — Bring Fast never takes a card number. "
+                f"Got {kw.get('payment_method')!r}."
+            ),
+        }
+
+    monkeypatch.setattr(bf.checkout, "official_cart", _live_cart_coke)
+    monkeypatch.setattr(bf.checkout, "run_checkout", _run)
+    out = json.loads(
+        bf._call_tool(user, "grandiose_checkout", {"action": "place", "payment_method": "visa"})
+    )
+    assert out["placed"] is not True
+    assert out["success"] is False
+    assert "ccod" in (out.get("error") or out.get("what_happens") or "").lower()
 
