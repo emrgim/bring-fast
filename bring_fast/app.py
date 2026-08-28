@@ -547,13 +547,15 @@ def stores_page(request: Request, welcome: int = 0, notice: str = ""):
     if not user:
         return RedirectResponse("/login?mode=signin&next=/stores", status_code=303)
     _remember(request, user)
+    probes = db.store_probes_for_user(user["id"])
     return templates.TemplateResponse(
         request,
         "dashboard.html",
         {
             "user": user,
             "retailers": [
-                {**r, "caps": db.store_capabilities(r["id"])} for r in db.list_retailer_accounts(user["id"])
+                {**r, "caps": db.store_capabilities(r["id"], probes=probes)}
+                for r in db.list_retailer_accounts(user["id"])
             ],
             "mcp_url": mcp_url(request),
             "title": "Stores · Bring Fast",
@@ -587,7 +589,7 @@ def store_page(request: Request, retailer: str, notice: str = "", edit: int = 0)
         {
             "user": user,
             "store": store,
-            "caps": db.store_capabilities(retailer),
+            "caps": db.store_capabilities(retailer, user_id=user["id"]),
             "edit": bool(edit) or not store["login_email"],
             "title": f"{store['name']} · Bring Fast",
             "notice": notice,
@@ -1615,6 +1617,11 @@ def _store_ctx(user: dict[str, Any], retailer: str, items: list | None = None, t
     }
 
 
+def _record_cart_probe(user: dict[str, Any], retailer: str, *, ok: bool, error_code: str | None = None) -> None:
+    """Stores pills read this. MCP cart tools stay on either way."""
+    db.record_store_probe(int(user["id"]), retailer, "cart", ok=ok, error_code=error_code)
+
+
 def _resolve_cart_line(retailer: str, args: dict[str, Any]) -> tuple[str, str, list[dict[str, Any]], str | None, str]:
     """product_id or a catalog name. Returns id, name, other matches, error, url."""
     pid = str(args.get("product_id") or args.get("id") or args.get("sku") or "").strip()
@@ -1934,6 +1941,7 @@ def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> s
             session_user=creds.get("store_user_id") or "",
         )
     except checkout.LiveCartTimeout as e:
+        _record_cart_probe(user, retailer, ok=False, error_code="cart_timeout")
         ctx = _store_ctx(user, retailer, items=[])
         ctx["action"] = action
         ctx["official_count"] = None
@@ -1971,6 +1979,12 @@ def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> s
             live["error_code"] = None
             live["maf_error"] = None
             live["item_errors"] = []
+    _record_cart_probe(
+        user,
+        retailer,
+        ok=bool(live.get("ok")),
+        error_code=None if live.get("ok") else (live.get("error_code") or "unread"),
+    )
     if live.get("token") and live.get("user_id"):
         db.save_store_session(user["id"], retailer, token=live["token"], store_user_id=str(live["user_id"]))
     ctx = _store_ctx(user, retailer, items=items)

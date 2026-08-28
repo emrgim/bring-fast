@@ -47,24 +47,34 @@ def test_retailers_have_logos_and_urls():
     assert callable(unioncoop_api.official_checkout)
     assert callable(unioncoop_api.search)
     assert callable(grandiose_api.remove_item)
-    union = {c["key"]: c["on"] for c in db.store_capabilities("unioncoop")}
-    assert union == {
+    union = {c["key"]: c for c in db.store_capabilities("unioncoop")}
+    assert {k: c["on"] for k, c in union.items()} == {
         "search": True,
         "compare": True,
-        "cart": True,
+        "cart": False,
         "checkout": True,
         "receipts": False,
         "login": True,
     }
-    grandiose = {c["key"]: c["on"] for c in db.store_capabilities("grandiose")}
-    assert grandiose == {
+    assert union["cart"]["declared"] is True
+    assert union["cart"]["label"] == "Cart · declared"
+    assert db.store_can_shop("unioncoop") is True
+    grandiose = {c["key"]: c for c in db.store_capabilities("grandiose")}
+    assert {k: c["on"] for k, c in grandiose.items()} == {
         "search": True,
         "compare": True,
-        "cart": True,
+        "cart": False,
         "checkout": True,
         "receipts": True,
         "login": True,
     }
+    assert grandiose["cart"]["declared"] is True
+    carrefour = {c["key"]: c for c in db.store_capabilities("carrefour")}
+    assert carrefour["cart"]["declared"] is True
+    assert carrefour["cart"]["on"] is False
+    assert carrefour["checkout"]["declared"] is False
+    assert carrefour["checkout"]["on"] is False
+    assert db.store_can_shop("carrefour") is True
     for r in db.RETAILERS:
         assert r["url"].startswith("https://")
         assert r["logo"].startswith("/static/")
@@ -87,8 +97,8 @@ def test_a_receipts_only_store_is_left_out_of_search():
     assert db.store_can_search("mcdonalds") is False
     assert "careem" not in catalog.SEARCHERS
     assert "mcdonalds" not in catalog.SEARCHERS
-    caps = {c["key"]: c["on"] for c in db.store_capabilities("careem")}
-    assert caps == {
+    caps = {c["key"]: c for c in db.store_capabilities("careem")}
+    assert {k: c["on"] for k, c in caps.items()} == {
         "search": False,
         "compare": False,
         "cart": False,
@@ -96,10 +106,28 @@ def test_a_receipts_only_store_is_left_out_of_search():
         "receipts": True,
         "login": False,
     }
-    assert {c["key"]: c["on"] for c in db.store_capabilities("mcdonalds")} == caps
+    assert caps["cart"]["declared"] is False
+    assert {c["key"]: c["on"] for c in db.store_capabilities("mcdonalds")} == {
+        k: c["on"] for k, c in caps.items()
+    }
 
 
 def test_catalog_unknown_retailer():
     out = catalog.search("unknown-store", "milk", 1)
     assert out["results"] == []
     assert "unknown" in (out.get("error") or "")
+
+
+def test_a_passing_cart_probe_fills_only_that_store(bf):
+    user = bf.db.create_user("probe@example.com", "secret1")
+    bf.db.record_store_probe(user["id"], "grandiose", "cart", ok=True)
+    bf.db.record_store_probe(user["id"], "carrefour", "cart", ok=False, error_code="litecart_http_error")
+    g = {c["key"]: c for c in bf.db.store_capabilities("grandiose", user_id=user["id"])}
+    c = {row["key"]: row for row in bf.db.store_capabilities("carrefour", user_id=user["id"])}
+    assert g["cart"]["on"] is True
+    assert g["cart"]["label"] == "Cart"
+    assert c["cart"]["on"] is False
+    assert c["cart"]["declared"] is True
+    assert c["cart"]["label"] == "Cart · declared"
+    assert c["cart"]["hint"] == "litecart_http_error"
+    assert c["checkout"]["on"] is False

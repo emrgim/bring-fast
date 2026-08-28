@@ -6,6 +6,14 @@ reading stores out. Inside a store, a saved login is printed until the person
 asks to edit it.
 """
 
+from __future__ import annotations
+
+import json
+
+
+def _caps(card: str) -> str:
+    return card[card.index('class="caps"') : card.index('class="go"')]
+
 
 def _sign_in(client):
     client.post("/login", data={"email": "friend@example.com", "password": "secret1"})
@@ -35,28 +43,34 @@ def test_a_store_that_cannot_shop_says_so_on_its_card(bf, client):
     page = client.get("/stores").text
 
     # Waitrose can be searched, but not shopped.
-    card = page.split('id="store-waitrose"')[1].split("</a>")[0]
+    card = _caps(page.split('id="store-waitrose"')[1].split("</a>")[0])
     assert 'class="cap no">Cart' in card
+    assert "Cart · declared" not in card
     assert 'class="cap no">Checkout' in card
     assert 'class="cap">Search' in card
 
 
-def test_carrefour_can_fill_a_basket_but_not_check_out(bf, client):
+def test_carrefour_does_not_paint_cart_live_from_shop_alone(bf, client):
     _sign_in(client)
     page = client.get("/stores").text
-    card = page.split('id="store-carrefour"')[1].split("</a>")[0]
-    assert 'class="cap">Cart' in card
+    card = _caps(page.split('id="store-carrefour"')[1].split("</a>")[0])
+    assert 'class="cap no declared"' in card
+    assert "Cart · declared" in card
+    assert 'class="cap">Cart' not in card
     assert 'class="cap no">Checkout' in card
     assert 'class="cap">Search' in card
+    assert 'class="cap">Compare' in card
     assert 'class="cap">Receipts' in card
 
 
 def test_unioncoop_card_matches_wired_magento_rest(bf, client):
     _sign_in(client)
     page = client.get("/stores").text
-    card = page.split('id="store-unioncoop"')[1].split("</a>")[0]
+    card = _caps(page.split('id="store-unioncoop"')[1].split("</a>")[0])
     assert 'class="cap">Search' in card
-    assert 'class="cap">Cart' in card
+    assert 'class="cap no declared"' in card
+    assert "Cart · declared" in card
+    assert 'class="cap">Cart' not in card
     assert 'class="cap">Checkout' in card
     assert 'class="cap">Login' in card
     assert 'class="cap no">Receipts' in card
@@ -78,7 +92,7 @@ def test_a_receipts_only_store_says_it_is_there_for_its_invoices(bf, client):
     page = client.get("/stores").text
 
     for store_id in ("careem", "mcdonalds"):
-        card = page.split(f'id="store-{store_id}"')[1].split("</a>")[0]
+        card = _caps(page.split(f'id="store-{store_id}"')[1].split("</a>")[0])
         assert 'class="cap no">Search' in card
         assert 'class="cap no">Compare' in card
         assert 'class="cap no">Cart' in card
@@ -179,3 +193,87 @@ def test_a_store_page_needs_a_sign_in(bf, client):
 
     assert r.status_code == 303
     assert r.headers["location"] == "/login?mode=signin&next=/stores/grandiose"
+
+
+def test_carrefour_cart_pill_stays_outlined_after_a_failed_list(bf, client, monkeypatch):
+    """shop=True is not a live cart. Akamai/liteCart unread must not look active."""
+    user = bf.db.create_user("pills@example.com", "secret1")
+    bf.db.set_retailer_account(user["id"], "carrefour", "e@example.com", "store-pass")
+    bf.db.set_retailer_account(user["id"], "grandiose", "e@example.com", "store-pass")
+    user = bf.db.get_user_by_id(user["id"])
+
+    def live(**kwargs):
+        if kwargs.get("store") == "grandiose":
+            return {
+                "ok": True,
+                "logged_in": True,
+                "items": [{"id": "1", "name": "Coca-Cola Zero", "qty": 1}],
+            }
+        return {
+            "ok": False,
+            "logged_in": True,
+            "items": [],
+            "error": "unread",
+            "error_code": "akamai_blocked",
+        }
+
+    monkeypatch.setattr(bf.checkout, "official_cart", live)
+    failed = json.loads(bf._call_tool(user, "carrefour_cart", {"action": "list"}))
+    assert failed.get("success") is False
+    assert failed.get("live_cart_ok") is False
+    ok = json.loads(bf._call_tool(user, "grandiose_cart", {"action": "list"}))
+    assert ok.get("success") is True
+
+    names = {t["name"] for t in bf.tools_catalog()}
+    assert "carrefour_cart" in names
+    assert "bf_cart" in names
+    assert "grandiose_cart" in names
+
+    client.post(
+        "/login",
+        data={"email": "pills@example.com", "password": "secret1", "intent": "signin"},
+    )
+    page = client.get("/stores").text
+    carrefour = _caps(page.split('id="store-carrefour"')[1].split("</a>")[0])
+    grandiose = _caps(page.split('id="store-grandiose"')[1].split("</a>")[0])
+    assert 'class="cap no declared"' in carrefour
+    assert "Cart · declared" in carrefour
+    assert 'class="cap">Cart' not in carrefour
+    assert "akamai_blocked" in carrefour
+    assert 'class="cap no">Checkout' in carrefour
+    assert 'class="cap">Search' in carrefour
+    assert 'class="cap">Cart</span>' in grandiose
+    assert "Cart · declared" not in grandiose
+
+    detail = client.get("/stores/carrefour").text
+    assert "akamai_blocked" in detail
+    assert "Fill a basket on Carrefour" not in detail
+    assert "last official list did not succeed" in detail
+
+
+def test_grandiose_cart_pill_fills_after_a_successful_list(bf, client, monkeypatch):
+    user = bf.db.create_user("gok@example.com", "secret1")
+    bf.db.set_retailer_account(user["id"], "grandiose", "e@example.com", "store-pass")
+    user = bf.db.get_user_by_id(user["id"])
+
+    monkeypatch.setattr(
+        bf.checkout,
+        "official_cart",
+        lambda **_kwargs: {
+            "ok": True,
+            "logged_in": True,
+            "items": [{"id": "1", "name": "Coca-Cola Zero", "qty": 1}],
+        },
+    )
+    out = json.loads(bf._call_tool(user, "grandiose_cart", {"action": "list"}))
+    assert out.get("success") is True
+
+    client.post(
+        "/login",
+        data={"email": "gok@example.com", "password": "secret1", "intent": "signin"},
+    )
+    card = _caps(client.get("/stores").text.split('id="store-grandiose"')[1].split("</a>")[0])
+    assert 'class="cap">Cart</span>' in card
+    assert "Cart · declared" not in card
+    detail = client.get("/stores/grandiose").text
+    assert "Fill a basket on Grandiose from here." in detail
