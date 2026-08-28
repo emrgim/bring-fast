@@ -78,7 +78,14 @@ def _extract_session(body: Any, resp) -> dict[str, str]:
     return {"token": str(token or ""), "user_id": str(user_id or "")}
 
 
+AKAMAI_UNREAD = (
+    "Carrefour blocked the login API from this server (Akamai). "
+    "The saved store login is still present. Official cart unread."
+)
+
+
 def login(email: str, password: str) -> dict[str, Any]:
+    """One POST to /v2/customers/login. Do not spray other grant URLs (Carrefour lockout)."""
     if not email or not password:
         return {"ok": False, "token": "", "user_id": "", "error": "Missing Carrefour email or password."}
     s = session()
@@ -87,32 +94,24 @@ def login(email: str, password: str) -> dict[str, Any]:
         s.get(f"{SITE}/{MARKET}/{LANG}", headers=headers, timeout=8)
     except Exception:
         pass
-    payloads = [
-        {"email": email, "password": password, "langCode": LANG, "storeId": MARKET},
-    ]
-    paths = ("/v2/customers/login",)
-    last_err = "Android login API failed."
-    for host in (SITE,):
-        for path in paths:
-            for payload in payloads:
-                url = host + path
-                try:
-                    resp = s.post(url, json=payload, headers=headers, timeout=8)
-                    body = json_or_error(resp, "login")
-                except StoreAPIError as e:
-                    last_err = str(e)
-                    continue
-                except Exception as e:
-                    last_err = f"{type(e).__name__}"
-                    continue
-                sess = _extract_session(body, resp)
-                if isinstance(body, dict) and body.get("access_token") and not sess["token"]:
-                    sess["token"] = str(body.get("access_token") or "")
-                    sess["user_id"] = sess["user_id"] or str(body.get("user_id") or body.get("userId") or "")
-                if resp.status_code < 400 and sess["token"]:
-                    return {"ok": True, "token": sess["token"], "user_id": sess["user_id"], "error": None}
-                meta = body.get("meta") if isinstance(body, dict) else {}
-                last_err = (meta or {}).get("message") or f"HTTP {resp.status_code}"
+    url = f"{SITE}/v2/customers/login"
+    payload = {"email": email, "password": password, "langCode": LANG, "storeId": MARKET}
+    try:
+        resp = s.post(url, json=payload, headers=headers, timeout=8)
+        body = json_or_error(resp, "login")
+    except StoreAPIError as e:
+        err = AKAMAI_UNREAD if (e.status == 403 or "akamai" in str(e).lower()) else f"Carrefour Android login: {e}"
+        return {"ok": False, "token": "", "user_id": "", "error": err}
+    except Exception as e:
+        return {"ok": False, "token": "", "user_id": "", "error": f"Carrefour Android login: {type(e).__name__}"}
+    sess = _extract_session(body, resp)
+    if isinstance(body, dict) and body.get("access_token") and not sess["token"]:
+        sess["token"] = str(body.get("access_token") or "")
+        sess["user_id"] = sess["user_id"] or str(body.get("user_id") or body.get("userId") or "")
+    if resp.status_code < 400 and sess["token"]:
+        return {"ok": True, "token": sess["token"], "user_id": sess["user_id"], "error": None}
+    meta = body.get("meta") if isinstance(body, dict) else {}
+    last_err = (meta or {}).get("message") or f"HTTP {resp.status_code}"
     return {"ok": False, "token": "", "user_id": "", "error": f"Carrefour Android login: {last_err}"}
 
 
@@ -433,8 +432,10 @@ def official_cart(
             "user_id": user_id,
         }
     except StoreAPIError as e:
-        if reused and e.status in (401, 403) and email and password:
+        akamai = e.status == 403 or "akamai" in str(e).lower()
+        if reused and e.status == 401 and email and password and not akamai:
             return official_cart(email=email, password=password, action=action, items=items, session_token="", session_user="")
+        err = AKAMAI_UNREAD if akamai else str(e)
         return {
             "ok": False,
             "official_count": None,
@@ -443,7 +444,7 @@ def official_cart(
             "session_reused": reused,
             "driver": "android",
             "client": PACKAGE,
-            "error": str(e),
+            "error": err,
             "token": token,
             "user_id": user_id,
         }

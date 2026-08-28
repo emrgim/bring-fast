@@ -64,6 +64,43 @@ class _FakeSession:
         return _FakeResp(404, {"meta": {"message": "no"}})
 
 
+def test_akamai_login_does_not_look_like_missing_password(monkeypatch):
+    from bring_fast.stores import carrefour as api
+    from bring_fast.stores.http import StoreAPIError
+
+    class _Denied:
+        def get(self, *a, **k):
+            return _FakeResp(200, {"ok": True})
+
+        def post(self, *a, **k):
+            raise StoreAPIError("login: Akamai access denied.", status=403)
+
+    monkeypatch.setattr(api, "session", lambda: _Denied())
+    out = api.login("a@b.c", "secret")
+    assert out["ok"] is False
+    assert "Akamai" in out["error"]
+    assert "still present" in out["error"]
+
+
+def test_expired_token_does_not_retry_login_on_akamai_403(monkeypatch):
+    from bring_fast.stores import carrefour as api
+    from bring_fast.stores.http import StoreAPIError
+
+    monkeypatch.setattr(
+        api,
+        "lite_cart",
+        lambda **k: (_ for _ in ()).throw(StoreAPIError("Akamai access denied.", status=403)),
+    )
+    called = []
+    monkeypatch.setattr(api, "login", lambda e, p: called.append(1) or {"ok": False, "token": "", "user_id": "", "error": "no"})
+    out = api.official_cart(
+        email="a@b.c", password="x", action="list", items=[], session_token="t", session_user="u"
+    )
+    assert called == []
+    assert out["ok"] is False
+    assert "Akamai" in (out.get("error") or "")
+
+
 def test_login_uses_android_customers_login(monkeypatch):
     from bring_fast.stores import carrefour as api
 

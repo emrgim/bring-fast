@@ -1636,6 +1636,8 @@ def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> s
     ctx["official_count"] = live.get("official_count")
     ctx["official_ok"] = bool(live.get("ok"))
     ctx["store_login_ok"] = bool(live.get("logged_in"))
+    if not live.get("ok") and ctx.get("login_saved") and "akamai" in str(live.get("error") or "").lower():
+        ctx["store_login_ok"] = True
     ctx["store_session_reused"] = bool(live.get("session_reused"))
     ctx["driver"] = live.get("driver") or "http"
     if picked:
