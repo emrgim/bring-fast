@@ -538,6 +538,65 @@ def test_carrefour_search_action_add_hits_official_cart(bf, monkeypatch):
     assert live.calls[0]["items"][0]["qty"] == 2
 
 
+def test_carrefour_search_add_743861_hits_official_cart(bf, monkeypatch):
+    """Food keeper retries add product_id=743861 qty=1 after this lands."""
+    user = _link_carrefour(bf, "zero@example.com")
+    live = _ok_add("743861")
+    monkeypatch.setattr(bf.checkout, "official_cart", live)
+    out = json.loads(
+        bf._call_tool(user, "carrefour_search", {"action": "add", "product_id": "743861", "qty": 1})
+    )
+    assert out["success"] is True
+    assert live.calls[0]["action"] == "add"
+    assert live.calls[0]["items"][0]["id"] == "743861"
+    assert live.calls[0]["items"][0]["qty"] == 1
+    assert live.calls[0]["timeout"] <= 32
+
+
+def test_carrefour_search_add_timeout_keeps_login_saved(bf, monkeypatch):
+    user = _link_carrefour(bf, "toadd@example.com")
+
+    def boom(**_kw):
+        raise bf.checkout.LiveCartTimeout(
+            "Live carrefour cart exceeded 32s. The supermarket login is still saved; "
+            "the official cart was not read. error_code=cart_timeout."
+        )
+
+    monkeypatch.setattr(bf.checkout, "official_cart", boom)
+    out = json.loads(
+        bf._call_tool(user, "carrefour_search", {"action": "add", "product_id": "743861", "qty": 1})
+    )
+    assert out["success"] is False
+    assert out["error_code"] == "cart_timeout"
+    assert out["login_saved"] is True
+    assert out["store_login_ok"] is True
+    assert out["items"] == []
+
+
+def test_carrefour_cart_list_uses_short_timeout(bf, monkeypatch):
+    user = _link_carrefour(bf, "lst2@example.com")
+    seen = []
+
+    def _live(**kw):
+        seen.append(kw)
+        return {
+            "ok": True,
+            "official_count": 0,
+            "items": [],
+            "logged_in": True,
+            "session_reused": True,
+            "driver": "playwright",
+            "token": "t",
+            "user_id": "u",
+        }
+
+    monkeypatch.setattr(bf.checkout, "official_cart", _live)
+    out = json.loads(bf._call_tool(user, "carrefour_cart", {"action": "list"}))
+    assert out["success"] is True
+    assert seen[0]["action"] == "list"
+    assert seen[0]["timeout"] == 28
+
+
 def test_carrefour_search_add_prefix_adds_by_name(bf, monkeypatch):
     user = _link_carrefour(bf, "pref@example.com")
     monkeypatch.setattr(

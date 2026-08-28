@@ -1835,7 +1835,8 @@ def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> s
     creds = db.get_retailer_secret(user["id"], retailer) or {}
     try:
         if retailer == "carrefour":
-            timeout = 16 if action == "list" else 38
+            # HTTP probe is ~4s; remaining budget is the official-site browser API.
+            timeout = 28 if action == "list" else 32
         else:
             timeout = 25 if action == "list" else 40
         live = checkout.official_cart(
@@ -1885,7 +1886,7 @@ def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> s
     ctx["driver"] = live.get("driver") or "http"
     if live.get("delivery_address"):
         ctx["delivery_address"] = live["delivery_address"]
-    for key in ("error_code", "maf_error", "item_errors", "food_pos", "area", "polygon_id", "pos"):
+    for key in ("error_code", "maf_error", "item_errors", "food_pos", "area", "polygon_id", "pos", "akamai_retry"):
         val = live.get(key)
         if val not in (None, "", []):
             ctx[key] = val

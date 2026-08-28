@@ -630,3 +630,41 @@ def test_akamai_html_sets_error_code():
     with pytest.raises(StoreAPIError) as raised:
         json_or_error(_Resp(), "liteCart")
     assert raised.value.error_code == "akamai_blocked"
+
+
+def test_official_cart_never_warms_homepage_on_add(monkeypatch):
+    from bring_fast.stores import carrefour as api
+
+    seen = []
+
+    class _Sess(_FakeSession):
+        pass
+
+    def _cs(existing=None, warm=True, **_k):
+        seen.append(warm)
+        return existing or _Sess()
+
+    monkeypatch.setattr(api, "chrome_session", _cs)
+    _patch_loc(monkeypatch, api)
+    monkeypatch.setattr(api, "login", lambda e, p, **k: {"ok": True, "token": "t", "user_id": "u", "error": None})
+    monkeypatch.setattr(api, "lite_cart", lambda **k: {"data": {"items": []}})
+    monkeypatch.setattr(api, "add_item", lambda **k: {"ok": True})
+    out = api.official_cart(email="a@b.c", password="x", action="add", items=[{"id": "743861", "qty": 1}])
+    assert out["ok"] is True
+    assert seen == [False]
+
+
+def test_official_cart_list_respects_short_timeout(monkeypatch):
+    from bring_fast.stores import carrefour as api
+
+    seen = []
+    _no_network(monkeypatch, api)
+    monkeypatch.setattr(
+        api,
+        "lite_cart",
+        lambda **k: seen.append(k.get("timeout")) or {"data": {"items": []}},
+    )
+    api.official_cart(
+        email="a@b.c", password="x", action="list", items=[], session_token="t", session_user="u", timeout=4
+    )
+    assert seen == [4]
