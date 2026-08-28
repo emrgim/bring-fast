@@ -244,3 +244,70 @@ def test_carrefour_cart_create_empties_the_official_basket(bf, monkeypatch):
     assert listed["success"] is True
     italian = json.loads(bf._call_tool(user, "carrefour_lista", {"action": "list"}))
     assert italian["success"] is True
+
+
+def test_normalize_mcp_prefixed_carrefour_tools(bf):
+    name, args = bf._normalize_tool("bring_fast___carrefour_cart", {"action": "list"})
+    assert name == "carrefour_cart"
+    assert args["action"] == "list"
+    name, _ = bf._normalize_tool("bring_fast___carrefour_status", {})
+    assert name == "carrefour_status"
+    name, _ = bf._normalize_tool("Bring Fast carrefour cart", {"action": "add"})
+    assert name == "carrefour_cart"
+
+
+def test_carrefour_cart_overlays_live_delivery_address(bf, monkeypatch):
+    user = bf.db.create_user("addr@example.com", "secret1")
+    bf.db.set_retailer_account(user["id"], "carrefour", "shopper@example.com", "store-pass")
+    user = bf.db.get_user_by_id(user["id"])
+    monkeypatch.setattr(
+        bf.checkout,
+        "official_cart",
+        lambda **kw: {
+            "ok": True,
+            "official_count": 0,
+            "items": [],
+            "logged_in": True,
+            "session_reused": True,
+            "driver": "android",
+            "token": "t",
+            "user_id": "u",
+            "delivery_address": "Element Meaisam 731",
+            "food_pos": "073",
+            "area": "Dubai Production City",
+            "polygon_id": "DXB_DubProdCty_01",
+        },
+    )
+    out = json.loads(bf._call_tool(user, "bring_fast___carrefour_cart", {"action": "list"}))
+    assert out["success"] is True
+    assert out["delivery_address"] == "Element Meaisam 731"
+    assert out["food_pos"] == "073"
+
+
+def test_carrefour_cart_surfaces_needs_delivery_slot(bf, monkeypatch):
+    user = bf.db.create_user("slot@example.com", "secret1")
+    bf.db.set_retailer_account(user["id"], "carrefour", "shopper@example.com", "store-pass")
+    user = bf.db.get_user_by_id(user["id"])
+    monkeypatch.setattr(
+        bf.checkout,
+        "official_cart",
+        lambda **kw: {
+            "ok": False,
+            "official_count": None,
+            "items": [],
+            "logged_in": True,
+            "session_reused": True,
+            "driver": "android",
+            "token": "t",
+            "user_id": "u",
+            "error": "Carrefour needs a bound delivery store before add-to-cart (error_code=needs_delivery_slot).",
+            "error_code": "needs_delivery_slot",
+            "maf_error": "SLOTTED is not a valid intent for product, available purchase indicators  are null",
+        },
+    )
+    out = json.loads(bf._call_tool(user, "bf_cart", {"retailer": "carrefour", "action": "add", "product_id": "11811", "qty": 2}))
+    assert out["success"] is False
+    assert out["error_code"] == "needs_delivery_slot"
+    assert "purchase indicators" in (out.get("maf_error") or "").lower()
+    assert out["live_cart_ok"] is False
+    assert out["login_saved"] is True

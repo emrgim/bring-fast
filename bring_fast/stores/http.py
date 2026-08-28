@@ -6,10 +6,20 @@ from typing import Any
 
 
 class StoreAPIError(RuntimeError):
-    def __init__(self, message: str, *, status: int | None = None, body: Any = None):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int | None = None,
+        body: Any = None,
+        error_code: str | None = None,
+        maf_error: str | None = None,
+    ):
         super().__init__(message)
         self.status = status
         self.body = body
+        self.error_code = error_code
+        self.maf_error = maf_error
 
 
 def session():
