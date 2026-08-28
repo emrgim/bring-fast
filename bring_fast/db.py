@@ -45,7 +45,7 @@ RETAILERS = [
         "enabled": False,
         "search": True,
         "receipts": False,
-        "login": False,
+        "login": True,
         "shop": True,
         "checkout": True,
     },
@@ -724,12 +724,12 @@ def enabled_retailers() -> list[dict[str, Any]]:
 
 
 def store_can_shop(retailer: str) -> bool:
-    """Official cart: Magento (Grandiose, Union Coop) or Carrefour Android APIs."""
+    """Official cart: Magento GraphQL (Grandiose), Magento REST (Union Coop), or Carrefour APIs."""
     return bool(next((r.get("shop") for r in RETAILERS if r["id"] == retailer), False))
 
 
 def store_can_checkout(retailer: str) -> bool:
-    """Place-order from here. Magento only: Grandiose and Union Coop."""
+    """Prepare official Magento checkout (Grandiose GraphQL, Union Coop REST). Does not charge."""
     for r in RETAILERS:
         if r["id"] == retailer:
             if "checkout" in r:

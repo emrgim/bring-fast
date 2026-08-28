@@ -845,6 +845,51 @@ def test_akamai_html_sets_error_code():
     assert raised.value.error_code == "akamai_blocked"
 
 
+def test_varnish_54113_sets_error_code():
+    from bring_fast.stores.http import StoreAPIError, json_or_error
+
+    class _Resp:
+        status_code = 405
+        text = (
+            "<html><head><title>405 Not allowed</title></head>"
+            "<body><h1>Error 405 Not allowed</h1><h3>Error 54113</h3>"
+            "<p>Varnish cache server</p></body></html>"
+        )
+
+        def json(self):
+            raise ValueError("html")
+
+    with pytest.raises(StoreAPIError) as raised:
+        json_or_error(_Resp(), "unioncoop REST /carts/mine")
+    assert raised.value.error_code == "varnish_blocked"
+
+
+def test_empty_2xx_body_is_success():
+    from bring_fast.stores.http import json_or_error
+
+    class _Resp:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            raise ValueError("empty")
+
+    assert json_or_error(_Resp(), "unioncoop REST DELETE") is True
+
+
+def test_json_true_body_is_success():
+    from bring_fast.stores.http import json_or_error
+
+    class _Resp:
+        status_code = 200
+        text = "true"
+
+        def json(self):
+            return True
+
+    assert json_or_error(_Resp(), "unioncoop REST DELETE") is True
+
+
 def test_official_cart_never_warms_homepage_on_add(monkeypatch):
     from bring_fast.stores import carrefour as api
 

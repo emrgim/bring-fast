@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from bring_fast import __version__, catalog, db
+from bring_fast import __version__, catalog, checkout, db
 
 
 def test_version_is_semver():
@@ -29,12 +29,42 @@ def test_retailers_have_logos_and_urls():
     assert {r["id"] for r in db.RETAILERS if r.get("enabled")} == {"grandiose", "carrefour"}
     assert {r["id"] for r in db.RETAILERS if r.get("shop")} == {"grandiose", "unioncoop", "carrefour"}
     assert {r["id"] for r in db.RETAILERS if r.get("checkout")} == {"grandiose", "unioncoop"}
+    assert {r["id"] for r in db.RETAILERS if r.get("shop")} == set(checkout.WIRED_CART_STORES)
+    assert {r["id"] for r in db.RETAILERS if r.get("checkout")} == set(checkout.WIRED_CHECKOUT_STORES)
     assert db.store_can_shop("carrefour") is True
     assert db.store_can_checkout("carrefour") is False
     assert db.store_can_shop("grandiose") is True
     assert db.store_can_checkout("grandiose") is True
+    assert db.store_can_shop("unioncoop") is True
+    assert db.store_can_checkout("unioncoop") is True
     assert db.store_can_shop("waitrose") is False
     assert db.store_can_checkout("waitrose") is False
+    assert checkout.WIRED_HTTP_LOGIN_STORES >= {"grandiose", "unioncoop", "carrefour"}
+    from bring_fast.stores import unioncoop as unioncoop_api
+    from bring_fast.stores import grandiose as grandiose_api
+
+    assert callable(unioncoop_api.official_cart)
+    assert callable(unioncoop_api.official_checkout)
+    assert callable(unioncoop_api.search)
+    assert callable(grandiose_api.remove_item)
+    union = {c["key"]: c["on"] for c in db.store_capabilities("unioncoop")}
+    assert union == {
+        "search": True,
+        "compare": True,
+        "cart": True,
+        "checkout": True,
+        "receipts": False,
+        "login": True,
+    }
+    grandiose = {c["key"]: c["on"] for c in db.store_capabilities("grandiose")}
+    assert grandiose == {
+        "search": True,
+        "compare": True,
+        "cart": True,
+        "checkout": True,
+        "receipts": True,
+        "login": True,
+    }
     for r in db.RETAILERS:
         assert r["url"].startswith("https://")
         assert r["logo"].startswith("/static/")

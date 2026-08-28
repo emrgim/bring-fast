@@ -19,6 +19,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import __version__, catalog, checkout, compare, db, forecast, mcp_skill, purchases, update
+from .stores.cart_match import peel_remove_name
 
 HOST = os.environ.get("BRINGFAST_HOST", "127.0.0.1")
 PORT = int(os.environ.get("BRINGFAST_PORT", "8877"))
@@ -1229,7 +1230,8 @@ def _store_tools() -> list[dict[str, Any]]:
             "description": (
                 "Search ALL supermarkets for price comparison. "
                 "Official cart on Grandiose, Union Coop, and Carrefour when enabled. "
-                "Checkout only on Magento: Grandiose and Union Coop."
+                "Checkout prepares official Magento checkout (Grandiose, Union Coop); "
+                "payment stays on the store site."
             ),
             "inputSchema": {
                 "type": "object",
@@ -1248,12 +1250,15 @@ def _store_tools() -> list[dict[str, Any]]:
                 "retailer=grandiose|unioncoop|carrefour. Waitrose and Spinneys are search-only. "
                 "action=list|add|set|remove|clear. "
                 "list aliases: get, read, show, view. add needs product_id or name, plus qty. "
-                "Use this when carrefour_cart / grandiose_cart is missing from the client tool list: "
+                "Magento remove (Grandiose GraphQL, Union Coop REST) matches a live cart line "
+                "by sku, item_id, or name — never success if the line is still there. "
+                "Use this when carrefour_cart / grandiose_cart / unioncoop_cart is missing from the client tool list: "
                 "bf_cart retailer=carrefour action=list reads the official Carrefour UAE cart. "
                 "Carrefour add binds the MAF delivery store from the account location; "
                 "error_code=needs_delivery_slot means list the cart and retry. "
                 "clear (also create/empty/new) empties the official cart. "
-                "Checkout stays Magento-only (Grandiose, Union Coop)."
+                "Checkout prepares official Magento checkout (Grandiose, Union Coop); "
+                "payment stays on the store site. MCP does not charge a card."
             ),
             "inputSchema": {
                 "type": "object",
@@ -1262,6 +1267,7 @@ def _store_tools() -> list[dict[str, Any]]:
                     "action": {"type": "string"},
                     "product_id": {"type": "string"},
                     "name": {"type": "string"},
+                    "item_id": {"type": "string"},
                     "qty": {"type": "integer"},
                     "price": {"type": "number"},
                 },
@@ -1391,7 +1397,7 @@ def _store_tools() -> list[dict[str, Any]]:
                     + (
                         "Checkout stays on the website."
                         if not db.store_can_checkout(sid)
-                        else f"Magento checkout: {sid}_checkout."
+                        else f"Prepare Magento checkout with {sid}_checkout; payment stays on the store site."
                     )
                 )
                 props.update(
@@ -1399,6 +1405,7 @@ def _store_tools() -> list[dict[str, Any]]:
                         "action": {"type": "string"},
                         "product_id": {"type": "string"},
                         "name": {"type": "string"},
+                        "item_id": {"type": "string"},
                         "qty": {"type": "integer"},
                     }
                 )
@@ -1420,14 +1427,23 @@ def _store_tools() -> list[dict[str, Any]]:
         # Checkout stays hidden until the store is enabled (Magento only).
         if not r.get("shop"):
             continue
-        cart_desc = (
-            f"{name} official Magento cart. action=list|add|set|remove|clear "
-            "(list aliases: get, read, show, view). "
-            "Orders only on Grandiose and Union Coop."
-            if db.store_can_checkout(sid)
-            else (
+        if db.store_can_checkout(sid):
+            driver = (
+                "Magento GraphQL"
+                if sid == "grandiose"
+                else "Magento REST (GraphQL is Varnish-blocked on unioncoop.ae)"
+            )
+            cart_desc = (
+                f"{name} official {driver} cart. action=list|add|set|remove|clear "
+                "(list aliases: get, read, show, view). "
+                "Remove matches a live cart line by sku, item_id, or name — never success if the line is still there. "
+                f"Prepare checkout with {sid}_checkout when the store is enabled; payment stays on the store site. "
+                "MCP does not charge a card."
+            )
+        else:
+            cart_desc = (
                 f"{name} official account cart — the supermarket shopping list, not a local copy. "
-                "MCP name: {sid}_cart (also bf_cart retailer={sid} if this tool is missing from the client). "
+                f"MCP name: {sid}_cart (also bf_cart retailer={sid} if this tool is missing from the client). "
                 "action=list|add|set|remove|clear. list aliases: get, read, show, view. "
                 "add needs product_id or name, plus qty. "
                 "Add binds the delivery store from the Carrefour account location (posInfo / SLOTTED). "
@@ -1435,7 +1451,6 @@ def _store_tools() -> list[dict[str, Any]]:
                 "clear (also create/empty/new) empties the cart into a fresh list. "
                 f"Checkout stays on the {name} website."
             )
-        )
         tools.append(
             {
                 "name": f"{sid}_cart",
@@ -1446,6 +1461,7 @@ def _store_tools() -> list[dict[str, Any]]:
                         "action": {"type": "string"},
                         "product_id": {"type": "string"},
                         "name": {"type": "string"},
+                        "item_id": {"type": "string"},
                         "qty": {"type": "integer"},
                         "price": {"type": "number"},
                     },
@@ -1459,7 +1475,7 @@ def _store_tools() -> list[dict[str, Any]]:
                     "name": f"{sid}_checkout",
                     "description": (
                         f"Prepare official {name} checkout on the Magento customer cart. "
-                        "Does not place the order until asked."
+                        "Does not place the order or charge a card. Payment stays on the store site."
                     ),
                     "inputSchema": {"type": "object", "properties": {}},
                 }
@@ -1700,6 +1716,10 @@ def _qty_from_search_args(args: dict[str, Any], *, use_limit: bool) -> int:
     return 1
 
 
+def _strip_remove_query(query: str) -> str | None:
+    return peel_remove_name(query)
+
+
 def _strip_add_query(query: str) -> str | None:
     q = query.strip()
     low = q.lower()
@@ -1723,6 +1743,11 @@ def _search_args_as_cart(args: dict[str, Any]) -> dict[str, Any] | None:
     action = str(args.get("action") or "").strip().lower()
     if action in _CART_ACTION_ALIASES:
         action = _CART_ACTION_ALIASES[action]
+    query = str(args.get("query") or args.get("q") or args.get("name") or "").strip()
+    # Take-out phrasing wins even when a stale client sent action=list.
+    rest = _strip_remove_query(query)
+    if rest:
+        return {"action": "remove", "name": rest, "item_id": str(args.get("item_id") or "")}
     if action in ("list", "add", "set", "remove", "clear"):
         out = dict(args)
         out["action"] = action
@@ -1745,6 +1770,10 @@ def _search_args_as_cart(args: dict[str, Any]) -> dict[str, Any] | None:
         return {"action": "list"}
     if qn in _CLEAR_CART_QUERIES:
         return {"action": "clear"}
+
+    rest = _strip_remove_query(query)
+    if rest:
+        return {"action": "remove", "name": rest}
 
     rest = _strip_add_query(query)
     if rest:
@@ -1801,7 +1830,19 @@ def _decorate_shop_search(sid: str, block: dict[str, Any]) -> dict[str, Any]:
     return block
 
 
+def _promote_takeout_to_remove(args: dict[str, Any]) -> dict[str, Any]:
+    """Food keeper often lists the cart (action=list) while the chat says take it out."""
+    out = dict(args)
+    blob = str(out.get("query") or out.get("q") or out.get("name") or "").strip()
+    rest = peel_remove_name(blob)
+    if rest:
+        out["action"] = "remove"
+        out["name"] = rest
+    return out
+
+
 def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> str:
+    args = _promote_takeout_to_remove(args)
     action = (args.get("action") or "list").lower()
     action = _CART_ACTION_ALIASES.get(action, action)
     if action not in ("list", "add", "set", "remove", "clear"):
@@ -1818,7 +1859,7 @@ def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> s
     picked = None
     also_matched: list[dict[str, Any]] = []
     payload: list[dict[str, Any]] = []
-    if action in ("add", "set", "remove"):
+    if action in ("add", "set"):
         pid, pname, also_matched, err, page_url = _resolve_cart_line(retailer, args)
         if err:
             return json.dumps({"success": False, "error": err, "store_id": retailer})
@@ -1827,11 +1868,49 @@ def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> s
             {
                 "id": pid,
                 "name": pname,
-                "qty": 0 if action == "remove" else int(args.get("qty") or 1),
+                "qty": int(args.get("qty") or 1),
                 "price": args.get("price"),
                 "url": args.get("url") or page_url or "",
             }
         ]
+    elif action == "remove":
+        pid = str(args.get("product_id") or args.get("id") or args.get("sku") or "").strip()
+        name = str(args.get("name") or args.get("query") or args.get("q") or "").strip()
+        item_id = str(args.get("item_id") or "").strip()
+        page_url = str(args.get("url") or "").strip()
+        if retailer in ("grandiose", "unioncoop"):
+            if not pid and not name and not item_id:
+                return json.dumps(
+                    {
+                        "success": False,
+                        "error": "product_id, name, or item_id required",
+                        "store_id": retailer,
+                    }
+                )
+            picked = {"id": pid or item_id, "name": name or pid or item_id}
+            payload = [
+                {
+                    "id": pid,
+                    "name": name,
+                    "item_id": item_id,
+                    "qty": 0,
+                    "url": page_url,
+                }
+            ]
+        else:
+            pid, pname, also_matched, err, page_url = _resolve_cart_line(retailer, args)
+            if err:
+                return json.dumps({"success": False, "error": err, "store_id": retailer})
+            picked = {"id": pid, "name": pname}
+            payload = [
+                {
+                    "id": pid,
+                    "name": pname,
+                    "qty": 0,
+                    "price": args.get("price"),
+                    "url": args.get("url") or page_url or "",
+                }
+            ]
     creds = db.get_retailer_secret(user["id"], retailer) or {}
     try:
         if retailer == "carrefour":
@@ -1917,6 +1996,12 @@ def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> s
             note = (
                 "Carrefour cart is enabled. HTTP from this server was blocked by Akamai "
                 "(error_code=akamai_blocked). Login is still saved. "
+                f"login_saved={ctx['login_saved']}."
+            )
+        elif ctx.get("error_code") == "varnish_blocked" or "varnish" in str(live.get("error") or "").lower():
+            note = (
+                "Official Magento HTTP from this network was blocked by Varnish/Fastly "
+                "(error_code=varnish_blocked). Login is still saved. "
                 f"login_saved={ctx['login_saved']}."
             )
         return json.dumps(

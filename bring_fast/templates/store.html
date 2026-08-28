@@ -21,7 +21,7 @@
         {% if c.key == 'search' %}{% if c.on %}Look up prices and products on {{ store.name }}.{% else %}No catalog to look up: {{ store.name }} is here for its invoices.{% endif %}
         {% elif c.key == 'compare' %}{% if c.on %}Put {{ store.name }}'s price next to what you paid.{% else %}Nothing to price against: {{ store.name }} has no catalog to read.{% endif %}
         {% elif c.key == 'cart' %}{% if c.on %}Fill a basket on {{ store.name }} from here.{% else %}No basket from here yet.{% endif %}
-        {% elif c.key == 'checkout' %}{% if c.on %}Place the order on {{ store.name }}.{% else %}No orders from here.{% endif %}
+        {% elif c.key == 'checkout' %}{% if c.on %}Prepare official checkout on {{ store.name }}. Payment stays on the store site.{% else %}No orders from here.{% endif %}
         {% elif c.key == 'receipts' %}{% if c.on %}Read {{ store.name }} invoices into your purchases.{% else %}No invoice reader for {{ store.name }} yet.{% endif %}
         {% else %}{% if c.on %}Keep your {{ store.name }} login, so receipts and baskets are read as you.{% else %}No login wired for {{ store.name }} yet.{% endif %}
         {% endif %}

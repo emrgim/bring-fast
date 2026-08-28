@@ -14,6 +14,7 @@ SHOT_DIR = Path(os.environ.get("BRINGFAST_DATA", Path.home() / ".bring-fast")) /
 LOGIN = {
     "carrefour": "https://www.carrefouruae.com/mafuae/en/login/email",
     "grandiose": "https://www.grandiose.ae/customer/account/login/",
+    "unioncoop": "https://www.unioncoop.ae/customer/account/login/",
     "waitrose": "https://www.waitrose.ae/en/",
     "spinneys": "https://www.spinneys.com/en-ae/",
     "mmi": "https://www.mmihomedelivery.ae/customer/account/login",
@@ -23,6 +24,7 @@ LOGIN = {
 HOME = {
     "carrefour": "https://www.carrefouruae.com/mafuae/en",
     "grandiose": "https://www.grandiose.ae/",
+    "unioncoop": "https://www.unioncoop.ae/",
     "waitrose": "https://www.waitrose.ae/en/",
     "spinneys": "https://www.spinneys.com/en-ae/",
     "mmi": "https://www.mmihomedelivery.ae/",
@@ -44,9 +46,15 @@ SIGNED_OUT_MARKERS = (
 CART = {
     "carrefour": "https://www.carrefouruae.com/mafuae/en",
     "grandiose": "https://www.grandiose.ae/checkout/cart/",
+    "unioncoop": "https://www.unioncoop.ae/checkout/cart/",
     "waitrose": "https://www.waitrose.ae/en/",
     "spinneys": "https://www.spinneys.com/en-ae/",
 }
+
+# Store flags in db.RETAILERS must match these sets. Tests lock the pair.
+WIRED_CART_STORES = frozenset({"carrefour", "grandiose", "unioncoop"})
+WIRED_CHECKOUT_STORES = frozenset({"grandiose", "unioncoop"})
+WIRED_HTTP_LOGIN_STORES = frozenset({"carrefour", "grandiose", "unioncoop", "mmi", "africaneastern"})
 
 
 CDP = os.environ.get("BRINGFAST_CDP", "http://127.0.0.1:9222")
@@ -693,6 +701,17 @@ def verify_login(*, store: str, email: str, password: str) -> dict[str, Any]:
             "error": auth.get("error"),
             "driver": "http",
         }
+    if store == "unioncoop":
+        from bring_fast.stores import unioncoop as unioncoop_api
+
+        auth = unioncoop_api.login(email, password)
+        return {
+            "ok": bool(auth.get("ok")),
+            "reused": False,
+            "url": "",
+            "error": auth.get("error"),
+            "driver": "http",
+        }
     if store == "mmi":
         from bring_fast.stores import mmi as mmi_api
 
@@ -780,6 +799,17 @@ def official_cart(
         from bring_fast.stores import grandiose as grandiose_api
 
         return grandiose_api.official_cart(
+            email=email,
+            password=password,
+            action=action,
+            items=items,
+            session_token=session_token,
+            session_user=session_user,
+        )
+    if store == "unioncoop":
+        from bring_fast.stores import unioncoop as unioncoop_api
+
+        return unioncoop_api.official_cart(
             email=email,
             password=password,
             action=action,
@@ -1504,6 +1534,11 @@ def run_checkout(
         from bring_fast.stores import grandiose as grandiose_api
 
         live = grandiose_api.official_checkout(email=email, password=password)
+        return live
+    if store == "unioncoop":
+        from bring_fast.stores import unioncoop as unioncoop_api
+
+        live = unioncoop_api.official_checkout(email=email, password=password)
         return live
     return _in_thread(
         _run_checkout_sync,

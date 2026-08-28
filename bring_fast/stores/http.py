@@ -62,7 +62,20 @@ def json_or_error(resp, what: str) -> Any:
             status=resp.status_code,
             error_code="akamai_blocked",
         )
+    low = text.lower()
+    if "error 54113" in low or ("varnish" in low and "not allowed" in low):
+        raise StoreAPIError(
+            f"{what}: Varnish blocked the HTTP API (Fastly 54113).",
+            status=resp.status_code,
+            error_code="varnish_blocked",
+        )
     try:
         return resp.json()
     except Exception as e:
+        stripped = text.strip()
+        # Magento REST DELETE / PUT often returns HTTP 200 with `true` or an empty body.
+        if resp.status_code in (200, 201, 204) and not stripped:
+            return True
+        if resp.status_code in (200, 201, 204) and stripped.lower() in ("true", "false", "null"):
+            return {"true": True, "false": False, "null": None}[stripped.lower()]
         raise StoreAPIError(f"{what}: non-JSON HTTP {resp.status_code}: {text[:160]}", status=resp.status_code) from e

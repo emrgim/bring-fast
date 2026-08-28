@@ -343,71 +343,11 @@ def search_spinneys(query: str, limit: int = 8) -> dict[str, Any]:
     return out
 
 
-def _json_object_after(text: str, marker: str) -> dict[str, Any]:
-    import json
-
-    i = text.find(marker)
-    if i < 0:
-        raise ValueError(f"missing {marker}")
-    start = text.find("{", i)
-    depth = 0
-    for k, ch in enumerate(text[start:], start):
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return json.loads(text[start : k + 1])
-    raise ValueError("unclosed json")
-
-
 def search_unioncoop(query: str, limit: int = 8) -> dict[str, Any]:
     """Official storefront search is Algolia on unioncoop.ae (GraphQL is Varnish-blocked)."""
-    s = _session()
-    home = s.get("https://www.unioncoop.ae/", timeout=25)
-    home.raise_for_status()
-    cfg = _json_object_after(home.text, "algoliaConfig")
-    app = cfg["applicationId"]
-    key = cfg["apiKey"]
-    index = f"{cfg['indexName']}_products"
-    filters = ((cfg.get("attributeFilter") or {}).get("filters") or "").strip()
-    payload: dict[str, Any] = {"query": query, "hitsPerPage": max(1, min(int(limit or 8), 20))}
-    if filters:
-        payload["filters"] = filters
-    r = s.post(
-        f"https://{app}-dsn.algolia.net/1/indexes/{index}/query",
-        json=payload,
-        timeout=25,
-        headers={
-            "X-Algolia-Application-Id": app,
-            "X-Algolia-API-Key": key,
-            "Content-Type": "application/json",
-            "Referer": "https://www.unioncoop.ae/",
-            "Origin": "https://www.unioncoop.ae",
-        },
-    )
-    r.raise_for_status()
-    items = []
-    for hit in r.json().get("hits") or []:
-        price = hit.get("price") or {}
-        if isinstance(price, dict):
-            aed = price.get("AED") or {}
-            amount = aed.get("default") if isinstance(aed, dict) else None
-        else:
-            amount = price
-        items.append(
-            {
-                "id": str(hit.get("sku") or hit.get("objectID") or ""),
-                "name": hit.get("name"),
-                "price": _money(amount if amount is not None else hit.get("regular_price")),
-                "currency": "AED",
-                "url": hit.get("url"),
-            }
-        )
-    out: dict[str, Any] = {"retailer": "unioncoop", "query": query, "results": items}
-    if not items:
-        out["error"] = "Union Coop Algolia returned no products."
-    return out
+    from bring_fast.stores import unioncoop as api
+
+    return api.search(query, limit)
 
 
 def _score_name(query: str, name: str) -> float:

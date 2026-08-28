@@ -170,7 +170,7 @@ when it does not.
 | | Search | Compare | Cart | Checkout | Receipts | Login |
 | --- | --- | --- | --- | --- | --- | --- |
 | [Grandiose](https://www.grandiose.ae/) | yes | yes | yes | yes | yes | yes |
-| [Union Coop](https://www.unioncoop.ae/) | yes | yes | yes | yes | — | — |
+| [Union Coop](https://www.unioncoop.ae/) | yes | yes | yes | yes | — | yes |
 | [Carrefour UAE](https://www.carrefouruae.com/mafuae/en) | yes | yes | yes | — | yes | yes |
 | [Waitrose UAE](https://www.waitrose.ae/en/) | yes | yes | — | — | — | yes |
 | [Spinneys UAE](https://www.spinneys.com/en-ae/) | yes | yes | — | — | — | yes |
@@ -179,11 +179,12 @@ when it does not.
 | [Careem](https://www.careem.com/) | — | — | — | — | yes | — |
 
 Search and price comparison read public catalog pages, so they go together and a
-store with no catalog has neither. Cart is a wired official basket — Magento for
-Grandiose and Union Coop, the Android APIs for Carrefour. Checkout is the Magento
-stores we have tested. Receipts means there is a parser for that store's invoices, and
-login means a saved store account, which is what receipts and baskets are read
-with.
+store with no catalog has neither. Cart is a wired official basket — Magento
+GraphQL for Grandiose, Magento REST for Union Coop (GraphQL there is
+Varnish-blocked), the Android APIs for Carrefour. Checkout prepares the official
+Magento cart and leaves payment on the store site. Receipts means there is a
+parser for that store's invoices, and login means a saved store account, which is
+what receipts and baskets are read with.
 
 Careem is receipts only. It is food delivery, not a supermarket: the menu is per
 restaurant and per hour, so there is no catalog to search and no shelf price to
