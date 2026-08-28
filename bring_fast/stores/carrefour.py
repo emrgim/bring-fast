@@ -613,7 +613,7 @@ def _cio_search(query: str) -> list[dict[str, Any]]:
                 "s": 1,
                 "num_results_per_page": 8,
             },
-            timeout=8,
+            timeout=4,
         )
         return list(((r.json().get("response") or {}).get("results") or []))
     except Exception:
@@ -894,7 +894,48 @@ def remove_items(
     raise last_err or StoreAPIError("delete items failed")
 
 
+def _nested_product(row: dict[str, Any]) -> dict[str, Any]:
+    for key in ("product", "item", "offer"):
+        val = row.get(key)
+        if isinstance(val, dict):
+            return val
+    return {}
+
+
+def _first_str(*vals: Any) -> str:
+    for val in vals:
+        if val is None:
+            continue
+        text = str(val).strip()
+        if text:
+            return text
+    return ""
+
+
+def _first_price(*vals: Any) -> Any:
+    for val in vals:
+        if val in (None, ""):
+            continue
+        if isinstance(val, dict):
+            inner = _first_price(
+                val.get("value"),
+                val.get("amount"),
+                val.get("price"),
+                val.get("sellingPrice"),
+                val.get("selling_price"),
+            )
+            if inner not in (None, ""):
+                return inner
+            continue
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return val
+    return None
+
+
 def parse_items(body: Any) -> list[dict[str, Any]]:
+    """Read liteCart / basket rows. liteResponse often has id+qty only — names come from enrich."""
     if not isinstance(body, dict):
         return []
     data = body.get("data") or body.get("cart") or body.get("basket") or body
@@ -907,12 +948,101 @@ def parse_items(body: Any) -> list[dict[str, Any]]:
     for i in raw:
         if not isinstance(i, dict):
             continue
-        pid = str(i.get("id") or i.get("productId") or i.get("sku") or "")
-        name = i.get("name") or i.get("title") or ""
-        qty = int(i.get("qty") or i.get("quantity") or 1)
-        price = i.get("price") or i.get("unitPrice")
+        product = _nested_product(i)
+        pid = _first_str(
+            i.get("id"),
+            i.get("productId"),
+            i.get("product_id"),
+            i.get("sku"),
+            product.get("id"),
+            product.get("productId"),
+            product.get("sku"),
+        )
+        name = _first_str(
+            i.get("name"),
+            i.get("title"),
+            i.get("productName"),
+            i.get("product_name"),
+            i.get("onlineName"),
+            i.get("online_name_en"),
+            i.get("displayName"),
+            product.get("name"),
+            product.get("title"),
+            product.get("productName"),
+            product.get("online_name_en"),
+        )
+        qty = int(i.get("qty") or i.get("quantity") or product.get("qty") or product.get("quantity") or 1)
+        price = _first_price(
+            i.get("price"),
+            i.get("unitPrice"),
+            i.get("unit_price"),
+            i.get("sellingPrice"),
+            i.get("selling_price"),
+            i.get("offerPrice"),
+            (i.get("prices") or {}).get("price") if isinstance(i.get("prices"), dict) else None,
+            product.get("price"),
+            product.get("unitPrice"),
+            product.get("sellingPrice"),
+        )
         url = f"{SITE}/{MARKET}/{LANG}/p/{pid}" if pid else ""
         out.append({"id": pid, "name": name, "qty": qty, "price": price, "currency": "AED", "url": url})
+    return out
+
+
+def ids_in_cart(requested: list[dict[str, Any]], live: list[dict[str, Any]]) -> bool:
+    """True when every requested product_id is already in the official cart rows."""
+    wanted = [str(it.get("id") or "").strip() for it in requested if str(it.get("id") or "").strip()]
+    if not wanted:
+        return False
+    have = {str(it.get("id") or "") for it in live}
+    return all(pid in have for pid in wanted)
+
+
+def _catalog_hit(product_id: str) -> dict[str, Any] | None:
+    """Name/price from Constructor.io for an id already in the cart. Does not invent SKUs."""
+    pid = str(product_id or "").strip()
+    if not pid:
+        return None
+    for it in _cio_search(pid):
+        d = it.get("data") or {}
+        if not isinstance(d, dict):
+            continue
+        ids = {
+            str(d.get("id") or ""),
+            str(d.get("code") or ""),
+            str(d.get("ean") or ""),
+        }
+        if pid not in ids:
+            continue
+        name = _first_str(it.get("value"), d.get("online_name_en"), d.get("name"))
+        price = _first_price(d.get("price"), d.get("selling_price"), d.get("sellingPrice"))
+        url = d.get("url") or ""
+        if url and not str(url).startswith("http"):
+            url = f"{SITE}/{MARKET}/{LANG}{url}"
+        return {"id": pid, "name": name, "price": price, "url": url or f"{SITE}/{MARKET}/{LANG}/p/{pid}"}
+    return None
+
+
+def enrich_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Fill empty name/price from the same catalog search uses. Never add rows."""
+    out: list[dict[str, Any]] = []
+    for it in items:
+        row = dict(it)
+        need_name = not str(row.get("name") or "").strip()
+        need_price = row.get("price") in (None, "")
+        if need_name or need_price:
+            try:
+                hit = _catalog_hit(str(row.get("id") or ""))
+            except Exception:
+                hit = None
+            if hit:
+                if need_name and hit.get("name"):
+                    row["name"] = hit["name"]
+                if need_price and hit.get("price") not in (None, ""):
+                    row["price"] = hit["price"]
+                if not row.get("url") and hit.get("url"):
+                    row["url"] = hit["url"]
+        out.append(row)
     return out
 
 
@@ -1022,16 +1152,19 @@ def official_cart(
                         }
                     )
         body = lite_cart(token=token, user_id=user_id, fulfilment=loc, client=s, timeout=read_timeout)
-        live = parse_items(body)
+        live = enrich_items(parse_items(body))
         ok = True
         error = None
         error_code = None
         maf_error = None
-        if item_errors and added == 0:
+        landed = needs_slot and ids_in_cart(items, live)
+        if item_errors and added == 0 and not landed:
             ok = False
             error = item_errors[0]["error"]
             error_code = item_errors[0].get("error_code")
             maf_error = item_errors[0].get("maf_error")
+        elif landed:
+            item_errors = []
         return {
             "ok": ok,
             "official_count": len(live),
