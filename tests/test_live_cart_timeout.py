@@ -289,6 +289,10 @@ def test_browser_api_add_posts_additem_then_lists(monkeypatch):
     assert "/addItem" in posts[0]["url"]
     assert "/entries" not in posts[0]["url"]
     assert gets, "must re-read official liteCart after add"
+    gh = gets[0].get("headers") or {}
+    assert "Content-Type" not in gh
+    assert gh.get("appid") != "Android"
+    assert gh.get("userId") == "u9"
     assert not any("carrefouruae.com/mafuae/en/p/" in str(f.get("url")) for f in fetches)
 
 
@@ -518,3 +522,259 @@ def test_browser_api_add_500_restores_snapshot_and_skips_entries(monkeypatch):
     assert any(f["payload"]["productId"] == "1592968" for f in posts)
     assert any(f["payload"]["productId"] == "376161" for f in posts)
     assert not any("/entries" in f["url"] and f["method"] == "POST" for f in fetches)
+
+
+def test_http_unusable_treats_litecart_400_as_browser_fallback():
+    assert checkout._http_unusable({"ok": False, "error": "liteCart HTTP 400"}) is True
+    assert checkout._http_unusable({"ok": False, "error": "liteCart HTTP 400", "error_code": None}) is True
+    assert checkout._http_unusable({"ok": False, "error": "liteCart needs auth token and userId."}) is True
+    assert checkout._http_unusable({"ok": False, "error_code": "akamai_blocked", "error": "Akamai"}) is True
+    assert checkout._http_unusable({"ok": False, "error_code": "needs_delivery_slot", "error": "slot"}) is False
+    assert checkout._http_unusable({"ok": True, "error": "liteCart HTTP 400"}) is False
+
+
+def test_browser_get_headers_are_web_not_android():
+    h = checkout._browser_headers("tok", "u9", {"pos_info": "food=073_Zone04"}, method="GET")
+    assert "Content-Type" not in h
+    assert h.get("appid") != "Android"
+    assert h.get("appid") == "Web"
+    assert h.get("userId") == "u9"
+    assert h["Authorization"].startswith("Bearer ")
+    post = checkout._browser_headers("tok", "u9", {"pos_info": "food=073_Zone04"}, method="POST")
+    assert post.get("Content-Type") == "application/json"
+
+
+def test_http_litecart_400_with_saved_login_falls_back_to_browser(monkeypatch):
+    """Saved login + liteCart HTTP 400 must not be a dead end — try the site browser."""
+    from bring_fast.stores import carrefour as api
+
+    http_calls = []
+
+    def _http(**k):
+        http_calls.append(k["action"])
+        return {
+            "ok": False,
+            "error": "liteCart HTTP 400",
+            "error_code": None,
+            "items": [],
+            "logged_in": True,
+            "session_reused": True,
+            "driver": "chrome",
+        }
+
+    monkeypatch.setattr(api, "official_cart", _http)
+    monkeypatch.setattr(
+        checkout,
+        "_carrefour_browser_api_cart",
+        lambda **k: {
+            "ok": True,
+            "official_count": 1,
+            "items": [
+                {
+                    "id": "743861",
+                    "name": "Coca-Cola Zero 330ml Can",
+                    "qty": 1,
+                    "price": 1.99,
+                }
+            ],
+            "logged_in": True,
+            "driver": "cdp",
+            "session_reused": True,
+            "akamai_retry": "browser_api",
+        },
+    )
+    out = checkout._carrefour_official_cart(
+        email="e@mrg.im",
+        password="x",
+        action="list",
+        items=[],
+        session_token="t",
+        session_user="u",
+    )
+    assert http_calls == ["list"]
+    assert out["ok"] is True
+    assert out["items"][0]["id"] == "743861"
+    assert "Coca-Cola" in (out["items"][0].get("name") or "")
+    assert out["items"][0]["price"] == 1.99
+    assert out["driver"] == "cdp"
+
+
+def test_akamai_blocked_list_with_saved_login_falls_back_to_browser(monkeypatch):
+    from bring_fast.stores import carrefour as api
+
+    monkeypatch.setattr(
+        api,
+        "official_cart",
+        lambda **k: {
+            "ok": False,
+            "error": api.AKAMAI_UNREAD,
+            "error_code": "akamai_blocked",
+            "items": [],
+            "logged_in": True,
+            "session_reused": False,
+            "driver": "chrome",
+        },
+    )
+    monkeypatch.setattr(
+        checkout,
+        "_carrefour_browser_api_cart",
+        lambda **k: {
+            "ok": True,
+            "official_count": 1,
+            "items": [{"id": "743861", "name": "Coca-Cola Zero 330ml Can", "qty": 1, "price": 1.99}],
+            "logged_in": True,
+            "driver": "cdp",
+            "session_reused": True,
+            "akamai_retry": "browser_api",
+        },
+    )
+    out = checkout._carrefour_official_cart(
+        email="e@mrg.im", password="x", action="list", items=[], session_token="t", session_user="u"
+    )
+    assert out["ok"] is True
+    assert out["items"][0]["name"]
+    assert out["akamai_retry"] == "browser_api"
+
+
+def test_browser_list_retries_after_litecart_400(monkeypatch):
+    """First same-origin GET 400 (bad headers/session) must retry; list still returns names."""
+    from bring_fast.stores import carrefour as api
+
+    fetches = []
+
+    class _Page:
+        url = "https://www.carrefouruae.com/mafuae/en"
+
+        def __init__(self, ctx):
+            self.context = ctx
+
+        def content(self):
+            return '{"posInfo":"food=073_Zone04","polygonId":"DXB_DubProdCty_01","emirateCode":"DUBAI"}'
+
+        def evaluate(self, _js, arg=None):
+            if arg is None:
+                return {}
+            fetches.append(arg)
+            if arg.get("method") == "GET" and "liteCart" in (arg.get("url") or ""):
+                gets = [f for f in fetches if f.get("method") == "GET" and "liteCart" in (f.get("url") or "")]
+                hdrs = arg.get("headers") or {}
+                if len(gets) == 1:
+                    assert "Content-Type" not in hdrs
+                    assert hdrs.get("appid") != "Android"
+                    return {
+                        "status": 400,
+                        "body": {"meta": {"message": "Bad Request"}},
+                        "akamai": False,
+                    }
+                return {
+                    "status": 200,
+                    "body": {
+                        "data": {
+                            "items": [
+                                {
+                                    "id": "743861",
+                                    "name": "Coca-Cola Zero 330ml Can",
+                                    "quantity": 1,
+                                    "price": 1.99,
+                                }
+                            ]
+                        }
+                    },
+                    "akamai": False,
+                }
+            return {"status": 404, "body": {}, "akamai": False}
+
+        def close(self):
+            pass
+
+        def goto(self, *_a, **_k):
+            return None
+
+    _browser_harness(monkeypatch, _Page)
+    monkeypatch.setattr(api, "_cio_browse_ids", lambda ids: [])
+    monkeypatch.setattr(api, "_cio_search", lambda q: [])
+    out = checkout._carrefour_browser_api_cart(
+        email="e@mrg.im",
+        password="x",
+        action="list",
+        items=[],
+    )
+    assert out["ok"] is True
+    assert out["items"][0]["id"] == "743861"
+    assert "Coca-Cola" in (out["items"][0].get("name") or "")
+    assert out["items"][0]["price"] == 1.99
+    gets = [f for f in fetches if f.get("method") == "GET" and "liteCart" in (f.get("url") or "")]
+    assert len(gets) >= 2, "400 must not be a dead end"
+
+
+def test_litecart_400_after_retries_is_not_stamped_akamai(monkeypatch):
+    from bring_fast.stores import carrefour as api
+
+    monkeypatch.setattr(
+        api,
+        "official_cart",
+        lambda **k: {
+            "ok": False,
+            "error": api.AKAMAI_UNREAD,
+            "error_code": "akamai_blocked",
+            "items": [],
+            "logged_in": True,
+        },
+    )
+    monkeypatch.setattr(
+        checkout,
+        "_carrefour_browser_api_cart",
+        lambda **k: {
+            "ok": False,
+            "error": "liteCart HTTP 400",
+            "error_code": "litecart_http_error",
+            "items": [],
+            "logged_in": True,
+            "driver": "cdp",
+            "session_reused": False,
+        },
+    )
+    out = checkout._carrefour_official_cart(
+        email="e@mrg.im", password="x", action="list", items=[], session_token="t", session_user="u"
+    )
+    assert out["ok"] is False
+    assert out["error_code"] == "litecart_http_error"
+    assert out["logged_in"] is True
+    assert "liteCart HTTP 400" in (out.get("error") or "")
+
+
+def test_context_auth_userid_cookie_is_case_insensitive():
+    class _Ctx:
+        def cookies(self):
+            return [
+                {"name": "token", "value": "tok"},
+                {"name": "userID", "value": "u9"},
+            ]
+
+    assert checkout._context_auth(_Ctx()) == {"token": "tok", "user_id": "u9"}
+
+
+def test_user_id_from_jwt_payload():
+    import base64
+    import json
+
+    payload = base64.urlsafe_b64encode(json.dumps({"userId": "u42"}).encode()).rstrip(b"=").decode()
+    token = f"eyJhbGciOiJub25lIn0.{payload}.x"
+    assert checkout._user_id_from_token(token) == "u42"
+
+
+def test_session_from_page_fills_userid_from_storage():
+    class _Ctx:
+        def cookies(self):
+            return [{"name": "token", "value": "tok1234567890"}]
+
+    class _Page:
+        def __init__(self):
+            self.context = _Ctx()
+
+        def evaluate(self, _js, arg=None):
+            return {"token": "", "user_id": "u9"}
+
+    out = checkout._session_from_page(_Page())
+    assert out["token"] == "tok1234567890"
+    assert out["user_id"] == "u9"

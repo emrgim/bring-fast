@@ -632,7 +632,10 @@ async ({ method, url, payload, headers }) => {
     credentials: 'include',
     headers: Object.assign({ Accept: 'application/json' }, headers || {}),
   };
-  if (payload != null && method !== 'GET' && method !== 'HEAD') {
+  if (method === 'GET' || method === 'HEAD') {
+    delete opts.headers['Content-Type'];
+    delete opts.headers['content-type'];
+  } else if (payload != null) {
     opts.headers['Content-Type'] = opts.headers['Content-Type'] || 'application/json';
     opts.body = JSON.stringify(payload);
   }
@@ -655,6 +658,55 @@ async ({ method, url, payload, headers }) => {
   } finally {
     clearTimeout(timer);
   }
+}
+"""
+
+_SESSION_FROM_PAGE_JS = """
+() => {
+  const out = {token: '', user_id: ''};
+  const take = (k, v) => {
+    const key = String(k || '').toLowerCase();
+    if (v == null || (typeof v !== 'string' && typeof v !== 'number')) return;
+    let val = String(v).replace(/^Bearer\\s+/i, '').trim();
+    if (!val || val === 'undefined' || val === 'null' || val.length < 2) return;
+    if (val.startsWith('{') || val.startsWith('[')) return;
+    if (!out.token && (key === 'token' || key === 'accesstoken' || key === 'access_token')) {
+      if (val.length > 12) out.token = val;
+    }
+    if (!out.user_id && (key === 'userid' || key === 'user_id' || key === 'customerid' || key === 'customer_id')) {
+      out.user_id = val;
+    }
+  };
+  try {
+    (document.cookie || '').split(';').forEach((p) => {
+      const i = p.indexOf('=');
+      if (i > 0) {
+        let v = p.slice(i + 1).trim();
+        try { v = decodeURIComponent(v); } catch (e) {}
+        take(p.slice(0, i).trim(), v);
+      }
+    });
+  } catch (e) {}
+  const walk = (o, depth) => {
+    if (!o || depth > 3 || typeof o !== 'object') return;
+    for (const [k, v] of Object.entries(o)) {
+      if (typeof v === 'string' || typeof v === 'number') take(k, v);
+      else if (v && typeof v === 'object') walk(v, depth + 1);
+    }
+  };
+  for (const store of [localStorage, sessionStorage]) {
+    try {
+      for (let i = 0; i < store.length; i++) {
+        const k = store.key(i);
+        const v = store.getItem(k);
+        take(k, v);
+        if (v && (v[0] === '{' || v[0] === '[')) {
+          try { walk(JSON.parse(v), 0); } catch (e) {}
+        }
+      }
+    } catch (e) {}
+  }
+  return out;
 }
 """
 
@@ -840,16 +892,24 @@ def _is_list_action(action: str) -> bool:
 
 
 def _http_unusable(live: dict[str, Any]) -> bool:
-    """HTTP cannot read/write the cart — Akamai or a hang. Real 4xx (stock, slot) stay."""
+    """HTTP cannot read the cart. Slot/stock 4xx stay; session/WAF 4xx go to the browser."""
     if live.get("ok"):
         return False
     if _akamai_result(live):
         return True
     code = str(live.get("error_code") or "")
-    if code in ("akamai_blocked", "cart_timeout"):
+    if code in ("akamai_blocked", "cart_timeout", "litecart_http_error"):
         return True
+    if code == "needs_delivery_slot":
+        return False
     blob = f"{live.get('error') or ''}".lower()
-    return any(s in blob for s in ("timeout", "timed out", "akamai", "access denied"))
+    if any(s in blob for s in ("timeout", "timed out", "akamai", "access denied")):
+        return True
+    if "needs auth token" in blob or "litecart needs" in blob:
+        return True
+    if "litecart http" in blob and any(s in blob for s in (" 400", " 401", " 415")):
+        return True
+    return False
 
 
 def _playwright_state_file() -> Path:
@@ -935,14 +995,64 @@ def _context_auth(context) -> dict[str, str]:
         for c in context.cookies():
             if not isinstance(c, dict):
                 continue
-            name = c.get("name")
+            name = str(c.get("name") or "").lower()
             value = str(c.get("value") or "")
+            try:
+                from urllib.parse import unquote
+
+                value = unquote(value)
+            except Exception:
+                pass
             if name == "token":
                 out["token"] = value
-            if name in ("userId", "user_id", "customerId") and not out["user_id"]:
+            if name in ("userid", "user_id", "customerid", "customer_id") and not out["user_id"]:
                 out["user_id"] = value
     except Exception:
         pass
+    return out
+
+
+def _user_id_from_token(token: str) -> str:
+    raw = (token or "").strip()
+    if raw.lower().startswith("bearer "):
+        raw = raw[7:].strip()
+    parts = raw.split(".")
+    if len(parts) < 2:
+        return ""
+    try:
+        import base64
+
+        pad = "=" * (-len(parts[1]) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(parts[1] + pad).decode("utf-8", "replace"))
+    except Exception:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    for key in ("userId", "user_id", "customerId", "customer_id", "cid"):
+        val = payload.get(key)
+        if val not in (None, ""):
+            return str(val)
+    return ""
+
+
+def _session_from_page(page) -> dict[str, str]:
+    """token + userId from cookies, localStorage, or the JWT — not cookies alone.
+
+    MAF often keeps userId in the SPA store. Cookie-only reads miss it and liteCart
+    then returns HTTP 400, which we used to stamp as akamai_blocked.
+    """
+    out = _context_auth(getattr(page, "context", page))
+    try:
+        extra = page.evaluate(_SESSION_FROM_PAGE_JS) or {}
+    except Exception:
+        extra = {}
+    if isinstance(extra, dict):
+        if extra.get("token") and not out["token"]:
+            out["token"] = str(extra["token"])
+        if extra.get("user_id") and not out["user_id"]:
+            out["user_id"] = str(extra["user_id"])
+    if not out["user_id"] and out["token"]:
+        out["user_id"] = _user_id_from_token(out["token"])
     return out
 
 
@@ -963,7 +1073,7 @@ def _carrefour_origin_page(context):
 
 
 def _ensure_logged_in_page(page, email: str, password: str) -> dict[str, Any]:
-    auth = _context_auth(page.context)
+    auth = _session_from_page(page)
     url = (page.url or "").lower()
     if (
         auth["token"]
@@ -978,7 +1088,7 @@ def _ensure_logged_in_page(page, email: str, password: str) -> dict[str, Any]:
                 _mark_account(page, email)
             return {"logged_in": True, "reused": True, "error": None, **auth}
     session = ensure_store_login(page, "carrefour", email, password)
-    auth = _context_auth(page.context)
+    auth = _session_from_page(page)
     ok = bool(session.get("logged_in") and auth.get("token"))
     return {
         "logged_in": ok,
@@ -990,21 +1100,122 @@ def _ensure_logged_in_page(page, email: str, password: str) -> dict[str, Any]:
 
 def _origin_fetch(page, method: str, path: str, *, payload=None, headers=None) -> dict[str, Any]:
     url = path if str(path).startswith("http") else f"https://www.carrefouruae.com{path}"
+    hdrs = dict(headers or {})
+    if (method or "GET").upper() in ("GET", "HEAD"):
+        for key in list(hdrs):
+            if key.lower() == "content-type":
+                hdrs.pop(key, None)
     return (
         page.evaluate(
             _ORIGIN_FETCH_JS,
-            {"method": method, "url": url, "payload": payload, "headers": headers or {}},
+            {"method": method, "url": url, "payload": payload, "headers": hdrs},
         )
         or {}
     )
 
 
-def _browser_headers(token: str, user_id: str, loc: dict[str, Any]) -> dict[str, str]:
+def _browser_headers(token: str, user_id: str, loc: dict[str, Any], *, method: str = "GET") -> dict[str, str]:
+    """Website XHR headers. Android appid + Content-Type on GET makes liteCart 400."""
     from bring_fast.stores import carrefour as api
 
-    h = api.android_headers(token=token, user_id=user_id, fulfilment=loc or {})
-    h.pop("User-Agent", None)
+    loc = loc or {}
+    lat = loc.get("lat") if loc.get("lat") is not None else api.LAT
+    lng = loc.get("lng") if loc.get("lng") is not None else api.LNG
+    h = {
+        "Accept": "application/json",
+        "storeid": api.MARKET,
+        "lang": api.LANG,
+        "langCode": api.LANG,
+        "currency": "AED",
+        "env": "prod",
+        "appid": "Web",
+        "latitude": str(lat),
+        "longitude": str(lng),
+    }
+    verb = (method or "GET").upper()
+    if verb not in ("GET", "HEAD"):
+        h["Content-Type"] = "application/json"
+        h["intent"] = str(loc.get("intent") or "SLOTTED")
+    if loc.get("pos_info"):
+        h["posInfo"] = str(loc["pos_info"])
+    if loc.get("pos_info2"):
+        h["posInfo2"] = str(loc["pos_info2"])
+    if loc.get("emirate_code"):
+        h["emirateCode"] = str(loc["emirate_code"])
+    if user_id:
+        h["userId"] = str(user_id)
+    if token:
+        raw = token[7:].strip() if str(token).lower().startswith("bearer ") else str(token)
+        h["Authorization"] = f"Bearer {raw}"
+        h["token"] = raw
     return h
+
+
+def _fetch_ok(listed: dict[str, Any]) -> bool:
+    if listed.get("akamai"):
+        return False
+    status = int(listed.get("status") or 0)
+    return 0 < status < 400
+
+
+def _lite_cart_error(listed: dict[str, Any]) -> str:
+    from bring_fast.stores import carrefour as api
+
+    if listed.get("akamai"):
+        return api.AKAMAI_UNREAD
+    status = listed.get("status")
+    body = listed.get("body")
+    msg = ""
+    if isinstance(body, dict):
+        err = body.get("error")
+        if isinstance(err, dict):
+            msg = str(err.get("message") or "")
+        elif isinstance(err, str):
+            msg = err
+        meta = body.get("meta") if isinstance(body.get("meta"), dict) else {}
+        msg = msg or str(meta.get("message") or "")
+    elif isinstance(body, str) and 0 < len(body) < 180:
+        msg = body
+    base = f"liteCart HTTP {status}"
+    return f"{base}: {msg}" if msg else base
+
+
+def _header_variants(token: str, user_id: str, loc: dict[str, Any]) -> list[dict[str, str]]:
+    web = _browser_headers(token, user_id, loc, method="GET")
+    auth_only: dict[str, str] = {"Accept": "application/json"}
+    if token:
+        raw = token[7:].strip() if str(token).lower().startswith("bearer ") else str(token)
+        auth_only["Authorization"] = f"Bearer {raw}"
+        auth_only["token"] = raw
+    if user_id:
+        auth_only["userId"] = str(user_id)
+    cookie_only = {"Accept": "application/json"}
+    out: list[dict[str, str]] = []
+    seen: set[tuple[tuple[str, str], ...]] = set()
+    for h in (web, auth_only, cookie_only):
+        key = tuple(sorted((k, str(v)) for k, v in h.items()))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(h)
+    return out
+
+
+def _lite_cart_via_page(page, token: str, user_id: str, loc: dict[str, Any]) -> dict[str, Any]:
+    """GET liteCart with web headers, then cookie-only if the first call is a 400."""
+    last: dict[str, Any] = {}
+    path = _lite_cart_path(loc)
+    for headers in _header_variants(token, user_id, loc):
+        last = _origin_fetch(page, "GET", path, headers=headers)
+        if _fetch_ok(last):
+            return last
+        if last.get("akamai"):
+            return last
+        status = int(last.get("status") or 0)
+        if status in (0, 400, 401, 415):
+            continue
+        return last
+    return last
 
 
 def _pos_from_page(page) -> dict[str, Any]:
@@ -1133,7 +1344,7 @@ def _carrefour_browser_api_cart(
                 "driver": via,
                 "error": session.get("error") or "Carrefour login did not yield an API token.",
             }
-        token, user_id = session["token"], session["user_id"]
+        token, user_id = session["token"], session.get("user_id") or ""
         loc = _pos_from_page(page)
         if "login" in (page.url or "").lower() or (action in ("add", "set") and not loc.get("pos_info")):
             try:
@@ -1146,7 +1357,11 @@ def _carrefour_browser_api_cart(
             except Exception:
                 pass
             loc = _pos_from_page(page)
-        headers = _browser_headers(token, user_id, loc)
+            harvested = _session_from_page(page)
+            token = token or harvested.get("token") or ""
+            user_id = user_id or harvested.get("user_id") or ""
+        write_headers = _browser_headers(token, user_id, loc, method="POST")
+        reused = bool(session.get("reused"))
         act = (action or "list").strip().lower()
         if act in _CART_LIST_ACTIONS:
             act = "list"
@@ -1154,8 +1369,8 @@ def _carrefour_browser_api_cart(
         add_code = None
         snapshot: list[dict[str, Any]] = []
         if act in ("clear", "create", "empty", "new"):
-            listed = _origin_fetch(page, "GET", _lite_cart_path(loc), headers=headers)
-            live_items = api.parse_items(listed.get("body"))
+            listed = _lite_cart_via_page(page, token, user_id, loc)
+            live_items = api.parse_items(listed.get("body")) if _fetch_ok(listed) else []
             ids = [str(it.get("id") or "") for it in live_items if it.get("id")]
             if ids:
                 _origin_fetch(
@@ -1163,7 +1378,7 @@ def _carrefour_browser_api_cart(
                     "DELETE",
                     f"/v1/basket/{api.MARKET}/{api.LANG}/entries",
                     payload={"productIds": ids},
-                    headers=headers,
+                    headers=write_headers,
                 )
         elif act == "remove":
             ids = [str(it.get("id") or "") for it in items if it.get("id")]
@@ -1173,21 +1388,22 @@ def _carrefour_browser_api_cart(
                     "DELETE",
                     f"/v1/basket/{api.MARKET}/{api.LANG}/entries",
                     payload={"productIds": ids},
-                    headers=headers,
+                    headers=write_headers,
                 )
         elif act in ("add", "set"):
             add_err = None
             add_code = None
-            snap_listed = _origin_fetch(page, "GET", _lite_cart_path(loc), headers=headers)
-            snapshot = api.parse_items(snap_listed.get("body")) if not snap_listed.get("akamai") else []
+            snap_listed = _lite_cart_via_page(page, token, user_id, loc)
+            snapshot = api.parse_items(snap_listed.get("body")) if _fetch_ok(snap_listed) else []
             for it in items:
-                last = _add_via_page(page, headers, loc, it)
+                last = _add_via_page(page, write_headers, loc, it)
                 if last.get("akamai"):
                     return {
                         "ok": False,
                         "official_count": None,
                         "items": [],
                         "logged_in": True,
+                        "session_reused": reused,
                         "driver": via,
                         "error": api.AKAMAI_UNREAD,
                         "error_code": "akamai_blocked",
@@ -1208,24 +1424,25 @@ def _carrefour_browser_api_cart(
                         msg = msg or str(meta.get("message") or "")
                     add_err = msg or f"add HTTP {status}"
                     add_code = "internal_error" if "internal server error" in add_err.lower() else None
-        listed = _origin_fetch(page, "GET", _lite_cart_path(loc), headers=headers)
+        listed = _lite_cart_via_page(page, token, user_id, loc)
         if listed.get("akamai") or int(listed.get("status") or 0) >= 400:
             return {
                 "ok": False,
                 "official_count": None,
                 "items": [],
                 "logged_in": True,
+                "session_reused": reused,
                 "driver": via,
-                "error": api.AKAMAI_UNREAD if listed.get("akamai") else f"liteCart HTTP {listed.get('status')}",
-                "error_code": "akamai_blocked" if listed.get("akamai") else None,
+                "error": _lite_cart_error(listed),
+                "error_code": "akamai_blocked" if listed.get("akamai") else "litecart_http_error",
                 "token": token,
                 "user_id": user_id,
             }
         live_items = api.enrich_items(api.parse_items(listed.get("body")))
         if act in ("add", "set") and api.cart_was_emptied(snapshot, live_items):
             for old in snapshot:
-                _add_via_page(page, headers, loc, old)
-            listed = _origin_fetch(page, "GET", _lite_cart_path(loc), headers=headers)
+                _add_via_page(page, write_headers, loc, old)
+            listed = _lite_cart_via_page(page, token, user_id, loc)
             live_items = api.enrich_items(api.parse_items(listed.get("body")))
             if add_err and live_items:
                 add_code = add_code or "cart_restored"
@@ -1235,6 +1452,7 @@ def _carrefour_browser_api_cart(
                 "official_count": len(live_items),
                 "items": live_items,
                 "logged_in": True,
+                "session_reused": reused,
                 "driver": via,
                 "error": add_err,
                 "error_code": add_code,
@@ -1256,8 +1474,8 @@ def _carrefour_browser_api_cart(
             "official_count": len(live_items),
             "items": live_items,
             "logged_in": True,
-            "session_reused": bool(session.get("reused")),
-            "driver": "playwright",
+            "session_reused": reused,
+            "driver": via,
             "akamai_retry": "browser_api",
             "token": token,
             "user_id": user_id,
@@ -1269,7 +1487,8 @@ def _carrefour_browser_api_cart(
             "official_count": None,
             "items": [],
             "logged_in": bool(email),
-            "driver": "playwright",
+            "session_reused": False,
+            "driver": via,
             "error": f"{api.AKAMAI_UNREAD} Browser cart failed ({type(e).__name__}: {e}).",
             "error_code": "akamai_blocked",
         }
@@ -1337,7 +1556,11 @@ def _carrefour_official_cart(
     elif not _http_unusable(probe):
         return probe
     else:
-        live["error_code"] = live.get("error_code") or "akamai_blocked"
+        if not live.get("error_code"):
+            if _akamai_result(live):
+                live["error_code"] = "akamai_blocked"
+            elif "litecart http" in str(live.get("error") or "").lower():
+                live["error_code"] = "litecart_http_error"
 
     site = _carrefour_browser_api_cart(
         email=email,
@@ -1350,7 +1573,12 @@ def _carrefour_official_cart(
         site["akamai_retry"] = site.get("akamai_retry") or "browser_api"
         site["driver"] = site.get("driver") or "playwright"
         return site
-    site["error_code"] = site.get("error_code") or live.get("error_code") or "akamai_blocked"
+    if not site.get("error_code"):
+        err = str(site.get("error") or "")
+        if "liteCart HTTP" in err:
+            site["error_code"] = "litecart_http_error"
+        else:
+            site["error_code"] = live.get("error_code") or "akamai_blocked"
     if email:
         site["logged_in"] = True
     site["error"] = site.get("error") or live.get("error") or carrefour_api.AKAMAI_UNREAD

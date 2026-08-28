@@ -16,6 +16,10 @@ def test_whoami_shows_linked_login_not_a_local_cart(bf):
     out = json.loads(bf._call_tool(user, "bf_whoami", {}))
     assert out["success"] is True
     assert out["email"] == "e@example.com"
+    assert out["version"]
+    from bring_fast import __version__
+    assert out["version"] == __version__
+    assert out.get("boot")
     assert "grandiose" in out["linked_stores"]
     assert "carrefour" not in out["linked_stores"]
     assert "carrefour" in out["unlinked_stores"]
@@ -37,6 +41,8 @@ def test_stores_does_not_treat_empty_dashboard_address_as_no_login(bf):
     assert grandiose["login_saved"] is True
     assert "grandiose" in out["linked_stores"]
     assert "do not say a store has no login" in out["note"].lower()
+    from bring_fast import __version__
+    assert out["version"] == __version__
 
 
 def test_status_does_not_invent_items_when_live_cart_fails(bf, monkeypatch):
@@ -412,6 +418,42 @@ def test_carrefour_akamai_unread_keeps_login_saved(bf, monkeypatch):
     assert "unread" in out["what_happens"].lower()
     assert "login_saved=True" in out["note"]
     assert "does not mean the supermarket login is missing" in out["note"] or "akamai_blocked" in out["note"]
+
+
+def test_bf_cart_list_after_browser_retry_has_name_and_price(bf, monkeypatch):
+    """bf_cart is the Grok fallback when carrefour_cart is missing from the client cache."""
+    user = bf.db.create_user("list@example.com", "secret1")
+    bf.db.set_retailer_account(user["id"], "carrefour", "e@mrg.im", "store-pass")
+    user = bf.db.get_user_by_id(user["id"])
+    monkeypatch.setattr(
+        bf.checkout,
+        "official_cart",
+        lambda **kw: {
+            "ok": True,
+            "official_count": 1,
+            "items": [
+                {
+                    "id": "743861",
+                    "name": "Coca-Cola Zero 330ml Can",
+                    "qty": 1,
+                    "price": 1.99,
+                }
+            ],
+            "logged_in": True,
+            "session_reused": True,
+            "driver": "cdp",
+            "akamai_retry": "browser_api",
+        },
+    )
+    out = json.loads(bf._call_tool(user, "bf_cart", {"retailer": "carrefour", "action": "list"}))
+    assert out["success"] is True
+    assert out["official_ok"] is True
+    assert out["login_saved"] is True
+    assert out["items"][0]["id"] == "743861"
+    assert "Coca-Cola" in (out["items"][0].get("name") or "")
+    assert out["items"][0]["price"] == 1.99
+    assert out["akamai_retry"] == "browser_api"
+    assert out["driver"] == "cdp"
 
 
 def test_carrefour_add_passes_product_page_url(bf, monkeypatch):
