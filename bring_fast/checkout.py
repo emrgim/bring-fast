@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 SHOT_DIR = Path(os.environ.get("BRINGFAST_DATA", Path.home() / ".bring-fast")) / "checkout-shots"
 
@@ -632,11 +633,8 @@ async ({ method, url, payload, headers }) => {
     credentials: 'include',
     headers: Object.assign({ Accept: 'application/json' }, headers || {}),
   };
-  if (method === 'GET' || method === 'HEAD') {
-    delete opts.headers['Content-Type'];
-    delete opts.headers['content-type'];
-  } else if (payload != null) {
-    opts.headers['Content-Type'] = opts.headers['Content-Type'] || 'application/json';
+  if (method !== 'GET' && method !== 'HEAD' && payload != null) {
+    opts.headers['Content-Type'] = opts.headers['Content-Type'] || 'application/json; charset=utf-8';
     opts.body = JSON.stringify(payload);
   }
   const ctrl = new AbortController();
@@ -663,50 +661,50 @@ async ({ method, url, payload, headers }) => {
 
 _SESSION_FROM_PAGE_JS = """
 () => {
-  const out = {token: '', user_id: ''};
-  const take = (k, v) => {
-    const key = String(k || '').toLowerCase();
-    if (v == null || (typeof v !== 'string' && typeof v !== 'number')) return;
-    let val = String(v).replace(/^Bearer\\s+/i, '').trim();
-    if (!val || val === 'undefined' || val === 'null' || val.length < 2) return;
-    if (val.startsWith('{') || val.startsWith('[')) return;
-    if (!out.token && (key === 'token' || key === 'accesstoken' || key === 'access_token')) {
-      if (val.length > 12) out.token = val;
-    }
-    if (!out.user_id && (key === 'userid' || key === 'user_id' || key === 'customerid' || key === 'customer_id')) {
-      out.user_id = val;
-    }
+  const snap = (v) => {
+    try {
+      const s = JSON.stringify(v);
+      if (!s || s.length > 220000) return null;
+      return JSON.parse(s);
+    } catch (e) { return null; }
   };
+  const cookies = {};
   try {
     (document.cookie || '').split(';').forEach((p) => {
       const i = p.indexOf('=');
       if (i > 0) {
         let v = p.slice(i + 1).trim();
         try { v = decodeURIComponent(v); } catch (e) {}
-        take(p.slice(0, i).trim(), v);
+        cookies[p.slice(0, i).trim()] = v;
       }
     });
   } catch (e) {}
-  const walk = (o, depth) => {
-    if (!o || depth > 3 || typeof o !== 'object') return;
-    for (const [k, v] of Object.entries(o)) {
-      if (typeof v === 'string' || typeof v === 'number') take(k, v);
-      else if (v && typeof v === 'object') walk(v, depth + 1);
-    }
-  };
-  for (const store of [localStorage, sessionStorage]) {
+  const bag = (store) => {
+    const out = {};
     try {
       for (let i = 0; i < store.length; i++) {
         const k = store.key(i);
-        const v = store.getItem(k);
-        take(k, v);
-        if (v && (v[0] === '{' || v[0] === '[')) {
-          try { walk(JSON.parse(v), 0); } catch (e) {}
-        }
+        if (k) out[k] = store.getItem(k);
       }
     } catch (e) {}
+    return out;
+  };
+  let maf = null;
+  for (const k of ['__MAF__', 'maf', 'mafCustomer', 'customer', 'C4User', 'c4User']) {
+    try {
+      if (window[k]) { maf = snap(window[k]) || maf; }
+    } catch (e) {}
   }
-  return out;
+  return {
+    cookies,
+    localStorage: bag(localStorage),
+    sessionStorage: bag(sessionStorage),
+    nuxt: snap(window.__NUXT__),
+    next: snap(window.__NEXT_DATA__),
+    next_f: snap(window.__next_f),
+    dataLayer: snap(window.dataLayer),
+    maf,
+  };
 }
 """
 
@@ -989,27 +987,140 @@ def _launch_carrefour_cart():
     return pw, browser, context, "headless"
 
 
-def _context_auth(context) -> dict[str, str]:
-    out = {"token": "", "user_id": ""}
-    try:
-        for c in context.cookies():
-            if not isinstance(c, dict):
-                continue
-            name = str(c.get("name") or "").lower()
-            value = str(c.get("value") or "")
-            try:
-                from urllib.parse import unquote
+_ANONYMOUS_USER = "anonymous"
+_USER_ID_KEY_NORMS = frozenset(
+    {
+        "userid",
+        "customerid",
+        "customer_id",
+        "accountid",
+        "mafid",
+        "uid",
+        "cid",
+    }
+)
+_ID_PARENT_NORMS = frozenset(
+    {"user", "customer", "account", "auth", "profile", "session", "login", "me"}
+)
+_TOKEN_KEY_NORMS = frozenset({"token", "accesstoken", "access_token", "authtoken"})
 
-                value = unquote(value)
+
+def _norm_key(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (name or "").lower())
+
+
+def _usable_id(val: Any) -> str:
+    """A value the website would put on the userId header. Skip guest/empty/JSON."""
+    if val is None or isinstance(val, (dict, list, bool)):
+        return ""
+    raw = str(val).strip()
+    if raw.lower().startswith("bearer "):
+        raw = raw[7:].strip()
+    if not raw or len(raw) < 2:
+        return ""
+    low = raw.lower()
+    if low in ("undefined", "null", _ANONYMOUS_USER, "guest", "none"):
+        return ""
+    if raw[0] in "{[":
+        return ""
+    return raw
+
+
+def _walk_user_ids(obj: Any, *, depth: int = 0, parent: str = "") -> list[str]:
+    found: list[str] = []
+    if depth > 8 or obj is None:
+        return found
+    if isinstance(obj, str):
+        blob = obj.strip()
+        if blob[:1] in "{[":
+            try:
+                return _walk_user_ids(json.loads(blob), depth=depth + 1, parent=parent)
             except Exception:
-                pass
-            if name == "token":
-                out["token"] = value
-            if name in ("userid", "user_id", "customerid", "customer_id") and not out["user_id"]:
-                out["user_id"] = value
-    except Exception:
-        pass
+                return found
+        return found
+    if isinstance(obj, dict):
+        for key, val in obj.items():
+            nk = _norm_key(str(key))
+            if nk in _USER_ID_KEY_NORMS or nk in ("email", "hashedemail"):
+                got = _usable_id(val)
+                if got and nk != "hashedemail":
+                    found.append(got)
+            if nk in ("id", "sub") and _norm_key(parent) in _ID_PARENT_NORMS:
+                got = _usable_id(val)
+                if got:
+                    found.append(got)
+            if isinstance(val, (dict, list)) or (isinstance(val, str) and val[:1] in "{["):
+                found.extend(_walk_user_ids(val, depth=depth + 1, parent=str(key)))
+        return found
+    if isinstance(obj, list):
+        for item in obj[:80]:
+            found.extend(_walk_user_ids(item, depth=depth + 1, parent=parent))
+    return found
+
+
+def _ids_from_html(html: str) -> list[str]:
+    """customerId / userId from Next.js RSC (__next_f) / SSR JSON."""
+    found: list[str] = []
+    if not html:
+        return found
+    for key in ("userId", "customerId", "customer_id", "accountId"):
+        for m in re.finditer(rf'\\?"{key}\\?"\\?\s*:\\?\s*\\?"([^"\\]+)\\?"', html):
+            got = _usable_id(m.group(1).replace("\\u0022", '"'))
+            if got:
+                found.append(got)
+    return found
+
+
+def _cookie_map(raw: Any) -> dict[str, str]:
+    out: dict[str, str] = {}
+    if isinstance(raw, dict):
+        items = raw.items()
+    elif isinstance(raw, list):
+        items = [
+            (row.get("name"), row.get("value"))
+            for row in raw
+            if isinstance(row, dict) and row.get("name")
+        ]
+    else:
+        return out
+    for name, value in items:
+        if not name:
+            continue
+        val = str(value or "")
+        try:
+            val = unquote(val)
+        except Exception:
+            pass
+        out[str(name)] = val
     return out
+
+
+def _token_from_maps(cookies: dict[str, str], extra: dict[str, Any] | None = None) -> str:
+    extra = extra or {}
+
+    def from_val(val: Any) -> str:
+        got = str(val or "").strip()
+        if got.lower().startswith("bearer "):
+            got = got[7:].strip()
+        if not got or got.lower() in ("undefined", "null"):
+            return ""
+        if got[0] in "{[":
+            return ""
+        return got
+
+    for name, val in cookies.items():
+        if _norm_key(name) in _TOKEN_KEY_NORMS:
+            got = from_val(val)
+            if got:
+                return got
+    store = extra.get("localStorage")
+    if isinstance(store, dict):
+        for name, val in store.items():
+            if _norm_key(str(name)) in _TOKEN_KEY_NORMS:
+                got = from_val(val)
+                if got:
+                    return got
+    return from_val(extra.get("token"))
 
 
 def _user_id_from_token(token: str) -> str:
@@ -1028,32 +1139,136 @@ def _user_id_from_token(token: str) -> str:
         return ""
     if not isinstance(payload, dict):
         return ""
-    for key in ("userId", "user_id", "customerId", "customer_id", "cid"):
-        val = payload.get(key)
-        if val not in (None, ""):
-            return str(val)
+    for key in ("userId", "user_id", "customerId", "customer_id", "cid", "uid", "email"):
+        got = _usable_id(payload.get(key))
+        if got:
+            return got
+    nested = _walk_user_ids(payload.get("user") or payload.get("customer") or {})
+    if nested:
+        return nested[0]
+    sub = _usable_id(payload.get("sub"))
+    if sub and ("@" in sub or sub.isdigit() or len(sub) >= 8):
+        return sub
     return ""
 
 
-def _session_from_page(page) -> dict[str, str]:
-    """token + userId from cookies, localStorage, or the JWT — not cookies alone.
+def _pick_user_id(
+    *,
+    cookies: dict[str, str] | None = None,
+    extra: dict[str, Any] | None = None,
+    token: str = "",
+    email: str = "",
+    session_user: str = "",
+    html: str = "",
+) -> str:
+    """Website XHR sets headers.userId from cookie `userId`, else `anonymous`.
 
-    MAF often keeps userId in the SPA store. Cookie-only reads miss it and liteCart
-    then returns HTTP 400, which we used to stamp as akamai_blocked.
+    Production CDP often has no userId cookie. Fall back to customerId, SPA
+    storage / JWT / Next payload / dataLayer, then the saved login email.
     """
-    out = _context_auth(getattr(page, "context", page))
+    cookies = dict(cookies or {})
+    extra = extra or {}
+    for bag in (extra.get("cookies"),):
+        if isinstance(bag, dict):
+            for name, val in bag.items():
+                cookies.setdefault(str(name), str(val or ""))
+
+    def from_named_cookies(*want: str) -> str:
+        want_n = {_norm_key(w) for w in want}
+        for name, val in cookies.items():
+            if _norm_key(name) not in want_n:
+                continue
+            got = _usable_id(val)
+            if got:
+                return got
+            for nested in _walk_user_ids(val):
+                return nested
+        return ""
+
+    # Exact website source: cookies-next getCookie("userId") || "anonymous"
+    got = from_named_cookies("userId", "user_id")
+    if got:
+        return got
+    got = from_named_cookies("customerId", "customer_id", "accountId")
+    if got:
+        return got
+
+    walked: list[str] = []
+    for name, val in cookies.items():
+        walked.extend(_walk_user_ids(val, parent=str(name)))
+    for key in ("localStorage", "sessionStorage", "nuxt", "next", "next_f", "dataLayer", "maf"):
+        walked.extend(_walk_user_ids(extra.get(key)))
+    walked.extend(_ids_from_html(html))
+    if extra.get("user_id"):
+        got = _usable_id(extra.get("user_id"))
+        if got:
+            walked.insert(0, got)
+    for candidate in walked:
+        if candidate:
+            return candidate
+
+    got = _user_id_from_token(token)
+    if got:
+        return got
+    got = _usable_id(session_user)
+    if got:
+        return got
+    got = _usable_id(email)
+    if got:
+        return got
+    return ""
+
+
+def _context_auth(context) -> dict[str, str]:
+    cookies = _cookie_map(getattr(context, "cookies", lambda: [])())
+    token = _token_from_maps(cookies)
+    user_id = _pick_user_id(cookies=cookies, token=token)
+    return {"token": token, "user_id": user_id}
+
+
+def _session_from_page(
+    page,
+    *,
+    email: str = "",
+    session_user: str = "",
+    html: str = "",
+) -> dict[str, str]:
+    """token + userId from the live MAF page, matching website XHR.
+
+    The Next.js client reads cookie `userId` (email) and always sends that
+    header, defaulting to `anonymous`. userId is often missing from cookies on
+    CDP; harvest customerId, storage, JWT, __next_f / dataLayer, then email.
+    """
+    cookies: dict[str, str] = {}
+    try:
+        cookies = _cookie_map(getattr(getattr(page, "context", page), "cookies", lambda: [])())
+    except Exception:
+        cookies = {}
+    extra: dict[str, Any] = {}
     try:
         extra = page.evaluate(_SESSION_FROM_PAGE_JS) or {}
     except Exception:
         extra = {}
-    if isinstance(extra, dict):
-        if extra.get("token") and not out["token"]:
-            out["token"] = str(extra["token"])
-        if extra.get("user_id") and not out["user_id"]:
-            out["user_id"] = str(extra["user_id"])
-    if not out["user_id"] and out["token"]:
-        out["user_id"] = _user_id_from_token(out["token"])
-    return out
+    if not isinstance(extra, dict):
+        extra = {}
+    if isinstance(extra.get("cookies"), dict):
+        for name, val in extra["cookies"].items():
+            cookies.setdefault(str(name), str(val or ""))
+    if not html:
+        try:
+            html = page.content() or ""
+        except Exception:
+            html = ""
+    token = _token_from_maps(cookies, extra) or _usable_id(extra.get("token"))
+    user_id = _pick_user_id(
+        cookies=cookies,
+        extra=extra,
+        token=token,
+        email=email,
+        session_user=session_user,
+        html=html,
+    )
+    return {"token": token or "", "user_id": user_id or ""}
 
 
 def _carrefour_origin_page(context):
@@ -1073,11 +1288,10 @@ def _carrefour_origin_page(context):
 
 
 def _ensure_logged_in_page(page, email: str, password: str) -> dict[str, Any]:
-    auth = _session_from_page(page)
+    auth = _session_from_page(page, email=email)
     url = (page.url or "").lower()
     if (
         auth["token"]
-        and auth["user_id"]
         and "/login" not in url
         and not _looks_signed_out(page)
     ):
@@ -1088,7 +1302,7 @@ def _ensure_logged_in_page(page, email: str, password: str) -> dict[str, Any]:
                 _mark_account(page, email)
             return {"logged_in": True, "reused": True, "error": None, **auth}
     session = ensure_store_login(page, "carrefour", email, password)
-    auth = _session_from_page(page)
+    auth = _session_from_page(page, email=email)
     ok = bool(session.get("logged_in") and auth.get("token"))
     return {
         "logged_in": ok,
@@ -1101,10 +1315,6 @@ def _ensure_logged_in_page(page, email: str, password: str) -> dict[str, Any]:
 def _origin_fetch(page, method: str, path: str, *, payload=None, headers=None) -> dict[str, Any]:
     url = path if str(path).startswith("http") else f"https://www.carrefouruae.com{path}"
     hdrs = dict(headers or {})
-    if (method or "GET").upper() in ("GET", "HEAD"):
-        for key in list(hdrs):
-            if key.lower() == "content-type":
-                hdrs.pop(key, None)
     return (
         page.evaluate(
             _ORIGIN_FETCH_JS,
@@ -1115,26 +1325,39 @@ def _origin_fetch(page, method: str, path: str, *, payload=None, headers=None) -
 
 
 def _browser_headers(token: str, user_id: str, loc: dict[str, Any], *, method: str = "GET") -> dict[str, str]:
-    """Website XHR headers. Android appid + Content-Type on GET makes liteCart 400."""
+    """Headers the MAF Next.js client sends (chunk 9600 + 39478 + 13864).
+
+    userId is always set: getCookie('userId') || 'anonymous'. Omitting it is a 400.
+    """
     from bring_fast.stores import carrefour as api
 
     loc = loc or {}
     lat = loc.get("lat") if loc.get("lat") is not None else api.LAT
     lng = loc.get("lng") if loc.get("lng") is not None else api.LNG
+    uid = _usable_id(user_id) or _ANONYMOUS_USER
     h = {
         "Accept": "application/json",
+        "Content-Type": "application/json; charset=utf-8",
+        "X-Requested-With": "XMLHttpRequest",
         "storeid": api.MARKET,
+        "storeId": api.MARKET,
         "lang": api.LANG,
         "langCode": api.LANG,
         "currency": "AED",
         "env": "prod",
-        "appid": "Web",
+        "appId": "Reactweb",
+        "channel": "c4online",
+        "x-maf-revamp": "true",
+        "x-maf-env": "prod",
+        "x-maf-tenant": "mafretail",
+        "x-maf-account": "carrefour",
+        "appflavour": "carrefour",
         "latitude": str(lat),
         "longitude": str(lng),
+        "userId": uid,
     }
     verb = (method or "GET").upper()
     if verb not in ("GET", "HEAD"):
-        h["Content-Type"] = "application/json"
         h["intent"] = str(loc.get("intent") or "SLOTTED")
     if loc.get("pos_info"):
         h["posInfo"] = str(loc["pos_info"])
@@ -1142,12 +1365,11 @@ def _browser_headers(token: str, user_id: str, loc: dict[str, Any], *, method: s
         h["posInfo2"] = str(loc["pos_info2"])
     if loc.get("emirate_code"):
         h["emirateCode"] = str(loc["emirate_code"])
-    if user_id:
-        h["userId"] = str(user_id)
     if token:
         raw = token[7:].strip() if str(token).lower().startswith("bearer ") else str(token)
-        h["Authorization"] = f"Bearer {raw}"
-        h["token"] = raw
+        bearer = f"Bearer {raw}"
+        h["Authorization"] = bearer
+        h["token"] = bearer
     return h
 
 
@@ -1180,41 +1402,62 @@ def _lite_cart_error(listed: dict[str, Any]) -> str:
     return f"{base}: {msg}" if msg else base
 
 
+def _error_blob(listed: dict[str, Any]) -> str:
+    parts = [_lite_cart_error(listed), str(listed.get("body") or "")]
+    return " ".join(parts).lower()
+
+
+def _missing_user_id_error(listed: dict[str, Any]) -> bool:
+    blob = _error_blob(listed).replace("_", "")
+    if "userid" not in blob:
+        return False
+    return any(w in blob for w in ("mancante", "missing", "required", "absent", "empty", "header"))
+
+
 def _header_variants(token: str, user_id: str, loc: dict[str, Any]) -> list[dict[str, str]]:
-    web = _browser_headers(token, user_id, loc, method="GET")
-    auth_only: dict[str, str] = {"Accept": "application/json"}
-    if token:
-        raw = token[7:].strip() if str(token).lower().startswith("bearer ") else str(token)
-        auth_only["Authorization"] = f"Bearer {raw}"
-        auth_only["token"] = raw
-    if user_id:
-        auth_only["userId"] = str(user_id)
-    cookie_only = {"Accept": "application/json"}
-    out: list[dict[str, str]] = []
-    seen: set[tuple[tuple[str, str], ...]] = set()
-    for h in (web, auth_only, cookie_only):
-        key = tuple(sorted((k, str(v)) for k, v in h.items()))
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(h)
-    return out
+    """Single website-shaped GET. The site never omits userId; neither do we."""
+    return [_browser_headers(token, user_id, loc, method="GET")]
 
 
-def _lite_cart_via_page(page, token: str, user_id: str, loc: dict[str, Any]) -> dict[str, Any]:
-    """GET liteCart with web headers, then cookie-only if the first call is a 400."""
-    last: dict[str, Any] = {}
+def _lite_cart_via_page(
+    page,
+    token: str,
+    user_id: str,
+    loc: dict[str, Any],
+    *,
+    email: str = "",
+    session_user: str = "",
+) -> dict[str, Any]:
+    """GET liteCart with the website userId header. Re-harvest only if 400 says it's missing."""
     path = _lite_cart_path(loc)
-    for headers in _header_variants(token, user_id, loc):
-        last = _origin_fetch(page, "GET", path, headers=headers)
-        if _fetch_ok(last):
-            return last
-        if last.get("akamai"):
-            return last
-        status = int(last.get("status") or 0)
-        if status in (0, 400, 401, 415):
-            continue
+    uid = _usable_id(user_id)
+    if not uid:
+        harvested = _session_from_page(page, email=email, session_user=session_user)
+        token = token or harvested.get("token") or ""
+        uid = _usable_id(harvested.get("user_id")) or _usable_id(session_user) or _usable_id(email)
+    uid = uid or _ANONYMOUS_USER
+
+    def send(current: str) -> dict[str, Any]:
+        return _origin_fetch(
+            page, "GET", path, headers=_browser_headers(token, current, loc, method="GET")
+        )
+
+    last = send(uid)
+    if _fetch_ok(last) or last.get("akamai"):
         return last
+    status = int(last.get("status") or 0)
+    if status == 400 and _missing_user_id_error(last):
+        harvested = _session_from_page(page, email=email, session_user=session_user)
+        token = token or harvested.get("token") or ""
+        nxt = (
+            _usable_id(harvested.get("user_id"))
+            or _usable_id(session_user)
+            or _usable_id(email)
+        )
+        if nxt and nxt != uid:
+            retry = send(nxt)
+            return retry
+        # Site never retries without userId. Don't send a GET we know will 400.
     return last
 
 
@@ -1299,6 +1542,7 @@ def _carrefour_browser_api_cart(
     password: str,
     action: str,
     items: list[dict[str, Any]],
+    session_user: str = "",
 ) -> dict[str, Any]:
     """Same-origin fetch of liteCart / addItem inside a real browser. No product-page clicks."""
     from bring_fast.stores import carrefour as api
@@ -1357,9 +1601,14 @@ def _carrefour_browser_api_cart(
             except Exception:
                 pass
             loc = _pos_from_page(page)
-            harvested = _session_from_page(page)
-            token = token or harvested.get("token") or ""
-            user_id = user_id or harvested.get("user_id") or ""
+        harvested = _session_from_page(page, email=email, session_user=session_user)
+        token = token or harvested.get("token") or ""
+        user_id = (
+            _usable_id(user_id)
+            or _usable_id(harvested.get("user_id"))
+            or _usable_id(session_user)
+            or _usable_id(email)
+        )
         write_headers = _browser_headers(token, user_id, loc, method="POST")
         reused = bool(session.get("reused"))
         act = (action or "list").strip().lower()
@@ -1369,7 +1618,9 @@ def _carrefour_browser_api_cart(
         add_code = None
         snapshot: list[dict[str, Any]] = []
         if act in ("clear", "create", "empty", "new"):
-            listed = _lite_cart_via_page(page, token, user_id, loc)
+            listed = _lite_cart_via_page(
+                page, token, user_id, loc, email=email, session_user=session_user
+            )
             live_items = api.parse_items(listed.get("body")) if _fetch_ok(listed) else []
             ids = [str(it.get("id") or "") for it in live_items if it.get("id")]
             if ids:
@@ -1393,7 +1644,9 @@ def _carrefour_browser_api_cart(
         elif act in ("add", "set"):
             add_err = None
             add_code = None
-            snap_listed = _lite_cart_via_page(page, token, user_id, loc)
+            snap_listed = _lite_cart_via_page(
+                page, token, user_id, loc, email=email, session_user=session_user
+            )
             snapshot = api.parse_items(snap_listed.get("body")) if _fetch_ok(snap_listed) else []
             for it in items:
                 last = _add_via_page(page, write_headers, loc, it)
@@ -1424,7 +1677,9 @@ def _carrefour_browser_api_cart(
                         msg = msg or str(meta.get("message") or "")
                     add_err = msg or f"add HTTP {status}"
                     add_code = "internal_error" if "internal server error" in add_err.lower() else None
-        listed = _lite_cart_via_page(page, token, user_id, loc)
+        listed = _lite_cart_via_page(
+            page, token, user_id, loc, email=email, session_user=session_user
+        )
         if listed.get("akamai") or int(listed.get("status") or 0) >= 400:
             return {
                 "ok": False,
@@ -1442,7 +1697,9 @@ def _carrefour_browser_api_cart(
         if act in ("add", "set") and api.cart_was_emptied(snapshot, live_items):
             for old in snapshot:
                 _add_via_page(page, write_headers, loc, old)
-            listed = _lite_cart_via_page(page, token, user_id, loc)
+            listed = _lite_cart_via_page(
+                page, token, user_id, loc, email=email, session_user=session_user
+            )
             live_items = api.enrich_items(api.parse_items(listed.get("body")))
             if add_err and live_items:
                 add_code = add_code or "cart_restored"
@@ -1567,6 +1824,7 @@ def _carrefour_official_cart(
         password=password,
         action=action,
         items=items,
+        session_user=session_user or probe.get("user_id") or "",
     )
     site["http_error"] = live.get("error")
     if site.get("ok"):
