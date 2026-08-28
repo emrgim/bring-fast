@@ -683,7 +683,7 @@ def official_cart(
     session_token: str = "",
     session_user: str = "",
 ) -> dict[str, Any]:
-    """Official store cart via HTTP APIs. Chrome is not used."""
+    """Official store cart via HTTP APIs. No real Chrome window."""
     if store == "carrefour":
         from bring_fast.stores import carrefour as carrefour_api
 
