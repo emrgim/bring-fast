@@ -34,9 +34,18 @@ def test_a_store_that_cannot_shop_says_so_on_its_card(bf, client):
     _sign_in(client)
     page = client.get("/stores").text
 
-    # Carrefour can be searched and its receipts read, but not shopped.
-    card = page.split('id="store-carrefour"')[1].split("</a>")[0]
+    # Waitrose can be searched, but not shopped.
+    card = page.split('id="store-waitrose"')[1].split("</a>")[0]
     assert 'class="cap no">Cart' in card
+    assert 'class="cap no">Checkout' in card
+    assert 'class="cap">Search' in card
+
+
+def test_carrefour_can_fill_a_basket_but_not_check_out(bf, client):
+    _sign_in(client)
+    page = client.get("/stores").text
+    card = page.split('id="store-carrefour"')[1].split("</a>")[0]
+    assert 'class="cap">Cart' in card
     assert 'class="cap no">Checkout' in card
     assert 'class="cap">Search' in card
     assert 'class="cap">Receipts' in card

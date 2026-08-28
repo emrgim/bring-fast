@@ -9,7 +9,8 @@ Bring Fast is **not** a store. It is the user's own hub:
 - supermarket **search** and **price comparison**
 - **purchase history** from official invoices (Gmail PDFs + store APIs)
 - **spend** and **buy-again** forecasts from that history
-- **official cart/checkout** only on Magento stores that are enabled
+- **official cart** on Magento (Grandiose, Union Coop) and Carrefour
+- **checkout** only on Magento stores that are enabled
 
 Every answer is scoped to the signed-in Bring Fast account. Friends never see this user's stores or receipts.
 
@@ -18,7 +19,7 @@ Every answer is scoped to the signed-in Bring Fast account. Friends never see th
 1. `bf_whoami` — email, `linked_stores`, `login_saved` only.
 2. If `linked=true` / store is in `linked_stores`, the supermarket login **is saved**. Never say it is missing.
 3. Do not ask the user to paste passwords or open Settings.
-4. `bf_whoami`, `bf_stores`, `grandiose_cart`, `grandiose_status` are **not** order history. They never list past invoices.
+4. `bf_whoami`, `bf_stores`, `grandiose_cart`, `grandiose_status`, `carrefour_cart`, `carrefour_status` are **not** order history. They never list past invoices.
 
 ## Which tool
 
@@ -35,7 +36,7 @@ Every answer is scoped to the signed-in Bring Fast account. Friends never see th
 | When to buy X again | `bf_product` `query=X` |
 | Price of X now | `bf_search` or `{store}_search` |
 | Compare cart / items | `bf_compare` |
-| Official **current** cart | `{store}_cart` only if shop-enabled (grandiose, unioncoop) |
+| Official **current** cart | `{store}_cart` on shop-enabled stores (grandiose, unioncoop, carrefour) |
 
 Optional: `dept=Edible` or `dept=Drinks`.
 
@@ -55,7 +56,8 @@ Optional: `dept=Edible` or `dept=Drinks`.
 ## Stores
 
 - Search is on for every supermarket.
-- Cart/checkout **only Magento**: Grandiose, Union Coop. Never invent a Bring Fast cart.
+- Cart on **Grandiose, Union Coop, Carrefour**. Checkout **only Magento**: Grandiose, Union Coop. Never invent a Bring Fast cart.
+- Carrefour: `carrefour_cart` action=list|add|set|remove|clear. add takes `product_id` or `name` plus `qty`. `clear` (also `create`/`empty`/`new`) empties the official cart. Checkout stays on the Carrefour website.
 - If official cart cannot be read: `items=[]` and say **unread**. Do not reuse old items.
 - Do not call `placeOrder` unless the user explicitly asks to place the order.
 - Payment stays on the supermarket site.

@@ -350,7 +350,7 @@ def compare_items(items: list[dict[str, Any]], targets: list[str] | None = None,
         rows.append(line)
     return {
         "success": True,
-        "note": "Comparison is catalog search only. Orders stay on Magento: Grandiose and Union Coop.",
+        "note": "Comparison is catalog search only. Checkout stays on Magento: Grandiose and Union Coop.",
         "items": rows,
     }
 

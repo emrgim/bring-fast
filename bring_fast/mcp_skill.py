@@ -7,8 +7,8 @@ from pathlib import Path
 DESCRIPTION = (
     "Bring Fast is a per-user grocery MCP for Dubai. "
     "It searches live supermarket catalogs, ranks spend from official invoices, "
-    "forecasts what to buy next, and talks to official Magento carts "
-    "(Grandiose, Union Coop). OAuth is the same email/password as the dashboard. "
+    "forecasts what to buy next, and talks to official store carts "
+    "(Grandiose, Union Coop, Carrefour). OAuth is the same email/password as the dashboard. "
     "No local cart."
 )
 
