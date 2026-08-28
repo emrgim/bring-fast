@@ -56,8 +56,8 @@ def _new_impersonate(name: str):
 def chrome_session(existing=None, *, warm: bool = True):
     """One Chrome client. Replay browser cookies; GET homepage only when warm=True.
 
-    Cart *list* must not pay for a homepage round-trip — Grok times out. Add/set still
-    warm so Akamai cookies exist before posInfo + SLOTTED writes.
+    Cart *list* and HTTP add must not pay for a homepage round-trip — Grok times
+    out. Browser fallback gets Akamai cookies from a real page instead.
     """
     if existing is not None:
         apply_browser_cookies(existing)
@@ -65,7 +65,7 @@ def chrome_session(existing=None, *, warm: bool = True):
 
     def warmed(s) -> bool:
         try:
-            resp = s.get(f"{SITE}/{MARKET}/{LANG}", timeout=8)
+            resp = s.get(f"{SITE}/{MARKET}/{LANG}", timeout=4)
             text = getattr(resp, "text", "") or ""
         except Exception:
             return False
@@ -305,7 +305,7 @@ def customer_addresses(*, token: str, user_id: str, client=None) -> list[dict[st
     headers = android_headers(token=token, user_id=user_id)
     for host in API_HOSTS:
         try:
-            resp = s.get(f"{host}/v2/addresses/{MARKET}/{LANG}", headers=headers, timeout=8)
+            resp = s.get(f"{host}/v2/addresses/{MARKET}/{LANG}", headers=headers, timeout=4)
             body = json_or_error(resp, "addresses")
         except StoreAPIError as e:
             if e.status in (401, 403) or _is_akamai(e):
@@ -341,7 +341,7 @@ def _fulfilment_from_homepage(lat: float, lng: float, *, client=None) -> dict[st
     except Exception:
         pass
     try:
-        resp = s.get(f"{SITE}/{MARKET}/{LANG}", headers=headers, timeout=15)
+        resp = s.get(f"{SITE}/{MARKET}/{LANG}", headers=headers, timeout=5)
         html = resp.text or ""
     except Exception as e:
         raise StoreAPIError(f"Carrefour location page: {type(e).__name__}") from e
@@ -943,12 +943,16 @@ def official_cart(
     client=None,
     timeout: float = 25,
 ) -> dict[str, Any]:
-    """Official account cart. List is token + liteCart only; add/set also bind posInfo."""
+    """Official account cart. List is token + liteCart only; add/set also bind posInfo.
+
+    Never warm www.carrefouruae.com here — that host hangs from datacenter IPs and
+    burns Grok's ~38s budget before the browser fallback can run.
+    """
     action = (action or "list").strip().lower()
     if action in _CART_READ:
         action = "list"
     needs_slot = action in _CART_SLOT
-    s = chrome_session(client, warm=needs_slot)
+    s = chrome_session(client, warm=False)
     token, user_id = session_token, session_user
     if not (token and user_id):
         jar = token_from_browser_cookies()
@@ -974,7 +978,8 @@ def official_cart(
             }
         token, user_id = auth["token"], auth["user_id"]
     loc: dict[str, Any] = {}
-    read_timeout = max(6.0, min(float(timeout or 25), 12.0)) if not needs_slot else 20.0
+    budget = max(2.0, float(timeout or 12))
+    read_timeout = min(budget, 8.0)
     try:
         if needs_slot:
             loc = resolve_fulfilment(token=token, user_id=user_id, client=s)

@@ -615,6 +615,42 @@ class LiveCartTimeout(TimeoutError):
     """Raised when official-site browser work exceeds the MCP-safe budget."""
 
 
+_CART_LIST_ACTIONS = frozenset({"list", "get", "read", "show", "view", "items", "contents"})
+_HTTP_PROBE_CAP = 4.0
+_ORIGIN_FETCH_JS = """
+async ({ method, url, payload, headers }) => {
+  const opts = {
+    method,
+    credentials: 'include',
+    headers: Object.assign({ Accept: 'application/json' }, headers || {}),
+  };
+  if (payload != null && method !== 'GET' && method !== 'HEAD') {
+    opts.headers['Content-Type'] = opts.headers['Content-Type'] || 'application/json';
+    opts.body = JSON.stringify(payload);
+  }
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8000);
+  opts.signal = ctrl.signal;
+  try {
+    const r = await fetch(url, opts);
+    const text = await r.text();
+    let body = text;
+    try { body = JSON.parse(text); } catch (e) {}
+    const blob = (typeof body === 'string' ? body : JSON.stringify(body)).toLowerCase();
+    return {
+      status: r.status,
+      body,
+      akamai: blob.includes('<p></p>') || blob.includes('access denied'),
+    };
+  } catch (e) {
+    return { status: 0, body: String((e && e.message) || e), akamai: false, error: String(e) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+"""
+
+
 def _in_thread(fn, timeout: float = 240, *, label: str | None = None, **kwargs):
     import concurrent.futures
 
@@ -726,7 +762,7 @@ def official_cart(
     session_token: str = "",
     session_user: str = "",
 ) -> dict[str, Any]:
-    """Official store cart via HTTP APIs. Carrefour is time-boxed so Grok never hangs."""
+    """Official store cart. Carrefour HTTP is a short probe; Akamai uses the site browser."""
     if store == "carrefour":
         return _in_thread(
             _carrefour_official_cart,
@@ -738,7 +774,7 @@ def official_cart(
             items=items,
             session_token=session_token,
             session_user=session_user,
-            http_timeout=max(6.0, float(timeout) - 4),
+            http_timeout=min(_HTTP_PROBE_CAP, max(2.0, float(timeout) * 0.15)),
         )
     if store == "grandiose":
         from bring_fast.stores import grandiose as grandiose_api
@@ -769,6 +805,436 @@ def _akamai_result(live: dict[str, Any]) -> bool:
     return "akamai" in blob or "access denied" in blob
 
 
+def _is_list_action(action: str) -> bool:
+    return (action or "list").strip().lower() in _CART_LIST_ACTIONS
+
+
+def _http_unusable(live: dict[str, Any]) -> bool:
+    """HTTP cannot read/write the cart — Akamai or a hang. Real 4xx (stock, slot) stay."""
+    if live.get("ok"):
+        return False
+    if _akamai_result(live):
+        return True
+    code = str(live.get("error_code") or "")
+    if code in ("akamai_blocked", "cart_timeout"):
+        return True
+    blob = f"{live.get('error') or ''}".lower()
+    return any(s in blob for s in ("timeout", "timed out", "akamai", "access denied"))
+
+
+def _playwright_state_file() -> Path:
+    root = Path(os.environ.get("BRINGFAST_DATA", Path.home() / ".bring-fast"))
+    path = root / "carrefour-net" / "playwright.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _cdp_up(timeout: float = 0.4) -> bool:
+    import urllib.request
+
+    try:
+        urllib.request.urlopen(f"{CDP}/json/version", timeout=timeout)
+        return True
+    except Exception:
+        return False
+
+
+def _launch_carrefour_cart():
+    """Reuse desktop Chrome over CDP when it is already up; otherwise headless with saved cookies.
+
+    Cart must not spend ~8s spawning Chrome after a hanging HTTP add — Grok's budget is ~38s.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as e:
+        raise RuntimeError(
+            "Playwright is not installed. Install checkout support with "
+            "`pip install 'bring-fast[checkout]'` and `playwright install chromium`."
+        ) from e
+
+    pw = sync_playwright().start()
+    if _cdp_up(0.4):
+        try:
+            browser = pw.chromium.connect_over_cdp(CDP)
+            context = browser.contexts[0] if browser.contexts else browser.new_context()
+            return pw, browser, context, "cdp"
+        except Exception:
+            pass
+    if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
+        _ensure_desktop_chrome()
+        if _cdp_up(0.4):
+            try:
+                browser = pw.chromium.connect_over_cdp(CDP)
+                context = browser.contexts[0] if browser.contexts else browser.new_context()
+                return pw, browser, context, "cdp"
+            except Exception:
+                pass
+    chrome = _chrome_bin()
+    kwargs: dict[str, Any] = {
+        "headless": True,
+        "args": [
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+            "--headless=new",
+            "--disable-blink-features=AutomationControlled",
+        ],
+    }
+    if chrome:
+        kwargs["executable_path"] = chrome
+    browser = pw.chromium.launch(**kwargs)
+    ctx_kw: dict[str, Any] = {
+        "viewport": {"width": 1280, "height": 900},
+        "locale": "en-AE",
+        "user_agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        ),
+    }
+    state = _playwright_state_file()
+    if state.is_file() and state.stat().st_size > 20:
+        ctx_kw["storage_state"] = str(state)
+    context = browser.new_context(**ctx_kw)
+    context.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
+    return pw, browser, context, "headless"
+
+
+def _context_auth(context) -> dict[str, str]:
+    out = {"token": "", "user_id": ""}
+    try:
+        for c in context.cookies():
+            if not isinstance(c, dict):
+                continue
+            name = c.get("name")
+            value = str(c.get("value") or "")
+            if name == "token":
+                out["token"] = value
+            if name in ("userId", "user_id", "customerId") and not out["user_id"]:
+                out["user_id"] = value
+    except Exception:
+        pass
+    return out
+
+
+def _carrefour_origin_page(context):
+    created = False
+    page = None
+    for p in list(getattr(context, "pages", None) or []):
+        url = (getattr(p, "url", None) or "").lower()
+        if "carrefouruae.com" in url and "/login" not in url:
+            page = p
+            break
+    if page is None:
+        page = context.new_page()
+        created = True
+        page.goto("https://www.carrefouruae.com/mafuae/en", wait_until="domcontentloaded", timeout=15000)
+        _dismiss(page)
+    return page, created
+
+
+def _ensure_logged_in_page(page, email: str, password: str) -> dict[str, Any]:
+    auth = _context_auth(page.context)
+    url = (page.url or "").lower()
+    if (
+        auth["token"]
+        and auth["user_id"]
+        and "/login" not in url
+        and not _looks_signed_out(page)
+    ):
+        marked = _marked_account(page)
+        wanted = (email or "").strip().lower()
+        if not marked or marked == wanted:
+            if marked != wanted:
+                _mark_account(page, email)
+            return {"logged_in": True, "reused": True, "error": None, **auth}
+    session = ensure_store_login(page, "carrefour", email, password)
+    auth = _context_auth(page.context)
+    ok = bool(session.get("logged_in") and auth.get("token"))
+    return {
+        "logged_in": ok,
+        "reused": bool(session.get("reused")),
+        "error": session.get("error"),
+        **auth,
+    }
+
+
+def _origin_fetch(page, method: str, path: str, *, payload=None, headers=None) -> dict[str, Any]:
+    url = path if str(path).startswith("http") else f"https://www.carrefouruae.com{path}"
+    return (
+        page.evaluate(
+            _ORIGIN_FETCH_JS,
+            {"method": method, "url": url, "payload": payload, "headers": headers or {}},
+        )
+        or {}
+    )
+
+
+def _browser_headers(token: str, user_id: str, loc: dict[str, Any]) -> dict[str, str]:
+    from bring_fast.stores import carrefour as api
+
+    h = api.android_headers(token=token, user_id=user_id, fulfilment=loc or {})
+    h.pop("User-Agent", None)
+    return h
+
+
+def _pos_from_page(page) -> dict[str, Any]:
+    from bring_fast.stores import carrefour as api
+
+    html = ""
+    try:
+        html = page.content() or ""
+    except Exception:
+        html = ""
+    loc = api.parse_fulfilment_html(html, lat=api.LAT, lng=api.LNG)
+    try:
+        cookies = {
+            c["name"]: c.get("value")
+            for c in page.context.cookies()
+            if isinstance(c, dict) and c.get("name")
+        }
+        if cookies.get("lat") and cookies.get("long"):
+            loc["lat"] = float(cookies["lat"])
+            loc["lng"] = float(cookies["long"])
+    except Exception:
+        pass
+    return loc
+
+
+def _lite_cart_path(loc: dict[str, Any]) -> str:
+    from bring_fast.stores import carrefour as api
+
+    lat = loc.get("lat") if loc.get("lat") is not None else api.LAT
+    lng = loc.get("lng") if loc.get("lng") is not None else api.LNG
+    return (
+        f"/v1/basket/{api.MARKET}/{api.LANG}/liteCart"
+        "?nsp=food,nonfood,express,QCOMM,QELEC&lm=false&liteResponse=true"
+        f"&latitude={lat}&longitude={lng}"
+    )
+
+
+def _add_via_page(page, headers: dict[str, str], loc: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
+    from bring_fast.stores import carrefour as api
+
+    pid = str(item.get("id") or "")
+    qty = int(item.get("qty") or 1)
+    name = str(item.get("name") or pid)
+    lat = loc.get("lat") if loc.get("lat") is not None else api.LAT
+    lng = loc.get("lng") if loc.get("lng") is not None else api.LNG
+    payload = {
+        "productId": pid,
+        "productName": name,
+        "quantity": qty,
+        "imageUrl": item.get("url") or f"{api.SITE}/{api.MARKET}/{api.LANG}/p/{pid}",
+        "intent": "SLOTTED",
+        "offerId": "offer_carrefour_",
+        "sellerId": "0000",
+        "shopId": "0000",
+        "username": headers.get("userId") or "",
+        "latitude": lat,
+        "longitude": lng,
+    }
+    h = dict(headers)
+    h["intent"] = "SLOTTED"
+    last: dict[str, Any] = {}
+    for path in (
+        f"/v1/basket/{api.MARKET}/{api.LANG}/entries",
+        f"/v1/basket/{api.MARKET}/{api.LANG}/addItem",
+        f"/v8/carts/{api.MARKET}/{api.LANG}/STANDARD/addItem",
+    ):
+        last = _origin_fetch(page, "POST", path, payload=payload, headers=h)
+        if last.get("akamai"):
+            return last
+        if int(last.get("status") or 0) < 400:
+            return last
+    return last
+
+
+def _carrefour_browser_api_cart(
+    *,
+    email: str,
+    password: str,
+    action: str,
+    items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Same-origin fetch of liteCart / addItem inside a real browser. No product-page clicks."""
+    from bring_fast.stores import carrefour as api
+    from bring_fast.stores.http import is_akamai_shell
+
+    if not email or not password:
+        return {
+            "ok": False,
+            "official_count": None,
+            "items": [],
+            "logged_in": False,
+            "driver": "playwright",
+            "error": "No carrefour login saved. Add the store email and password on the Bring Fast dashboard.",
+        }
+    pw = browser = context = page = None
+    created_page = False
+    via = "playwright"
+    try:
+        pw, browser, context, via = _launch_carrefour_cart()
+        page, created_page = _carrefour_origin_page(context)
+        html = ""
+        try:
+            html = page.content() or ""
+        except Exception:
+            html = ""
+        if is_akamai_shell(html):
+            return {
+                "ok": False,
+                "official_count": None,
+                "items": [],
+                "logged_in": True,
+                "driver": via,
+                "error": api.AKAMAI_UNREAD,
+                "error_code": "akamai_blocked",
+            }
+        session = _ensure_logged_in_page(page, email, password)
+        if not session.get("logged_in") or not session.get("token"):
+            return {
+                "ok": False,
+                "official_count": None,
+                "items": [],
+                "logged_in": False,
+                "driver": via,
+                "error": session.get("error") or "Carrefour login did not yield an API token.",
+            }
+        token, user_id = session["token"], session["user_id"]
+        loc = _pos_from_page(page)
+        if "login" in (page.url or "").lower() or (action in ("add", "set") and not loc.get("pos_info")):
+            try:
+                page.goto(
+                    "https://www.carrefouruae.com/mafuae/en",
+                    wait_until="domcontentloaded",
+                    timeout=12000,
+                )
+                _dismiss(page)
+            except Exception:
+                pass
+            loc = _pos_from_page(page)
+        headers = _browser_headers(token, user_id, loc)
+        act = (action or "list").strip().lower()
+        if act in _CART_LIST_ACTIONS:
+            act = "list"
+        if act in ("clear", "create", "empty", "new"):
+            listed = _origin_fetch(page, "GET", _lite_cart_path(loc), headers=headers)
+            live_items = api.parse_items(listed.get("body"))
+            ids = [str(it.get("id") or "") for it in live_items if it.get("id")]
+            if ids:
+                _origin_fetch(
+                    page,
+                    "DELETE",
+                    f"/v1/basket/{api.MARKET}/{api.LANG}/entries",
+                    payload={"productIds": ids},
+                    headers=headers,
+                )
+        elif act == "remove":
+            ids = [str(it.get("id") or "") for it in items if it.get("id")]
+            if ids:
+                _origin_fetch(
+                    page,
+                    "DELETE",
+                    f"/v1/basket/{api.MARKET}/{api.LANG}/entries",
+                    payload={"productIds": ids},
+                    headers=headers,
+                )
+        elif act in ("add", "set"):
+            last: dict[str, Any] = {}
+            for it in items:
+                last = _add_via_page(page, headers, loc, it)
+                if last.get("akamai"):
+                    return {
+                        "ok": False,
+                        "official_count": None,
+                        "items": [],
+                        "logged_in": True,
+                        "driver": via,
+                        "error": api.AKAMAI_UNREAD,
+                        "error_code": "akamai_blocked",
+                        "token": token,
+                        "user_id": user_id,
+                    }
+                status = int(last.get("status") or 0)
+                if status >= 400:
+                    body = last.get("body")
+                    msg = ""
+                    if isinstance(body, dict):
+                        err_obj = body.get("error")
+                        if isinstance(err_obj, dict):
+                            msg = str(err_obj.get("message") or "")
+                        elif isinstance(err_obj, str):
+                            msg = err_obj
+                        meta = body.get("meta") if isinstance(body.get("meta"), dict) else {}
+                        msg = msg or str(meta.get("message") or "")
+                    return {
+                        "ok": False,
+                        "official_count": None,
+                        "items": [],
+                        "logged_in": True,
+                        "driver": via,
+                        "error": msg or f"add HTTP {status}",
+                        "token": token,
+                        "user_id": user_id,
+                    }
+        listed = _origin_fetch(page, "GET", _lite_cart_path(loc), headers=headers)
+        if listed.get("akamai") or int(listed.get("status") or 0) >= 400:
+            return {
+                "ok": False,
+                "official_count": None,
+                "items": [],
+                "logged_in": True,
+                "driver": via,
+                "error": api.AKAMAI_UNREAD if listed.get("akamai") else f"liteCart HTTP {listed.get('status')}",
+                "error_code": "akamai_blocked" if listed.get("akamai") else None,
+                "token": token,
+                "user_id": user_id,
+            }
+        live_items = api.parse_items(listed.get("body"))
+        try:
+            api.save_browser_cookies(list(context.cookies()))
+        except Exception:
+            pass
+        if via == "headless":
+            try:
+                context.storage_state(path=str(_playwright_state_file()))
+            except Exception:
+                pass
+        return {
+            "ok": True,
+            "official_count": len(live_items),
+            "items": live_items,
+            "logged_in": True,
+            "session_reused": bool(session.get("reused")),
+            "driver": "playwright",
+            "akamai_retry": "browser_api",
+            "token": token,
+            "user_id": user_id,
+            **api._loc_fields(loc),
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "official_count": None,
+            "items": [],
+            "logged_in": bool(email),
+            "driver": "playwright",
+            "error": f"{api.AKAMAI_UNREAD} Browser cart failed ({type(e).__name__}: {e}).",
+            "error_code": "akamai_blocked",
+        }
+    finally:
+        if created_page and page is not None:
+            try:
+                page.close()
+            except Exception:
+                pass
+        try:
+            if pw:
+                pw.stop()
+        except Exception:
+            pass
+
+
 def _carrefour_official_cart(
     *,
     email: str,
@@ -777,76 +1243,59 @@ def _carrefour_official_cart(
     items: list[dict[str, Any]],
     session_token: str = "",
     session_user: str = "",
-    http_timeout: float = 12,
+    http_timeout: float = 4,
 ) -> dict[str, Any]:
-    """HTTP cart first; on Akamai, reuse desktop Chrome cookies, then the site driver for writes."""
+    """Short HTTP list probe. On Akamai/hang, list and add use same-origin browser fetches."""
     from bring_fast.stores import carrefour as carrefour_api
 
-    live = carrefour_api.official_cart(
+    probe_timeout = min(_HTTP_PROBE_CAP, max(2.0, float(http_timeout or 4)))
+    probe = carrefour_api.official_cart(
+        email=email,
+        password=password,
+        action="list",
+        items=[],
+        session_token=session_token,
+        session_user=session_user,
+        timeout=probe_timeout,
+    )
+    live = probe
+    if probe.get("ok"):
+        if _is_list_action(action):
+            return probe
+        write = carrefour_api.official_cart(
+            email=email,
+            password=password,
+            action=action,
+            items=items,
+            session_token=session_token or probe.get("token") or "",
+            session_user=session_user or probe.get("user_id") or "",
+            timeout=min(12.0, max(probe_timeout, 8.0)),
+        )
+        if write.get("ok") or write.get("error_code") == "needs_delivery_slot":
+            return write
+        if not _http_unusable(write):
+            return write
+        live = write
+    elif not _http_unusable(probe):
+        return probe
+    else:
+        live["error_code"] = live.get("error_code") or "akamai_blocked"
+
+    site = _carrefour_browser_api_cart(
         email=email,
         password=password,
         action=action,
         items=items,
-        session_token=session_token,
-        session_user=session_user,
-        timeout=http_timeout,
     )
-    if live.get("ok") or live.get("error_code") == "needs_delivery_slot":
-        return live
-    if not _akamai_result(live):
-        return live
-    live["error_code"] = live.get("error_code") or "akamai_blocked"
-    if carrefour_api.refresh_sensor_cookies():
-        retry = carrefour_api.official_cart(
-            email=email,
-            password=password,
-            action=action,
-            items=items,
-            session_token=session_token or live.get("token") or "",
-            session_user=session_user or live.get("user_id") or "",
-            timeout=http_timeout,
-        )
-        if retry.get("ok"):
-            retry["akamai_retry"] = "sensor_cookies"
-            return retry
-        live = retry
-        live["error_code"] = live.get("error_code") or "akamai_blocked"
-    act = (action or "list").strip().lower()
-    if act in ("list", "get", "read", "show", "view", "items", "contents"):
-        live["error"] = live.get("error") or carrefour_api.AKAMAI_UNREAD
-        live["error_code"] = "akamai_blocked"
-        if email:
-            live["logged_in"] = True
-        return live
-    try:
-        site = _official_cart_sync(
-            store="carrefour",
-            email=email,
-            password=password,
-            action=action,
-            items=items,
-        )
-    except Exception as e:
-        live["error"] = (
-            f"{carrefour_api.AKAMAI_UNREAD} Site driver also failed ({type(e).__name__}: {e})."
-        )
-        live["error_code"] = "akamai_blocked"
-        if email:
-            live["logged_in"] = True
-        return live
     site["http_error"] = live.get("error")
-    site["driver"] = site.get("driver") or "playwright"
     if site.get("ok"):
-        site["akamai_retry"] = "playwright"
+        site["akamai_retry"] = site.get("akamai_retry") or "browser_api"
+        site["driver"] = site.get("driver") or "playwright"
         return site
-    site["error_code"] = site.get("error_code") or "akamai_blocked"
+    site["error_code"] = site.get("error_code") or live.get("error_code") or "akamai_blocked"
     if email:
         site["logged_in"] = True
-    site["error"] = (
-        "Carrefour HTTP API is Akamai-blocked from this server. "
-        "The saved store login is still present. "
-        + (site.get("error") or live.get("error") or "Official cart was not changed.")
-    )
+    site["error"] = site.get("error") or live.get("error") or carrefour_api.AKAMAI_UNREAD
     return site
 
 

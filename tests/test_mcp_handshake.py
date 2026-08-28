@@ -219,6 +219,7 @@ def test_initialize_loads_skill_and_mcp_description(client, token):
     assert "bf_cart retailer=carrefour" in body["instructions"]
     assert "carrefour_search" in body["instructions"]
     assert "query=2288448" in body["instructions"]
+    assert "same-origin fetches" in body["instructions"]
     assert "carrefour_checkout" in body["instructions"]
     assert body["capabilities"]["tools"] == {"listChanged": True}
     assert body["capabilities"]["prompts"] == {"listChanged": False}
