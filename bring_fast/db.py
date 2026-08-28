@@ -283,6 +283,17 @@ def _init_schema(con: sqlite3.Connection) -> None:
             enabled INTEGER NOT NULL
         )"""
     )
+    con.execute(
+        """CREATE TABLE IF NOT EXISTS store_probes (
+            user_id INTEGER NOT NULL,
+            retailer TEXT NOT NULL,
+            capability TEXT NOT NULL,
+            ok INTEGER NOT NULL,
+            at INTEGER NOT NULL,
+            error_code TEXT,
+            PRIMARY KEY (user_id, retailer, capability)
+        )"""
+    )
     existing = {r[0] for r in con.execute("SELECT retailer FROM store_flags").fetchall()}
     for r in RETAILERS:
         if r["id"] not in existing:
@@ -658,10 +669,12 @@ def list_retailer_accounts(user_id: int) -> list[dict[str, Any]]:
 
 Search and price comparison read public catalog pages, so they go together and
 a store without a catalog to read has neither. Cart is a wired official basket
-(Magento or the Carrefour Android APIs). Checkout is Magento stores we have
-tested. Receipts is a parser for that store's invoices, and login is a saved
-store account, which is what receipts and carts are read with. A store can be
-receipts alone: its invoices are read, and nothing else.
+(Magento or the Carrefour Android APIs), but the Stores pill is live: filled
+only after a successful official list/add, outlined when it is only declared
+or the last list failed. Checkout is Magento stores we have tested. Receipts
+is a parser for that store's invoices, and login is a saved store account,
+which is what receipts and carts are read with. A store can be receipts
+alone: its invoices are read, and nothing else.
 """
 CAPABILITIES = [
     ("search", "Search"),
@@ -671,13 +684,60 @@ CAPABILITIES = [
     ("receipts", "Receipts"),
     ("login", "Login"),
 ]
+# Cart is easy to paint as "working" from shop=True. Fill that pill only
+# after a live official probe (or a stored last_ok). Compare stays with
+# Search: both read the public catalog, and neither is filled from shop=.
+LIVE_PILLS = frozenset({"cart"})
 
 
-def store_capabilities(retailer: str) -> list[dict[str, Any]]:
+def record_store_probe(
+    user_id: int,
+    retailer: str,
+    capability: str,
+    *,
+    ok: bool,
+    error_code: str | None = None,
+) -> None:
+    """Remember the last official probe so the Stores card does not lie."""
+    con = connect()
+    con.execute(
+        """INSERT INTO store_probes(user_id, retailer, capability, ok, at, error_code)
+           VALUES (?,?,?,?,?,?)
+           ON CONFLICT(user_id, retailer, capability)
+           DO UPDATE SET ok=excluded.ok, at=excluded.at, error_code=excluded.error_code""",
+        (user_id, retailer, capability, 1 if ok else 0, int(time.time()), error_code or None),
+    )
+    con.commit()
+    con.close()
+
+
+def store_probes_for_user(user_id: int) -> dict[tuple[str, str], dict[str, Any]]:
+    con = connect()
+    rows = con.execute(
+        """SELECT retailer, capability, ok, at, error_code
+           FROM store_probes WHERE user_id=?""",
+        (user_id,),
+    ).fetchall()
+    con.close()
+    return {
+        (str(r["retailer"]), str(r["capability"])): {
+            "ok": bool(r["ok"]),
+            "at": r["at"],
+            "error_code": r["error_code"],
+        }
+        for r in rows
+    }
+
+
+def store_capabilities(
+    retailer: str,
+    user_id: int | None = None,
+    probes: dict[tuple[str, str], dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     for r in RETAILERS:
         if r["id"] != retailer:
             continue
-        can = {
+        declared = {
             "search": bool(r.get("search")),
             "compare": bool(r.get("search")),
             "cart": bool(r.get("shop")),
@@ -685,7 +745,34 @@ def store_capabilities(retailer: str) -> list[dict[str, Any]]:
             "receipts": bool(r.get("receipts")),
             "login": bool(r.get("login")),
         }
-        return [{"key": key, "label": label, "on": can[key]} for key, label in CAPABILITIES]
+        if probes is None and user_id is not None:
+            probes = store_probes_for_user(user_id)
+        out: list[dict[str, Any]] = []
+        for key, label in CAPABILITIES:
+            wired = declared[key]
+            probe = (probes or {}).get((retailer, key))
+            if key in LIVE_PILLS:
+                on = bool(wired and probe and probe.get("ok"))
+            else:
+                on = wired
+            shown = label
+            if wired and not on:
+                shown = f"{label} · declared"
+            hint = ""
+            if probe and probe.get("error_code") and not on:
+                hint = str(probe["error_code"])
+            elif wired and not on:
+                hint = "declared, not proven live"
+            out.append(
+                {
+                    "key": key,
+                    "label": shown,
+                    "on": on,
+                    "declared": wired,
+                    "hint": hint,
+                }
+            )
+        return out
     return []
 
 

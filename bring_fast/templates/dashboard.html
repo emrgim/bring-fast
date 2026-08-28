@@ -17,7 +17,7 @@
       </div>
     </div>
     <div class="caps" aria-label="What this store can do">
-      {% for c in r.caps %}<span class="cap{% if not c.on %} no{% endif %}">{{ c.label }}</span>{% endfor %}
+      {% for c in r.caps %}<span class="cap{% if not c.on %} no{% endif %}{% if c.declared and not c.on %} declared{% endif %}"{% if c.hint %} title="{{ c.hint }}"{% endif %}>{{ c.label }}</span>{% endfor %}
     </div>
     <div class="go">Open {{ r.name }} →</div>
   </a>
