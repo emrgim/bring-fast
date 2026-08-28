@@ -1,11 +1,15 @@
-"""Carrefour UAE Android-app APIs. The MCP speaks like com.aswat.carrefouruae."""
+"""Carrefour UAE official cart via curl_cffi Chrome impersonation.
+
+TLS, HTTP/1.1, and User-Agent are Chrome's. MAF JSON headers stay on API
+calls only — never override User-Agent (Akamai 403 if TLS Chrome + okhttp).
+"""
 
 from __future__ import annotations
 
 import uuid
 from typing import Any
 
-from bring_fast.stores.http import StoreAPIError, json_or_error, session
+from bring_fast.stores.http import StoreAPIError, is_akamai_shell, json_or_error, session
 
 # Same Apigee surface the Play Store app uses (RetailSSO + site gateway).
 API_HOSTS = (
@@ -26,8 +30,44 @@ def _device_id() -> str:
     return "bf-" + uuid.uuid5(uuid.NAMESPACE_DNS, "bring-fast.android.mafuae").hex[:16]
 
 
+CHROME_IMPERSONATE = ("chrome", "chrome131", "chrome124")
+
+
+def _new_impersonate(name: str):
+    from curl_cffi import requests as cf
+    from curl_cffi.const import CurlHttpVersion
+
+    return cf.Session(impersonate=name, http_version=CurlHttpVersion.V1_1)
+
+
+def chrome_session(existing=None):
+    """One Chrome client. GET the homepage first so Akamai cookies (_abck, bm_sz) stick."""
+    if existing is not None:
+        return existing
+
+    def warmed(s) -> bool:
+        try:
+            resp = s.get(f"{SITE}/{MARKET}/{LANG}", timeout=12)
+            text = getattr(resp, "text", "") or ""
+        except Exception:
+            return False
+        return not is_akamai_shell(text)
+
+    s = session()
+    if warmed(s):
+        return s
+    for name in CHROME_IMPERSONATE:
+        try:
+            alt = _new_impersonate(name)
+        except Exception:
+            continue
+        if warmed(alt):
+            return alt
+    return s
+
+
 def android_headers(*, token: str = "", user_id: str = "") -> dict[str, str]:
-    """JSON/API headers. User-Agent comes from the Chrome TLS session, not okhttp."""
+    """JSON/API headers only. Do not set User-Agent — curl_cffi impersonate owns it."""
     h = {
         "Accept": "application/json",
         "Content-Type": "application/json",
@@ -78,31 +118,42 @@ def _extract_session(body: Any, resp) -> dict[str, str]:
 
 
 AKAMAI_UNREAD = (
-    "Carrefour blocked the login API from this server (Akamai). "
+    "Carrefour blocked the HTTP API from this server (Akamai). "
     "The saved store login is still present. Official cart unread."
 )
 
 
-def login(email: str, password: str) -> dict[str, Any]:
-    """One POST to /v2/customers/login. Do not spray other grant URLs (Carrefour lockout)."""
+def _is_akamai(err: StoreAPIError) -> bool:
+    return err.status == 403 or "akamai" in str(err).lower() or "access denied" in str(err).lower()
+
+
+def _is_invalid_auth_token(err: StoreAPIError) -> bool:
+    """Password login is allowed only on HTTP 401 JSON (expired token), never Akamai HTML."""
+    if err.status != 401 or _is_akamai(err):
+        return False
+    return isinstance(err.body, dict)
+
+
+def login(email: str, password: str, *, client=None) -> dict[str, Any]:
+    """One POST to /v2/customers/login on the warmed Chrome session. No other grant URLs."""
     if not email or not password:
         return {"ok": False, "token": "", "user_id": "", "error": "Missing Carrefour email or password."}
-    s = session()
-    headers = android_headers()
+    s = chrome_session(client)
     try:
-        s.get(f"{SITE}/{MARKET}/{LANG}", headers=headers, timeout=8)
+        s.get(f"{SITE}/{MARKET}/{LANG}/login", timeout=8)
     except Exception:
         pass
+    headers = android_headers()
     url = f"{SITE}/v2/customers/login"
     payload = {"email": email, "password": password, "langCode": LANG, "storeId": MARKET}
     try:
         resp = s.post(url, json=payload, headers=headers, timeout=8)
         body = json_or_error(resp, "login")
     except StoreAPIError as e:
-        err = AKAMAI_UNREAD if (e.status == 403 or "akamai" in str(e).lower()) else f"Carrefour Android login: {e}"
+        err = AKAMAI_UNREAD if _is_akamai(e) else f"Carrefour login: {e}"
         return {"ok": False, "token": "", "user_id": "", "error": err}
     except Exception as e:
-        return {"ok": False, "token": "", "user_id": "", "error": f"Carrefour Android login: {type(e).__name__}"}
+        return {"ok": False, "token": "", "user_id": "", "error": f"Carrefour login: {type(e).__name__}"}
     sess = _extract_session(body, resp)
     if isinstance(body, dict) and body.get("access_token") and not sess["token"]:
         sess["token"] = str(body.get("access_token") or "")
@@ -111,7 +162,7 @@ def login(email: str, password: str) -> dict[str, Any]:
         return {"ok": True, "token": sess["token"], "user_id": sess["user_id"], "error": None}
     meta = body.get("meta") if isinstance(body, dict) else {}
     last_err = (meta or {}).get("message") or f"HTTP {resp.status_code}"
-    return {"ok": False, "token": "", "user_id": "", "error": f"Carrefour Android login: {last_err}"}
+    return {"ok": False, "token": "", "user_id": "", "error": f"Carrefour login: {last_err}"}
 
 
 def harvest_token_from_login_page(email: str, password: str) -> dict[str, Any]:
@@ -174,15 +225,15 @@ def harvest_token_from_login_page(email: str, password: str) -> dict[str, Any]:
             pass
 
 
-def _auth(email: str, password: str) -> dict[str, Any]:
+def _auth(email: str, password: str, *, client=None) -> dict[str, Any]:
     """HTTP login only. Never open Chrome on the MCP path — that hangs Grok."""
-    return login(email, password)
+    return login(email, password, client=client)
 
 
-def lite_cart(*, token: str, user_id: str) -> dict[str, Any]:
+def lite_cart(*, token: str, user_id: str, client=None) -> dict[str, Any]:
     if not token or not user_id:
         raise StoreAPIError("liteCart needs auth token and userId.")
-    s = session()
+    s = chrome_session(client)
     headers = android_headers(token=token, user_id=user_id)
     last_err: StoreAPIError | None = None
     for host in API_HOSTS:
@@ -202,6 +253,8 @@ def lite_cart(*, token: str, user_id: str) -> dict[str, Any]:
             body = json_or_error(resp, "liteCart")
         except StoreAPIError as e:
             last_err = e
+            if e.status in (401, 403) or _is_akamai(e):
+                raise
             continue
         except Exception as e:
             last_err = StoreAPIError(f"{type(e).__name__}")
@@ -209,8 +262,12 @@ def lite_cart(*, token: str, user_id: str) -> dict[str, Any]:
         if resp.status_code < 400:
             return body
         meta = body.get("meta") if isinstance(body, dict) else {}
-        last_err = StoreAPIError((meta or {}).get("message") or f"liteCart HTTP {resp.status_code}", status=resp.status_code, body=body)
-        if resp.status_code in (401, 403):
+        last_err = StoreAPIError(
+            (meta or {}).get("message") or f"liteCart HTTP {resp.status_code}",
+            status=resp.status_code,
+            body=body,
+        )
+        if resp.status_code in (401, 403) or _is_akamai(last_err):
             raise last_err
     raise last_err or StoreAPIError("liteCart failed")
 
@@ -268,9 +325,18 @@ def _err_message(body: Any, fallback: str) -> str:
     return fallback
 
 
-def _basket(method: str, path: str, *, token: str, user_id: str, payload: dict[str, Any] | None, what: str) -> dict[str, Any]:
-    """Call BasketControllerV5 on either host. Chrome is not used."""
-    s = session()
+def _basket(
+    method: str,
+    path: str,
+    *,
+    token: str,
+    user_id: str,
+    payload: dict[str, Any] | None,
+    what: str,
+    client=None,
+) -> dict[str, Any]:
+    """Call BasketControllerV5 on either host. Same Chrome session as the homepage warm-up."""
+    s = chrome_session(client)
     headers = android_headers(token=token, user_id=user_id)
     last_err: StoreAPIError | None = None
     for host in API_HOSTS:
@@ -280,6 +346,8 @@ def _basket(method: str, path: str, *, token: str, user_id: str, payload: dict[s
             body = json_or_error(resp, what)
         except StoreAPIError as e:
             last_err = e
+            if e.status in (401, 403) or _is_akamai(e):
+                raise
             continue
         except Exception as e:
             last_err = StoreAPIError(f"{type(e).__name__}")
@@ -291,12 +359,12 @@ def _basket(method: str, path: str, *, token: str, user_id: str, payload: dict[s
             status=resp.status_code,
             body=body,
         )
-        if resp.status_code in (401, 403):
+        if resp.status_code in (401, 403) or _is_akamai(last_err):
             raise last_err
     raise last_err or StoreAPIError(f"{what} failed")
 
 
-def add_item(*, token: str, user_id: str, product_id: str, qty: int = 1, name: str = "") -> dict[str, Any]:
+def add_item(*, token: str, user_id: str, product_id: str, qty: int = 1, name: str = "", client=None) -> dict[str, Any]:
     """POST BasketControllerV5.addItem. Prefer /entries on the site host; RetailSSO addItem is the fallback."""
     card = _product_card(str(product_id), name)
     if card.get("in_stock") is False:
@@ -319,16 +387,18 @@ def add_item(*, token: str, user_id: str, product_id: str, qty: int = 1, name: s
     last_err: StoreAPIError | None = None
     for path in ("entries", "addItem"):
         try:
-            return _basket("post", path, token=token, user_id=user_id, payload=payload, what="add")
+            return _basket(
+                "post", path, token=token, user_id=user_id, payload=payload, what="add", client=client
+            )
         except StoreAPIError as e:
             last_err = e
-            if e.status in (401, 403, 409):
+            if e.status in (401, 403, 409) or _is_akamai(e):
                 raise
             continue
     raise last_err or StoreAPIError("add item failed")
 
 
-def remove_items(*, token: str, user_id: str, product_ids: list[str]) -> dict[str, Any]:
+def remove_items(*, token: str, user_id: str, product_ids: list[str], client=None) -> dict[str, Any]:
     """DELETE BasketControllerV5.deleteProducts with DeleteProductRequestV5."""
     ids = [str(pid) for pid in product_ids if str(pid).strip()]
     if not ids:
@@ -338,10 +408,18 @@ def remove_items(*, token: str, user_id: str, product_ids: list[str]) -> dict[st
         if payload is None:
             continue
         try:
-            return _basket("delete", "entries", token=token, user_id=user_id, payload=payload, what="delete")
+            return _basket(
+                "delete",
+                "entries",
+                token=token,
+                user_id=user_id,
+                payload=payload,
+                what="delete",
+                client=client,
+            )
         except StoreAPIError as e:
             last_err = e
-            if e.status in (401, 403):
+            if e.status in (401, 403) or _is_akamai(e):
                 raise
             continue
     raise last_err or StoreAPIError("delete items failed")
@@ -377,12 +455,14 @@ def official_cart(
     items: list[dict[str, Any]],
     session_token: str = "",
     session_user: str = "",
+    client=None,
 ) -> dict[str, Any]:
-    """Official account cart via the Android API. No Chrome, no local copy."""
+    """Official account cart. One Chrome session for homepage + liteCart + at most one login POST."""
+    s = chrome_session(client)
     token, user_id = session_token, session_user
     reused = bool(token and user_id)
     if not reused:
-        auth = _auth(email, password)
+        auth = _auth(email, password, client=s)
         if not auth["ok"]:
             return {
                 "ok": False,
@@ -390,23 +470,23 @@ def official_cart(
                 "items": [],
                 "logged_in": False,
                 "session_reused": False,
-                "driver": "android",
+                "driver": "chrome",
                 "client": PACKAGE,
-                "error": auth.get("error") or "Carrefour Android login failed.",
+                "error": auth.get("error") or "Carrefour login failed.",
                 "token": "",
                 "user_id": "",
             }
         token, user_id = auth["token"], auth["user_id"]
     try:
         if action in ("clear", "create", "empty", "new"):
-            current = parse_items(lite_cart(token=token, user_id=user_id))
+            current = parse_items(lite_cart(token=token, user_id=user_id, client=s))
             ids = [str(it.get("id") or "") for it in current if it.get("id")]
             if ids:
-                remove_items(token=token, user_id=user_id, product_ids=ids)
+                remove_items(token=token, user_id=user_id, product_ids=ids, client=s)
         elif action == "remove":
             ids = [str(it.get("id") or "") for it in items if it.get("id")]
             if ids:
-                remove_items(token=token, user_id=user_id, product_ids=ids)
+                remove_items(token=token, user_id=user_id, product_ids=ids, client=s)
         elif action in ("add", "set"):
             for it in items:
                 add_item(
@@ -415,8 +495,9 @@ def official_cart(
                     product_id=str(it.get("id") or ""),
                     qty=int(it.get("qty") or 1),
                     name=str(it.get("name") or ""),
+                    client=s,
                 )
-        body = lite_cart(token=token, user_id=user_id)
+        body = lite_cart(token=token, user_id=user_id, client=s)
         live = parse_items(body)
         return {
             "ok": True,
@@ -424,24 +505,31 @@ def official_cart(
             "items": live,
             "logged_in": True,
             "session_reused": reused,
-            "driver": "android",
+            "driver": "chrome",
             "client": PACKAGE,
             "error": None,
             "token": token,
             "user_id": user_id,
         }
     except StoreAPIError as e:
-        akamai = e.status == 403 or "akamai" in str(e).lower()
-        if reused and e.status == 401 and email and password and not akamai:
-            return official_cart(email=email, password=password, action=action, items=items, session_token="", session_user="")
-        err = AKAMAI_UNREAD if akamai else str(e)
+        if reused and _is_invalid_auth_token(e) and email and password:
+            return official_cart(
+                email=email,
+                password=password,
+                action=action,
+                items=items,
+                session_token="",
+                session_user="",
+                client=s,
+            )
+        err = AKAMAI_UNREAD if _is_akamai(e) else str(e)
         return {
             "ok": False,
             "official_count": None,
             "items": [],
             "logged_in": bool(token and user_id),
             "session_reused": reused,
-            "driver": "android",
+            "driver": "chrome",
             "client": PACKAGE,
             "error": err,
             "token": token,

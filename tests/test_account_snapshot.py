@@ -244,3 +244,39 @@ def test_carrefour_cart_create_empties_the_official_basket(bf, monkeypatch):
     assert listed["success"] is True
     italian = json.loads(bf._call_tool(user, "carrefour_lista", {"action": "list"}))
     assert italian["success"] is True
+
+
+def test_carrefour_akamai_unread_keeps_login_saved(bf, monkeypatch):
+    user = bf.db.create_user("cf@example.com", "secret1")
+    bf.db.set_retailer_account(user["id"], "carrefour", "shopper@example.com", "store-pass")
+    user = bf.db.get_user_by_id(user["id"])
+
+    monkeypatch.setattr(
+        bf.checkout,
+        "official_cart",
+        lambda **kw: {
+            "ok": False,
+            "official_count": None,
+            "items": [],
+            "logged_in": False,
+            "session_reused": False,
+            "driver": "chrome",
+            "error": (
+                "Carrefour blocked the HTTP API from this server (Akamai). "
+                "The saved store login is still present. Official cart unread."
+            ),
+            "token": "",
+            "user_id": "",
+        },
+    )
+    out = json.loads(bf._call_tool(user, "carrefour_cart", {"action": "list"}))
+    assert out["success"] is False
+    assert out["items"] == []
+    assert out["item_count"] == 0
+    assert out["login_saved"] is True
+    assert out["login_linked"] is True
+    assert out["store_login_ok"] is True
+    assert "akamai" in out["what_happens"].lower()
+    assert "unread" in out["what_happens"].lower()
+    assert "login_saved=True" in out["note"]
+    assert "does not mean the supermarket login is missing" in out["note"]

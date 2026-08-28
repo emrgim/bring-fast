@@ -20,9 +20,11 @@ def session():
         raise StoreAPIError(
             "curl_cffi is required for store APIs. pip install curl_cffi"
         ) from e
-    # One client: Chrome TLS + Chrome JA3. HTTP/1.1 (HTTP/2 to RetailSSO resets).
+    # One client: Chrome TLS + Chrome UA. HTTP/1.1 (HTTP/2 to RetailSSO resets).
+    # chrome131/124 may exist but still get Akamai's empty HTML shell; generic
+    # "chrome" is the fallback that actually receives _abck / bm_sz.
     last = None
-    for name in ("chrome131", "chrome124"):
+    for name in ("chrome131", "chrome124", "chrome"):
         try:
             return cf.Session(impersonate=name, http_version=CurlHttpVersion.V1_1)
         except Exception as e:
