@@ -288,3 +288,75 @@ def test_browser_api_add_posts_entries_then_lists(monkeypatch):
     assert posts[0]["payload"]["quantity"] == 1
     assert gets, "must re-read official liteCart after add"
     assert not any("carrefouruae.com/mafuae/en/p/" in str(f.get("url")) for f in fetches)
+
+
+def test_browser_api_add_500_is_ok_when_sku_already_in_cart(monkeypatch):
+    from bring_fast.stores import carrefour as api
+
+    class _Ctx:
+        pages = []
+
+        def cookies(self):
+            return [
+                {"name": "token", "value": "tok", "domain": ".carrefouruae.com"},
+                {"name": "userId", "value": "u9", "domain": ".carrefouruae.com"},
+            ]
+
+        def storage_state(self, **_k):
+            return None
+
+    class _Page:
+        url = "https://www.carrefouruae.com/mafuae/en"
+
+        def __init__(self, ctx):
+            self.context = ctx
+
+        def content(self):
+            return '{"posInfo":"food=073_Zone04","polygonId":"DXB_DubProdCty_01","emirateCode":"DUBAI"}'
+
+        def evaluate(self, _js, arg):
+            if arg["method"] == "POST":
+                return {
+                    "status": 500,
+                    "body": {"error": {"message": "Internal Server Error"}},
+                    "akamai": False,
+                }
+            if "liteCart" in arg["url"]:
+                return {
+                    "status": 200,
+                    "body": {"data": {"items": [{"id": "743861", "quantity": 1}]}},
+                    "akamai": False,
+                }
+            return {"status": 404, "body": {}, "akamai": False}
+
+        def close(self):
+            pass
+
+        def goto(self, *_a, **_k):
+            return None
+
+    ctx = _Ctx()
+    page = _Page(ctx)
+    monkeypatch.setattr(checkout, "_launch_carrefour_cart", lambda: (None, None, ctx, "headless"))
+    monkeypatch.setattr(checkout, "_carrefour_origin_page", lambda _ctx: (page, False))
+    monkeypatch.setattr(
+        checkout,
+        "_ensure_logged_in_page",
+        lambda *_a, **_k: {"logged_in": True, "reused": True, "error": None, "token": "tok", "user_id": "u9"},
+    )
+    monkeypatch.setattr(checkout, "_dismiss", lambda *_a, **_k: None)
+    monkeypatch.setattr(api, "save_browser_cookies", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        api,
+        "_cio_search",
+        lambda q: [{"value": "Coca-Cola Zero 330ml Can", "data": {"id": "743861", "price": 1.99}}],
+    )
+    out = checkout._carrefour_browser_api_cart(
+        email="e@mrg.im",
+        password="x",
+        action="add",
+        items=[{"id": "743861", "qty": 1}],
+    )
+    assert out["ok"] is True
+    assert out["items"][0]["id"] == "743861"
+    assert "Coca-Cola" in (out["items"][0].get("name") or "")

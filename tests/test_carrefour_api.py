@@ -54,6 +54,35 @@ def test_parse_items_from_lite_cart():
     assert items[0]["id"] == "11530"
     assert items[0]["qty"] == 2
     assert items[0]["name"] == "Milk 1L"
+    assert items[0]["price"] == 6.5
+
+
+def test_parse_items_reads_product_name_and_nested_price():
+    items = parse_items(
+        {
+            "data": {
+                "items": [
+                    {
+                        "productId": "743861",
+                        "productName": "Coca-Cola Zero 330ml Can",
+                        "quantity": 1,
+                        "price": {"value": 1.99},
+                    }
+                ]
+            }
+        }
+    )
+    assert items[0]["id"] == "743861"
+    assert items[0]["name"] == "Coca-Cola Zero 330ml Can"
+    assert items[0]["price"] == 1.99
+
+
+def test_parse_items_lite_response_is_id_and_qty_only():
+    items = parse_items({"data": {"items": [{"id": "743861", "quantity": 1}]}})
+    assert items[0]["id"] == "743861"
+    assert items[0]["qty"] == 1
+    assert items[0]["name"] == ""
+    assert items[0]["price"] is None
 
 
 def test_headers_do_not_override_chrome_user_agent():
@@ -474,6 +503,120 @@ def test_official_cart_add_then_clear(monkeypatch):
     assert out["ok"] is True
     assert removed == [["11530"]]
     assert out["items"] == []
+
+
+def test_official_cart_add_ok_when_sku_in_cart_despite_500(monkeypatch):
+    from bring_fast.stores import carrefour as api
+    from bring_fast.stores.http import StoreAPIError
+
+    _no_network(monkeypatch, api)
+    _patch_loc(monkeypatch, api)
+    monkeypatch.setattr(
+        api, "login", lambda e, p, **k: {"ok": True, "token": "t", "user_id": "u", "error": None}
+    )
+    monkeypatch.setattr(
+        api,
+        "add_item",
+        lambda **k: (_ for _ in ()).throw(
+            StoreAPIError("Internal Server Error", status=500, maf_error="Internal Server Error")
+        ),
+    )
+    monkeypatch.setattr(
+        api,
+        "lite_cart",
+        lambda **k: {"data": {"items": [{"id": "743861", "quantity": 1}]}},
+    )
+    monkeypatch.setattr(
+        api,
+        "_cio_search",
+        lambda q: [
+            {
+                "value": "Coca-Cola Zero 330ml Can",
+                "data": {"id": "743861", "price": 1.99, "ean": "5449000131805"},
+            }
+        ],
+    )
+    out = api.official_cart(
+        email="a@b.c", password="x", action="add", items=[{"id": "743861", "qty": 1}]
+    )
+    assert out["ok"] is True
+    assert out["error"] is None
+    assert out["maf_error"] is None
+    assert out["items"][0]["id"] == "743861"
+    assert "Coca-Cola" in out["items"][0]["name"]
+    assert out["items"][0]["price"] == 1.99
+
+
+def test_enrich_items_fills_name_and_price_from_catalog(monkeypatch):
+    from bring_fast.stores import carrefour as api
+
+    monkeypatch.setattr(
+        api,
+        "_cio_search",
+        lambda q: [
+            {
+                "value": "Coca-Cola Zero, 330ml, Can",
+                "data": {"id": "743861", "price": 1.99, "ean": "5449000131805"},
+            }
+        ],
+    )
+    items = api.enrich_items(
+        [{"id": "743861", "name": "", "qty": 1, "price": None, "currency": "AED", "url": ""}]
+    )
+    assert items[0]["id"] == "743861"
+    assert "Coca-Cola Zero" in items[0]["name"]
+    assert items[0]["price"] == 1.99
+
+
+def test_enrich_items_skips_catalog_when_payload_has_name_and_price(monkeypatch):
+    from bring_fast.stores import carrefour as api
+
+    monkeypatch.setattr(
+        api, "_cio_search", lambda q: (_ for _ in ()).throw(AssertionError("catalog must not run"))
+    )
+    items = api.enrich_items(
+        [{"id": "743861", "name": "Coca-Cola Zero 330ml Can", "qty": 1, "price": 1.99, "currency": "AED"}]
+    )
+    assert items[0]["name"] == "Coca-Cola Zero 330ml Can"
+    assert items[0]["price"] == 1.99
+
+
+def test_official_cart_list_enriches_bare_ids(monkeypatch):
+    from bring_fast.stores import carrefour as api
+
+    _no_network(monkeypatch, api)
+    monkeypatch.setattr(
+        api,
+        "lite_cart",
+        lambda **k: {
+            "data": {
+                "items": [
+                    {"id": "376161", "quantity": 1},
+                    {"id": "743861", "quantity": 1},
+                ]
+            }
+        },
+    )
+    catalog = {
+        "376161": {
+            "value": "Coca-Cola Original 330ml x6",
+            "data": {"id": "376161", "price": 14.99},
+        },
+        "743861": {
+            "value": "Coca-Cola Zero 330ml Can",
+            "data": {"id": "743861", "price": 1.99},
+        },
+    }
+    monkeypatch.setattr(api, "_cio_search", lambda q: [catalog[q]] if q in catalog else [])
+    out = api.official_cart(
+        email="a@b.c", password="x", action="list", items=[], session_token="t", session_user="u"
+    )
+    assert out["ok"] is True
+    by_id = {it["id"]: it for it in out["items"]}
+    assert "Coca-Cola Original" in by_id["376161"]["name"]
+    assert by_id["376161"]["price"] == 14.99
+    assert "Coca-Cola Zero" in by_id["743861"]["name"]
+    assert by_id["743861"]["price"] == 1.99
 
 
 def test_official_cart_refuses_out_of_stock_add(monkeypatch):

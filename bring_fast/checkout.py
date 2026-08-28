@@ -1117,6 +1117,8 @@ def _carrefour_browser_api_cart(
         act = (action or "list").strip().lower()
         if act in _CART_LIST_ACTIONS:
             act = "list"
+        add_err = None
+        add_code = None
         if act in ("clear", "create", "empty", "new"):
             listed = _origin_fetch(page, "GET", _lite_cart_path(loc), headers=headers)
             live_items = api.parse_items(listed.get("body"))
@@ -1140,7 +1142,8 @@ def _carrefour_browser_api_cart(
                     headers=headers,
                 )
         elif act in ("add", "set"):
-            last: dict[str, Any] = {}
+            add_err = None
+            add_code = None
             for it in items:
                 last = _add_via_page(page, headers, loc, it)
                 if last.get("akamai"):
@@ -1167,16 +1170,8 @@ def _carrefour_browser_api_cart(
                             msg = err_obj
                         meta = body.get("meta") if isinstance(body.get("meta"), dict) else {}
                         msg = msg or str(meta.get("message") or "")
-                    return {
-                        "ok": False,
-                        "official_count": None,
-                        "items": [],
-                        "logged_in": True,
-                        "driver": via,
-                        "error": msg or f"add HTTP {status}",
-                        "token": token,
-                        "user_id": user_id,
-                    }
+                    add_err = msg or f"add HTTP {status}"
+                    add_code = "internal_error" if "internal server error" in add_err.lower() else None
         listed = _origin_fetch(page, "GET", _lite_cart_path(loc), headers=headers)
         if listed.get("akamai") or int(listed.get("status") or 0) >= 400:
             return {
@@ -1190,7 +1185,20 @@ def _carrefour_browser_api_cart(
                 "token": token,
                 "user_id": user_id,
             }
-        live_items = api.parse_items(listed.get("body"))
+        live_items = api.enrich_items(api.parse_items(listed.get("body")))
+        if act in ("add", "set") and add_err and not api.ids_in_cart(items, live_items):
+            return {
+                "ok": False,
+                "official_count": len(live_items),
+                "items": live_items,
+                "logged_in": True,
+                "driver": via,
+                "error": add_err,
+                "error_code": add_code,
+                "maf_error": add_err,
+                "token": token,
+                "user_id": user_id,
+            }
         try:
             api.save_browser_cookies(list(context.cookies()))
         except Exception:
@@ -1272,6 +1280,13 @@ def _carrefour_official_cart(
             timeout=min(12.0, max(probe_timeout, 8.0)),
         )
         if write.get("ok") or write.get("error_code") == "needs_delivery_slot":
+            return write
+        if carrefour_api.ids_in_cart(items, write.get("items") or []):
+            write["ok"] = True
+            write["error"] = None
+            write["error_code"] = None
+            write["maf_error"] = None
+            write["item_errors"] = []
             return write
         if not _http_unusable(write):
             return write

@@ -553,6 +553,91 @@ def test_carrefour_search_add_743861_hits_official_cart(bf, monkeypatch):
     assert live.calls[0]["timeout"] <= 32
 
 
+def test_carrefour_search_add_743861_success_despite_internal_error(bf, monkeypatch):
+    """MAF Internal Server Error is a false negative when 743861 is already in the cart."""
+    from bring_fast.stores import carrefour as api
+
+    user = _link_carrefour(bf, "ise@example.com")
+    catalog = {
+        "376161": {"value": "Coca-Cola Original 330ml x6", "data": {"id": "376161", "price": 14.99}},
+        "743861": {"value": "Coca-Cola Zero 330ml Can", "data": {"id": "743861", "price": 1.99}},
+    }
+    monkeypatch.setattr(api, "_cio_search", lambda q: [catalog[q]] if q in catalog else [])
+
+    def _live(**kw):
+        return {
+            "ok": False,
+            "official_count": 4,
+            "items": [
+                {"id": "376161", "name": "", "qty": 1, "price": None, "currency": "AED"},
+                {"id": "2311515", "name": "", "qty": 1, "price": None, "currency": "AED"},
+                {"id": "7630477854474", "name": "", "qty": 1, "price": None, "currency": "AED"},
+                {"id": "743861", "name": "", "qty": 1, "price": None, "currency": "AED"},
+            ],
+            "logged_in": True,
+            "session_reused": True,
+            "driver": "chrome",
+            "maf_error": "Internal Server Error",
+            "item_errors": [{"id": "743861", "maf_error": "Internal Server Error"}],
+            "token": "t",
+            "user_id": "u",
+        }
+
+    monkeypatch.setattr(bf.checkout, "official_cart", _live)
+    out = json.loads(
+        bf._call_tool(user, "carrefour_search", {"action": "add", "product_id": "743861", "qty": 1})
+    )
+    assert out["success"] is True
+    assert out["official_ok"] is True
+    zero = next(i for i in out["items"] if i["id"] == "743861")
+    assert "Coca-Cola" in zero["name"]
+    assert zero["price"] == 1.99
+    assert zero["qty"] == 1
+
+
+def test_carrefour_cart_list_includes_name_and_price(bf, monkeypatch):
+    from bring_fast.stores import carrefour as api
+
+    user = _link_carrefour(bf, "names@example.com")
+    catalog = {
+        "376161": {"value": "Coca-Cola Original 330ml x6", "data": {"id": "376161", "price": 14.99}},
+        "743861": {"value": "Coca-Cola Zero 330ml Can", "data": {"id": "743861", "price": 1.99}},
+        "2311515": {"value": "Epson EcoTank L3351", "data": {"id": "2311515", "price": 599}},
+        "7630477854474": {"value": "Nespresso Inissia Coffee Machine", "data": {"id": "7630477854474", "ean": "7630477854474", "price": 408}},
+    }
+    monkeypatch.setattr(api, "_cio_search", lambda q: [catalog[q]] if q in catalog else [])
+
+    def _live(**kw):
+        return {
+            "ok": True,
+            "official_count": 4,
+            "items": [
+                {"id": "376161", "name": "", "qty": 1, "price": None, "currency": "AED"},
+                {"id": "2311515", "name": "", "qty": 1, "price": None, "currency": "AED"},
+                {"id": "7630477854474", "name": "", "qty": 1, "price": None, "currency": "AED"},
+                {"id": "743861", "name": "", "qty": 1, "price": None, "currency": "AED"},
+            ],
+            "logged_in": True,
+            "session_reused": True,
+            "driver": "chrome",
+            "token": "t",
+            "user_id": "u",
+        }
+
+    monkeypatch.setattr(bf.checkout, "official_cart", _live)
+    out = json.loads(bf._call_tool(user, "carrefour_cart", {"action": "list"}))
+    assert out["success"] is True
+    by_id = {it["id"]: it for it in out["items"]}
+    assert "Coca-Cola Original" in by_id["376161"]["name"]
+    assert by_id["376161"]["price"] == 14.99
+    assert "Coca-Cola Zero" in by_id["743861"]["name"]
+    assert by_id["743861"]["price"] == 1.99
+    assert by_id["2311515"]["name"]
+    assert by_id["7630477854474"]["name"]
+    assert all(it.get("name") for it in out["items"])
+    assert all(it.get("price") not in (None, "") for it in out["items"])
+
+
 def test_carrefour_search_add_timeout_keeps_login_saved(bf, monkeypatch):
     user = _link_carrefour(bf, "toadd@example.com")
 

@@ -1873,6 +1873,20 @@ def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> s
             ensure_ascii=False,
         )
     items = live.get("items") or []
+    if retailer == "carrefour":
+        from bring_fast.stores import carrefour as carrefour_api
+
+        try:
+            items = carrefour_api.enrich_items(items)
+            live["items"] = items
+        except Exception:
+            pass
+        if action in ("add", "set") and not live.get("ok") and carrefour_api.ids_in_cart(payload, items):
+            live["ok"] = True
+            live["error"] = None
+            live["error_code"] = None
+            live["maf_error"] = None
+            live["item_errors"] = []
     if live.get("token") and live.get("user_id"):
         db.save_store_session(user["id"], retailer, token=live["token"], store_user_id=str(live["user_id"]))
     ctx = _store_ctx(user, retailer, items=items)
