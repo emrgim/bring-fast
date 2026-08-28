@@ -214,6 +214,9 @@ def test_initialize_loads_skill_and_mcp_description(client, token):
                                      "clientInfo": {"name": "Grok", "version": "1.0"}}})
     body = r.json()["result"]
     assert "per-user grocery MCP" in body["serverInfo"]["description"]
+    assert body["serverInfo"]["version"]
+    from bring_fast import __version__
+    assert body["serverInfo"]["version"] == __version__
     assert "bf_whoami" in body["instructions"]
     assert "bf_spend" in body["instructions"]
     assert "not search-only" in body["instructions"].lower()

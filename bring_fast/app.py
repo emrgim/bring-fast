@@ -1208,17 +1208,20 @@ def _store_tools() -> list[dict[str, Any]]:
         {
             "name": "bf_whoami",
             "description": (
-                "THIS user's snapshot only: email and which supermarket logins are saved. "
+                "THIS user's snapshot only: email, which supermarket logins are saved, and `version` "
+                "(this Bring Fast build). "
                 "Does NOT return order history or spend. For last month / invoices use bf_spend or bf_orders. "
                 "linked=true means the store login is saved. Do not say logins are missing when linked is true. "
-                "Delivery address lives on the supermarket account, not on Bring Fast."
+                "Delivery address lives on the supermarket account, not on Bring Fast. "
+                "Use version to answer whether a given 1.10.x is live."
             ),
             "inputSchema": {"type": "object", "properties": {}},
         },
         {
             "name": "bf_stores",
             "description": (
-                "THIS user's stores and saved logins. linked=true means the supermarket login is saved. "
+                "THIS user's stores and saved logins. Includes `version` (this Bring Fast build). "
+                "linked=true means the supermarket login is saved. "
                 "Does NOT include order history, spend totals, or a last-seen cart. "
                 "For invoices / last month use bf_spend or bf_orders. "
                 "Address is the one on the supermarket account — do not ask to set it on Bring Fast."
@@ -1562,6 +1565,8 @@ def _account_snapshot(user: dict[str, Any]) -> dict[str, Any]:
     return {
         "email": user["email"],
         "user_id": user["id"],
+        "version": __version__,
+        "boot": BOOT_ID,
         "linked_stores": linked,
         "unlinked_stores": [s["store_id"] for s in stores if not s["login_saved"]],
         "note": (
@@ -1998,6 +2003,13 @@ def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> s
                 "(error_code=akamai_blocked). Login is still saved. "
                 f"login_saved={ctx['login_saved']}."
             )
+        elif ctx.get("error_code") == "litecart_http_error" or "litecart http" in str(live.get("error") or "").lower():
+            note = (
+                "Carrefour cart is enabled. The official-site liteCart call returned HTTP 400 "
+                "(error_code=litecart_http_error). Login is still saved. "
+                "Retry bf_cart retailer=carrefour action=list. "
+                f"login_saved={ctx['login_saved']}."
+            )
         elif ctx.get("error_code") == "varnish_blocked" or "varnish" in str(live.get("error") or "").lower():
             note = (
                 "Official Magento HTTP from this network was blocked by Varnish/Fastly "
@@ -2247,6 +2259,8 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
     if name == "bf_stores":
         snap = _account_snapshot(user)
         return _ok(
+            version=snap["version"],
+            boot=snap["boot"],
             linked_stores=snap["linked_stores"],
             unlinked_stores=snap["unlinked_stores"],
             note=snap["note"],
