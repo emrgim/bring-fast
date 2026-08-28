@@ -215,6 +215,9 @@ def test_initialize_loads_skill_and_mcp_description(client, token):
     assert "per-user grocery MCP" in body["serverInfo"]["description"]
     assert "bf_whoami" in body["instructions"]
     assert "bf_spend" in body["instructions"]
+    assert "not search-only" in body["instructions"].lower()
+    assert "bf_cart retailer=carrefour" in body["instructions"]
+    assert "carrefour_checkout" in body["instructions"]
     assert body["capabilities"]["tools"] == {"listChanged": True}
     assert body["capabilities"]["prompts"] == {"listChanged": False}
 
