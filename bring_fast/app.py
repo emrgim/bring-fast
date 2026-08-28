@@ -1379,21 +1379,38 @@ def _store_tools() -> list[dict[str, Any]]:
         # no tool at all.
         if r.get("search"):
             extra = " Search only — not used for orders."
+            props: dict[str, Any] = {"query": {"type": "string"}, "limit": {"type": "integer"}}
+            required: list[str] = ["query"]
             if r.get("shop"):
+                id_ex = "2288448" if sid == "carrefour" else "PRODUCT_ID"
                 extra = (
-                    f" Official cart: {sid}_cart / {sid}_status (also bf_cart retailer={sid}). "
-                    "Checkout stays on the website."
-                    if not db.store_can_checkout(sid)
-                    else f" Magento cart: {sid}_cart / {sid}_status (also bf_cart retailer={sid})."
+                    f" NOT search-only. This same tool adds to the official {name} account cart: "
+                    f"action=add product_id= qty= — or, if your schema only lists query+limit, "
+                    f"query=<numeric product_id> (e.g. query={id_ex}) adds qty 1. "
+                    f"Also {sid}_cart / bf_cart retailer={sid}. "
+                    + (
+                        "Checkout stays on the website."
+                        if not db.store_can_checkout(sid)
+                        else f"Magento checkout: {sid}_checkout."
+                    )
                 )
+                props.update(
+                    {
+                        "action": {"type": "string"},
+                        "product_id": {"type": "string"},
+                        "name": {"type": "string"},
+                        "qty": {"type": "integer"},
+                    }
+                )
+                required = []
             tools.append(
                 {
                     "name": f"{sid}_search",
                     "description": f"Search products at {name}.{extra}",
                     "inputSchema": {
                         "type": "object",
-                        "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}},
-                        "required": ["query"],
+                        "properties": props,
+                        **({"required": required} if required else {}),
                     },
                 }
             )
@@ -1614,6 +1631,174 @@ _CART_ACTION_ALIASES = {
     "items": "list",
     "contents": "list",
 }
+
+# Stale MCP clients (Grok) often cache only {store}_search with {query, limit}.
+# Shop-store search therefore also mutates the official account cart.
+_ADD_QUERY_PREFIXES = (
+    "add to the cart ",
+    "add to cart ",
+    "aggiungi al carrello ",
+    "metti nel carrello ",
+    "add ",
+    "aggiungi ",
+    "metti ",
+)
+_ADD_QUERY_SUFFIXES = (
+    " al carrello",
+    " nel carrello",
+    " to the cart",
+    " to cart",
+)
+_LIST_CART_QUERIES = frozenset(
+    {
+        "cart",
+        "my cart",
+        "the cart",
+        "show cart",
+        "list cart",
+        "view cart",
+        "get cart",
+        "read cart",
+        "carrello",
+        "il carrello",
+        "mio carrello",
+        "mostra carrello",
+        "vedi carrello",
+        "lista carrello",
+    }
+)
+_CLEAR_CART_QUERIES = frozenset(
+    {
+        "clear cart",
+        "empty cart",
+        "clear the cart",
+        "svuota carrello",
+        "svuota il carrello",
+    }
+)
+# Carrefour / Magento product ids are 5–7 digits. 8+ is usually a barcode search.
+_NUMERIC_PRODUCT_ID = re.compile(
+    r"^(?P<id>\d{5,7})(?:\s*(?:x|×|\*|qty\s+|qta\s+)(?P<qty>\d{1,3}))?$",
+    re.IGNORECASE,
+)
+
+
+def _qty_from_search_args(args: dict[str, Any], *, use_limit: bool) -> int:
+    raw = args.get("qty")
+    if raw not in (None, ""):
+        try:
+            return max(1, int(raw))
+        except (TypeError, ValueError):
+            pass
+    if use_limit and args.get("limit") not in (None, ""):
+        try:
+            n = int(args["limit"])
+            if 1 <= n <= 20:
+                return n
+        except (TypeError, ValueError):
+            pass
+    return 1
+
+
+def _strip_add_query(query: str) -> str | None:
+    q = query.strip()
+    low = q.lower()
+    rest: str | None = None
+    for prefix in _ADD_QUERY_PREFIXES:
+        if low.startswith(prefix):
+            rest = q[len(prefix) :].strip()
+            low = rest.lower()
+            break
+    if rest is None:
+        return None
+    for suffix in _ADD_QUERY_SUFFIXES:
+        if low.endswith(suffix):
+            rest = rest[: -len(suffix)].strip()
+            break
+    return rest or None
+
+
+def _search_args_as_cart(args: dict[str, Any]) -> dict[str, Any] | None:
+    """If this shop-store search call is really a cart op, return _mutate_cart args."""
+    action = str(args.get("action") or "").strip().lower()
+    if action in _CART_ACTION_ALIASES:
+        action = _CART_ACTION_ALIASES[action]
+    if action in ("list", "add", "set", "remove", "clear"):
+        out = dict(args)
+        out["action"] = action
+        if action in ("add", "set") and out.get("qty") in (None, ""):
+            out["qty"] = _qty_from_search_args(args, use_limit=True)
+        return out
+
+    product_id = str(args.get("product_id") or args.get("id") or args.get("sku") or "").strip()
+    query = str(args.get("query") or args.get("q") or "").strip()
+    if product_id and (not query or query == product_id or query.isdigit()):
+        return {
+            "action": "add",
+            "product_id": product_id,
+            "name": str(args.get("name") or ""),
+            "qty": _qty_from_search_args(args, use_limit=True),
+        }
+
+    qn = " ".join(query.lower().split())
+    if qn in _LIST_CART_QUERIES:
+        return {"action": "list"}
+    if qn in _CLEAR_CART_QUERIES:
+        return {"action": "clear"}
+
+    rest = _strip_add_query(query)
+    if rest:
+        matched = _NUMERIC_PRODUCT_ID.match(rest)
+        if matched:
+            return {
+                "action": "add",
+                "product_id": matched.group("id"),
+                "qty": int(matched.group("qty") or _qty_from_search_args(args, use_limit=False)),
+            }
+        return {
+            "action": "add",
+            "name": rest,
+            "qty": _qty_from_search_args(args, use_limit=False),
+        }
+
+    matched = _NUMERIC_PRODUCT_ID.match(query)
+    if matched:
+        return {
+            "action": "add",
+            "product_id": matched.group("id"),
+            "qty": int(matched.group("qty") or 1),
+        }
+    return None
+
+
+def _decorate_shop_search(sid: str, block: dict[str, Any]) -> dict[str, Any]:
+    """Every catalog hit on a shop store must tell stale clients how to add with this tool."""
+    results = block.get("results") if isinstance(block.get("results"), list) else []
+    example_id = ""
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        pid = str(item.get("id") or "").strip()
+        if not pid:
+            continue
+        item["add_with_this_tool"] = {"query": pid}
+        if not example_id:
+            example_id = pid
+    example_id = example_id or "PRODUCT_ID"
+    block["not_search_only"] = True
+    block["official_cart"] = True
+    block["add_to_official_cart"] = {
+        "never_say_search_only": True,
+        "same_tool": f"{sid}_search",
+        "how": (
+            f"{sid} is not search-only. Call {sid}_search with query set to the numeric "
+            f"product_id (example query=\"{example_id}\") to add qty 1 to the official "
+            f"account cart. Or action=add product_id={example_id} qty=1. "
+            f"Also {sid}_cart / bf_cart retailer={sid}. Checkout stays on the website."
+        ),
+        "example": {"query": example_id},
+    }
+    return block
 
 
 def _mutate_cart(user: dict[str, Any], retailer: str, args: dict[str, Any]) -> str:
@@ -1840,6 +2025,8 @@ def _search_stores(user: dict[str, Any], query: str, retailer: str, limit: int) 
         block = catalog.search(sid, query, limit)
         block["delivery_address"] = _store_ctx(user, sid)["delivery_address"]
         block["shop"] = db.store_can_shop(sid)
+        if block["shop"]:
+            _decorate_shop_search(sid, block)
         out.append(block)
     return json.dumps({"success": True, "query": query, "stores": out}, ensure_ascii=False)
 
@@ -1878,10 +2065,15 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
     if name == "bf_whoami":
         return _ok(**_account_snapshot(user))
     if name == "bf_search":
+        retailer = (args.get("retailer") or args.get("store") or "").lower()
+        if retailer and db.store_can_shop(retailer):
+            cart_args = _search_args_as_cart(args)
+            if cart_args:
+                return _mutate_cart(user, retailer, cart_args)
         return _search_stores(
             user,
             args.get("query") or args.get("q") or "",
-            (args.get("retailer") or args.get("store") or "").lower(),
+            retailer,
             int(args.get("limit") or 6),
         )
     if name == "bf_compare":
@@ -1965,9 +2157,15 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
         if name == f"{sid}_search":
             if not r.get("search"):
                 return json.dumps({"success": False, "error": _no_catalog(sid), "results": []}, ensure_ascii=False)
+            if r.get("shop"):
+                cart_args = _search_args_as_cart(args)
+                if cart_args:
+                    return _mutate_cart(user, sid, cart_args)
             result = catalog.search(sid, args.get("query") or "", int(args.get("limit") or 8))
             result["store"] = r["name"]
             result["shop"] = bool(r.get("shop"))
+            if r.get("shop"):
+                _decorate_shop_search(sid, result)
             return json.dumps(result, ensure_ascii=False)
         if name == f"{sid}_cart":
             if not r.get("shop"):

@@ -122,7 +122,17 @@ def test_carrefour_is_not_described_as_search_only(bf):
     assert "bf_cart retailer=carrefour" in bf_cart
     search = tools["carrefour_search"]
     assert "search only" not in search
+    assert "not search-only" in search
     assert "carrefour_cart" in search
+    assert "query=2288448" in search
+    assert "action=add" in search
+    schema = next(t["inputSchema"] for t in bf.tools_catalog() if t["name"] == "carrefour_search")
+    assert "action" in schema["properties"]
+    assert "product_id" in schema["properties"]
+    assert "query" in schema["properties"]
+    waitrose = next(t for t in bf.tools_catalog() if t["name"] == "waitrose_search")
+    assert waitrose["inputSchema"].get("required") == ["query"]
+    assert "action" not in waitrose["inputSchema"]["properties"]
     cart = tools["carrefour_cart"]
     assert "official" in cart
     assert "list" in cart
@@ -450,3 +460,172 @@ def test_carrefour_list_timeout_keeps_login_saved(bf, monkeypatch):
     assert out["login_saved"] is True
     assert out["store_login_ok"] is True
     assert "cart_timeout" in out["note"]
+
+
+def _link_carrefour(bf, email="shop@example.com"):
+    user = bf.db.create_user(email, "secret1")
+    bf.db.set_retailer_account(user["id"], "carrefour", email, "store-pass")
+    return bf.db.get_user_by_id(user["id"])
+
+
+def _ok_add(product_id="2288448", **extra):
+    def _live(**kw):
+        _live.calls.append(kw)
+        return {
+            "ok": True,
+            "official_count": 1,
+            "items": [{"id": product_id, "name": "Coke Zero", "qty": kw["items"][0]["qty"] if kw.get("items") else 1, "price": 7.49}],
+            "logged_in": True,
+            "session_reused": True,
+            "driver": "chrome",
+            "token": "t",
+            "user_id": "u",
+            **extra,
+        }
+
+    _live.calls = []
+    return _live
+
+
+def test_carrefour_search_tells_stale_clients_how_to_add(bf, monkeypatch):
+    user = bf.db.create_user("hint@example.com", "secret1")
+    monkeypatch.setattr(
+        bf.catalog,
+        "search",
+        lambda sid, query, limit: {
+            "retailer": sid,
+            "query": query,
+            "results": [{"id": "2288448", "name": "Coke Zero 6pk", "price": 7.49}],
+        },
+    )
+    out = json.loads(bf._call_tool(user, "carrefour_search", {"query": "coke zero", "limit": 8}))
+    assert out["not_search_only"] is True
+    assert out["official_cart"] is True
+    assert out["results"][0]["add_with_this_tool"] == {"query": "2288448"}
+    how = out["add_to_official_cart"]["how"].lower()
+    assert "not search-only" in how
+    assert "query=" in how and "2288448" in how
+    assert out["add_to_official_cart"]["example"] == {"query": "2288448"}
+    assert out["add_to_official_cart"]["same_tool"] == "carrefour_search"
+
+
+def test_carrefour_search_numeric_query_adds_to_official_cart(bf, monkeypatch):
+    """Stale Grok schema is {query, limit}; query=product_id must add, not catalog-search."""
+    user = _link_carrefour(bf, "num@example.com")
+    live = _ok_add()
+    monkeypatch.setattr(bf.checkout, "official_cart", live)
+
+    def no_search(*_a, **_k):
+        raise AssertionError("numeric query must not catalog-search")
+
+    monkeypatch.setattr(bf.catalog, "search", no_search)
+    out = json.loads(bf._call_tool(user, "carrefour_search", {"query": "2288448", "limit": 8}))
+    assert out["success"] is True
+    assert live.calls[0]["action"] == "add"
+    assert live.calls[0]["items"][0]["id"] == "2288448"
+    assert live.calls[0]["items"][0]["qty"] == 1
+
+
+def test_carrefour_search_action_add_hits_official_cart(bf, monkeypatch):
+    user = _link_carrefour(bf, "act@example.com")
+    live = _ok_add()
+    monkeypatch.setattr(bf.checkout, "official_cart", live)
+    out = json.loads(
+        bf._call_tool(user, "carrefour_search", {"action": "add", "product_id": "2288448", "qty": 2})
+    )
+    assert out["success"] is True
+    assert live.calls[0]["action"] == "add"
+    assert live.calls[0]["items"][0]["qty"] == 2
+
+
+def test_carrefour_search_add_prefix_adds_by_name(bf, monkeypatch):
+    user = _link_carrefour(bf, "pref@example.com")
+    monkeypatch.setattr(
+        bf.catalog,
+        "search",
+        lambda sid, query, limit: {
+            "retailer": sid,
+            "query": query,
+            "results": [{"id": "2288448", "name": "Coke Zero 6pk", "price": 7.49}],
+        },
+    )
+    live = _ok_add()
+    monkeypatch.setattr(bf.checkout, "official_cart", live)
+    out = json.loads(bf._call_tool(user, "carrefour_search", {"query": "aggiungi coke zero"}))
+    assert out["success"] is True
+    assert live.calls[0]["action"] == "add"
+    assert live.calls[0]["items"][0]["id"] == "2288448"
+
+
+def test_carrefour_search_list_query_reads_official_cart(bf, monkeypatch):
+    user = _link_carrefour(bf, "lst@example.com")
+    seen = []
+
+    def _live(**kw):
+        seen.append(kw["action"])
+        return {
+            "ok": True,
+            "official_count": 0,
+            "items": [],
+            "logged_in": True,
+            "session_reused": True,
+            "driver": "chrome",
+            "token": "t",
+            "user_id": "u",
+        }
+
+    monkeypatch.setattr(bf.checkout, "official_cart", _live)
+    out = json.loads(bf._call_tool(user, "carrefour_search", {"query": "carrello"}))
+    assert seen == ["list"]
+    assert out["success"] is True
+
+
+def test_bf_search_scoped_to_carrefour_numeric_query_adds(bf, monkeypatch):
+    user = _link_carrefour(bf, "bfs@example.com")
+    live = _ok_add()
+    monkeypatch.setattr(bf.checkout, "official_cart", live)
+    out = json.loads(
+        bf._call_tool(user, "bf_search", {"query": "2288448", "retailer": "carrefour", "limit": 6})
+    )
+    assert out["success"] is True
+    assert live.calls[0]["action"] == "add"
+    assert live.calls[0]["items"][0]["id"] == "2288448"
+
+
+def test_waitrose_search_does_not_add_even_with_action(bf, monkeypatch):
+    user = bf.db.create_user("w@example.com", "secret1")
+    monkeypatch.setattr(
+        bf.catalog,
+        "search",
+        lambda sid, query, limit: {"retailer": sid, "query": query, "results": [{"id": "1135", "name": "Milk"}]},
+    )
+
+    def no_cart(**_k):
+        raise AssertionError("waitrose has no official cart")
+
+    monkeypatch.setattr(bf.checkout, "official_cart", no_cart)
+    out = json.loads(bf._call_tool(user, "waitrose_search", {"query": "1135", "action": "add", "product_id": "1135"}))
+    assert out.get("not_search_only") is not True
+    assert "add_to_official_cart" not in out
+    assert out["results"][0]["id"] == "1135"
+
+
+def test_barcode_query_still_searches_carrefour(bf, monkeypatch):
+    user = bf.db.create_user("ean@example.com", "secret1")
+    monkeypatch.setattr(
+        bf.catalog,
+        "search",
+        lambda sid, query, limit: {
+            "retailer": sid,
+            "query": query,
+            "results": [{"id": "2288448", "name": "Coke Zero", "price": 7.49}],
+        },
+    )
+
+    def no_cart(**_k):
+        raise AssertionError("13-digit EAN must catalog-search, not add")
+
+    monkeypatch.setattr(bf.checkout, "official_cart", no_cart)
+    out = json.loads(bf._call_tool(user, "carrefour_search", {"query": "5449000131805"}))
+    assert out["results"][0]["id"] == "2288448"
+    assert out["not_search_only"] is True
