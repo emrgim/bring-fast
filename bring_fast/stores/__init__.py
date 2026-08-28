@@ -1,1 +1,1 @@
-"""Per-store HTTP APIs. Chrome is not used."""
+"""Per-store HTTP APIs. curl_cffi Chrome impersonation; never a real Chrome window."""

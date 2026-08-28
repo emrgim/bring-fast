@@ -57,8 +57,8 @@ Optional: `dept=Edible` or `dept=Drinks`.
 
 - Search is on for every supermarket.
 - Cart on **Grandiose, Union Coop, Carrefour**. Checkout **only Magento**: Grandiose, Union Coop. Never invent a Bring Fast cart.
-- Carrefour: `carrefour_cart` (also `bf_cart` retailer=carrefour) action=list|add|set|remove|clear. add takes `product_id` or `name` plus `qty`. Add binds the MAF delivery store from the saved Carrefour location; `error_code=needs_delivery_slot` means list the cart and retry. `clear` (also `create`/`empty`/`new`) empties the official cart. Checkout stays on the Carrefour website. The MCP names are `carrefour_cart` / `carrefour_status` — not a prefixed `bring_fast___carrefour_cart`.
-- If official cart cannot be read: `items=[]` and say **unread**. Do not reuse old items. Akamai on Carrefour login does **not** mean the login is missing (`login_saved` stays true).
+- Carrefour: first action is always **login** with the saved account (never skip, never refuse a cart request without attempting login). Then `carrefour_cart` (also `bf_cart` retailer=carrefour) list/add/set/remove/clear on **that logged-in official cart only**. If login fails, stop — no guest/virtual/unlogged cart. add takes `product_id` or `name` plus `qty`. Add binds the MAF delivery store from the saved Carrefour location; `error_code=needs_delivery_slot` means list the cart and retry. `clear` (also `create`/`empty`/`new`) empties the official cart. Checkout stays on the Carrefour website. The MCP names are `carrefour_cart` / `carrefour_status` — not a prefixed `bring_fast___carrefour_cart`.
+- If official cart cannot be read: `items=[]` and say **unread**. Do not reuse old items. Akamai on Carrefour login does **not** mean the login is missing (`login_saved` stays true). Carrefour HTTP uses curl_cffi Chrome impersonation (same TLS + UA); never a real Chrome window.
 - Do not call `placeOrder` unless the user explicitly asks to place the order.
 - Payment stays on the supermarket site.
 - MMI and African + Eastern: License DXB login + search. No cart.

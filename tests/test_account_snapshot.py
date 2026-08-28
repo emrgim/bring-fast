@@ -269,7 +269,7 @@ def test_carrefour_cart_overlays_live_delivery_address(bf, monkeypatch):
             "items": [],
             "logged_in": True,
             "session_reused": True,
-            "driver": "android",
+            "driver": "chrome",
             "token": "t",
             "user_id": "u",
             "delivery_address": "Element Meaisam 731",
@@ -297,7 +297,7 @@ def test_carrefour_cart_surfaces_needs_delivery_slot(bf, monkeypatch):
             "items": [],
             "logged_in": True,
             "session_reused": True,
-            "driver": "android",
+            "driver": "chrome",
             "token": "t",
             "user_id": "u",
             "error": "Carrefour needs a bound delivery store before add-to-cart (error_code=needs_delivery_slot).",
@@ -311,3 +311,39 @@ def test_carrefour_cart_surfaces_needs_delivery_slot(bf, monkeypatch):
     assert "purchase indicators" in (out.get("maf_error") or "").lower()
     assert out["live_cart_ok"] is False
     assert out["login_saved"] is True
+
+
+def test_carrefour_akamai_unread_keeps_login_saved(bf, monkeypatch):
+    user = bf.db.create_user("cf@example.com", "secret1")
+    bf.db.set_retailer_account(user["id"], "carrefour", "shopper@example.com", "store-pass")
+    user = bf.db.get_user_by_id(user["id"])
+
+    monkeypatch.setattr(
+        bf.checkout,
+        "official_cart",
+        lambda **kw: {
+            "ok": False,
+            "official_count": None,
+            "items": [],
+            "logged_in": False,
+            "session_reused": False,
+            "driver": "chrome",
+            "error": (
+                "Carrefour blocked the HTTP API from this server (Akamai). "
+                "The saved store login is still present. Official cart unread."
+            ),
+            "token": "",
+            "user_id": "",
+        },
+    )
+    out = json.loads(bf._call_tool(user, "carrefour_cart", {"action": "list"}))
+    assert out["success"] is False
+    assert out["items"] == []
+    assert out["item_count"] == 0
+    assert out["login_saved"] is True
+    assert out["login_linked"] is True
+    assert out["store_login_ok"] is True
+    assert "akamai" in out["what_happens"].lower()
+    assert "unread" in out["what_happens"].lower()
+    assert "login_saved=True" in out["note"]
+    assert "does not mean the supermarket login is missing" in out["note"]

@@ -435,8 +435,23 @@ def ensure_store_login(page, store: str, email: str, password: str) -> dict[str,
     }
 
 
+def _carrefour_logged_in(page) -> bool:
+    url = (page.url or "").lower()
+    if "/login" in url:
+        return False
+    try:
+        text = page.inner_text("body") or ""
+    except Exception:
+        return False
+    if "Login & Register" in text or "Log in or sign up" in text:
+        return False
+    return True
+
+
 def _add_items(page, store: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     added = []
+    if store == "carrefour" and not _carrefour_logged_in(page):
+        return [{**it, "site_add": "blocked_not_logged_in"} for it in items]
     for it in items:
         pid = str(it.get("id") or "")
         qty = int(it.get("qty") or 1)
@@ -683,7 +698,7 @@ def official_cart(
     session_token: str = "",
     session_user: str = "",
 ) -> dict[str, Any]:
-    """Official store cart via HTTP APIs. Chrome is not used."""
+    """Official store cart via HTTP APIs. No real Chrome window."""
     if store == "carrefour":
         from bring_fast.stores import carrefour as carrefour_api
 
