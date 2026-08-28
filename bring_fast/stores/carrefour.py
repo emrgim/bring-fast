@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -16,9 +17,10 @@ from typing import Any
 from bring_fast.stores.http import StoreAPIError, is_akamai_shell, json_or_error, session
 
 # Same Apigee surface the Play Store app uses (RetailSSO + site gateway).
+# RetailSSO first: www.carrefouruae.com often hangs or returns Akamai HTML from datacenter IPs.
 API_HOSTS = (
-    "https://www.carrefouruae.com",
     "https://api-prod.retailsso.com",
+    "https://www.carrefouruae.com",
 )
 SITE = "https://www.carrefouruae.com"
 MARKET = "mafuae"
@@ -63,7 +65,7 @@ def chrome_session(existing=None, *, warm: bool = True):
 
     def warmed(s) -> bool:
         try:
-            resp = s.get(f"{SITE}/{MARKET}/{LANG}", timeout=12)
+            resp = s.get(f"{SITE}/{MARKET}/{LANG}", timeout=8)
             text = getattr(resp, "text", "") or ""
         except Exception:
             return False
@@ -74,6 +76,7 @@ def chrome_session(existing=None, *, warm: bool = True):
     if not warm:
         return s
     if warmed(s):
+        capture_client_cookies(s)
         return s
     for name in CHROME_IMPERSONATE:
         try:
@@ -82,6 +85,7 @@ def chrome_session(existing=None, *, warm: bool = True):
             continue
         apply_browser_cookies(alt)
         if warmed(alt):
+            capture_client_cookies(alt)
             return alt
     return s
 
@@ -141,6 +145,52 @@ def token_from_browser_cookies() -> dict[str, str]:
         if c.get("name") == "userId":
             out["user_id"] = str(c.get("value") or "")
     return out
+
+
+def capture_client_cookies(s) -> None:
+    """Persist _abck / token from a live curl_cffi session for the next call."""
+    cookies: list[dict[str, Any]] = []
+    try:
+        jar = getattr(s, "cookies", None)
+        inner = getattr(jar, "jar", None) if jar is not None else None
+        iterable = inner if inner is not None else jar
+        if iterable is None:
+            return
+        for c in iterable:
+            name = getattr(c, "name", None)
+            if not name and isinstance(c, (list, tuple)) and c:
+                name, value = c[0], c[1] if len(c) > 1 else ""
+                cookies.append({"name": str(name), "value": str(value or ""), "domain": ".carrefouruae.com"})
+                continue
+            if not name:
+                continue
+            cookies.append(
+                {
+                    "name": str(name),
+                    "value": str(getattr(c, "value", "") or ""),
+                    "domain": str(getattr(c, "domain", "") or ".carrefouruae.com"),
+                    "path": str(getattr(c, "path", "") or "/"),
+                }
+            )
+    except Exception:
+        return
+    if cookies:
+        save_browser_cookies(cookies)
+
+
+def refresh_sensor_cookies() -> bool:
+    """Copy Akamai sensor cookies from an already-running desktop Chrome (CDP). No new window."""
+    try:
+        from bring_fast import checkout
+
+        cookies = checkout.snapshot_cdp_cookies()
+    except Exception:
+        return False
+    if not cookies:
+        return False
+    save_browser_cookies(cookies)
+    names = {str(c.get("name") or "") for c in cookies if isinstance(c, dict)}
+    return bool(names & {"_abck", "ak_bmsc", "bm_sz", "token"})
 
 
 def android_headers(*, token: str = "", user_id: str = "", fulfilment: dict[str, Any] | None = None) -> dict[str, str]:
@@ -255,7 +305,7 @@ def customer_addresses(*, token: str, user_id: str, client=None) -> list[dict[st
     headers = android_headers(token=token, user_id=user_id)
     for host in API_HOSTS:
         try:
-            resp = s.get(f"{host}/v2/addresses/{MARKET}/{LANG}", headers=headers, timeout=12)
+            resp = s.get(f"{host}/v2/addresses/{MARKET}/{LANG}", headers=headers, timeout=8)
             body = json_or_error(resp, "addresses")
         except StoreAPIError as e:
             if e.status in (401, 403) or _is_akamai(e):
@@ -375,11 +425,14 @@ def _extract_session(body: Any, resp) -> dict[str, str]:
 
 AKAMAI_UNREAD = (
     "Carrefour blocked the HTTP API from this server (Akamai). "
-    "The saved store login is still present. Official cart unread."
+    "The saved store login is still present. Official cart unread. "
+    "error_code=akamai_blocked."
 )
 
 
 def _is_akamai(err: StoreAPIError) -> bool:
+    if getattr(err, "error_code", None) == "akamai_blocked":
+        return True
     return err.status == 403 or "akamai" in str(err).lower() or "access denied" in str(err).lower()
 
 
@@ -504,7 +557,11 @@ def lite_cart(
     loc = fulfilment if fulfilment is not None else resolve_fulfilment(token=token, user_id=user_id, client=s)
     headers = android_headers(token=token, user_id=user_id, fulfilment=loc)
     last_err: StoreAPIError | None = None
+    deadline = time.monotonic() + max(2.0, float(timeout or 8))
     for host in API_HOSTS:
+        remaining = deadline - time.monotonic()
+        if remaining < 1:
+            break
         try:
             resp = s.get(
                 f"{host}/v1/basket/{MARKET}/{LANG}/liteCart",
@@ -516,7 +573,7 @@ def lite_cart(
                     "longitude": loc.get("lng") if loc.get("lng") is not None else LNG,
                 },
                 headers=headers,
-                timeout=timeout,
+                timeout=remaining,
             )
             body = json_or_error(resp, "liteCart")
         except StoreAPIError as e:
@@ -681,7 +738,7 @@ def _basket(
     for host in API_HOSTS:
         url = f"{host}/v1/basket/{MARKET}/{LANG}/{path}"
         try:
-            resp = getattr(s, method)(url, json=payload, headers=headers, timeout=12)
+            resp = getattr(s, method)(url, json=payload, headers=headers, timeout=8)
             body = json_or_error(resp, what)
         except StoreAPIError as e:
             last_err = e
@@ -715,7 +772,7 @@ def _v8_add_item(
     for host in API_HOSTS:
         url = f"{host}/v8/carts/{MARKET}/{LANG}/STANDARD/addItem"
         try:
-            resp = s.post(url, json=payload, headers=headers, timeout=12)
+            resp = s.post(url, json=payload, headers=headers, timeout=8)
             body = json_or_error(resp, "v8add")
         except StoreAPIError as e:
             last_err = e
@@ -901,6 +958,7 @@ def official_cart(
     if not reused:
         auth = _auth(email, password, client=s)
         if not auth["ok"]:
+            akamai = "akamai" in str(auth.get("error") or "").lower()
             return {
                 "ok": False,
                 "official_count": None,
@@ -910,6 +968,7 @@ def official_cart(
                 "driver": "chrome",
                 "client": PACKAGE,
                 "error": auth.get("error") or "Carrefour login failed.",
+                "error_code": "akamai_blocked" if akamai else None,
                 "token": "",
                 "user_id": "",
             }
@@ -1006,7 +1065,7 @@ def official_cart(
             "driver": "chrome",
             "client": PACKAGE,
             "error": err,
-            "error_code": e.error_code,
+            "error_code": e.error_code or ("akamai_blocked" if _is_akamai(e) else None),
             "maf_error": e.maf_error,
             "token": token,
             "user_id": user_id,

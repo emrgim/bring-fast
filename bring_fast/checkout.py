@@ -53,6 +53,33 @@ CDP = os.environ.get("BRINGFAST_CDP", "http://127.0.0.1:9222")
 DESK_PROFILE = Path(os.environ.get("BRINGFAST_DATA", Path.home() / ".bring-fast")) / "chrome-desktop"
 
 
+def snapshot_cdp_cookies() -> list[dict[str, Any]]:
+    """Cookies from an already-running desktop Chrome. Does not launch a browser."""
+    import urllib.request
+
+    try:
+        urllib.request.urlopen(f"{CDP}/json/version", timeout=1)
+    except Exception:
+        return []
+    pw = None
+    try:
+        from playwright.sync_api import sync_playwright
+
+        pw = sync_playwright().start()
+        browser = pw.chromium.connect_over_cdp(CDP)
+        context = browser.contexts[0] if browser.contexts else browser.new_context()
+        raw = context.cookies()
+        return [c for c in raw if isinstance(c, dict) and c.get("name")]
+    except Exception:
+        return []
+    finally:
+        try:
+            if pw:
+                pw.stop()
+        except Exception:
+            pass
+
+
 def _cdp_port(cdp: str) -> int:
     parsed = urlsplit(cdp)
     return parsed.port or 9222
@@ -588,7 +615,7 @@ class LiveCartTimeout(TimeoutError):
     """Raised when official-site browser work exceeds the MCP-safe budget."""
 
 
-def _in_thread(fn, timeout: float = 240, **kwargs):
+def _in_thread(fn, timeout: float = 240, *, label: str | None = None, **kwargs):
     import concurrent.futures
 
     # Do not use `with ThreadPoolExecutor`: on timeout its shutdown(wait=True)
@@ -597,10 +624,11 @@ def _in_thread(fn, timeout: float = 240, **kwargs):
     try:
         return pool.submit(fn, **kwargs).result(timeout=timeout)
     except concurrent.futures.TimeoutError as e:
-        store = kwargs.get("store") or "store"
+        store = label or kwargs.get("store") or "store"
         raise LiveCartTimeout(
-            f"Live {store} cart/status exceeded {int(timeout)}s while driving the official site. "
-            "whoami/stores stay fast because they only read Bring Fast; cart/status open Chrome."
+            f"Live {store} cart exceeded {int(timeout)}s. "
+            "The supermarket login is still saved; the official cart was not read. "
+            "error_code=cart_timeout."
         ) from e
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
@@ -698,18 +726,19 @@ def official_cart(
     session_token: str = "",
     session_user: str = "",
 ) -> dict[str, Any]:
-    """Official store cart via HTTP APIs. No real Chrome window."""
+    """Official store cart via HTTP APIs. Carrefour is time-boxed so Grok never hangs."""
     if store == "carrefour":
-        from bring_fast.stores import carrefour as carrefour_api
-
-        return carrefour_api.official_cart(
+        return _in_thread(
+            _carrefour_official_cart,
+            timeout=timeout,
+            label="carrefour",
             email=email,
             password=password,
             action=action,
             items=items,
             session_token=session_token,
             session_user=session_user,
-            timeout=timeout,
+            http_timeout=max(6.0, float(timeout) - 4),
         )
     if store == "grandiose":
         from bring_fast.stores import grandiose as grandiose_api
@@ -731,6 +760,94 @@ def official_cart(
         "driver": "http",
         "error": f"{store} HTTP API client is not wired yet. Chrome will not be used.",
     }
+
+
+def _akamai_result(live: dict[str, Any]) -> bool:
+    if (live.get("error_code") or "") == "akamai_blocked":
+        return True
+    blob = f"{live.get('error') or ''}".lower()
+    return "akamai" in blob or "access denied" in blob
+
+
+def _carrefour_official_cart(
+    *,
+    email: str,
+    password: str,
+    action: str,
+    items: list[dict[str, Any]],
+    session_token: str = "",
+    session_user: str = "",
+    http_timeout: float = 12,
+) -> dict[str, Any]:
+    """HTTP cart first; on Akamai, reuse desktop Chrome cookies, then the site driver for writes."""
+    from bring_fast.stores import carrefour as carrefour_api
+
+    live = carrefour_api.official_cart(
+        email=email,
+        password=password,
+        action=action,
+        items=items,
+        session_token=session_token,
+        session_user=session_user,
+        timeout=http_timeout,
+    )
+    if live.get("ok") or live.get("error_code") == "needs_delivery_slot":
+        return live
+    if not _akamai_result(live):
+        return live
+    live["error_code"] = live.get("error_code") or "akamai_blocked"
+    if carrefour_api.refresh_sensor_cookies():
+        retry = carrefour_api.official_cart(
+            email=email,
+            password=password,
+            action=action,
+            items=items,
+            session_token=session_token or live.get("token") or "",
+            session_user=session_user or live.get("user_id") or "",
+            timeout=http_timeout,
+        )
+        if retry.get("ok"):
+            retry["akamai_retry"] = "sensor_cookies"
+            return retry
+        live = retry
+        live["error_code"] = live.get("error_code") or "akamai_blocked"
+    act = (action or "list").strip().lower()
+    if act in ("list", "get", "read", "show", "view", "items", "contents"):
+        live["error"] = live.get("error") or carrefour_api.AKAMAI_UNREAD
+        live["error_code"] = "akamai_blocked"
+        if email:
+            live["logged_in"] = True
+        return live
+    try:
+        site = _official_cart_sync(
+            store="carrefour",
+            email=email,
+            password=password,
+            action=action,
+            items=items,
+        )
+    except Exception as e:
+        live["error"] = (
+            f"{carrefour_api.AKAMAI_UNREAD} Site driver also failed ({type(e).__name__}: {e})."
+        )
+        live["error_code"] = "akamai_blocked"
+        if email:
+            live["logged_in"] = True
+        return live
+    site["http_error"] = live.get("error")
+    site["driver"] = site.get("driver") or "playwright"
+    if site.get("ok"):
+        site["akamai_retry"] = "playwright"
+        return site
+    site["error_code"] = site.get("error_code") or "akamai_blocked"
+    if email:
+        site["logged_in"] = True
+    site["error"] = (
+        "Carrefour HTTP API is Akamai-blocked from this server. "
+        "The saved store login is still present. "
+        + (site.get("error") or live.get("error") or "Official cart was not changed.")
+    )
+    return site
 
 
 def _official_cart_sync(
