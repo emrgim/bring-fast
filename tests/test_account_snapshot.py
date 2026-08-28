@@ -111,6 +111,29 @@ def test_carrefour_offers_cart_but_not_checkout(bf):
     assert "carrefour_checkout" not in carrefour["tools"]
 
 
+def test_carrefour_is_not_described_as_search_only(bf):
+    """Stale Grok caches used to quote bf_cart as Carrefour search-only. Do not regress."""
+    user = bf.db.create_user("noso@example.com", "secret1")
+    tools = {t["name"]: t["description"].lower() for t in bf.tools_catalog()}
+    bf_cart = tools["bf_cart"]
+    assert "carrefour" in bf_cart
+    assert "waitrose and spinneys are search-only" in bf_cart
+    assert "carrefour, waitrose and spinneys are search-only" not in bf_cart
+    assert "bf_cart retailer=carrefour" in bf_cart
+    search = tools["carrefour_search"]
+    assert "search only" not in search
+    assert "carrefour_cart" in search
+    cart = tools["carrefour_cart"]
+    assert "official" in cart
+    assert "list" in cart
+    snap = json.loads(bf._call_tool(user, "bf_whoami", {}))
+    assert "not search-only" in snap["note"].lower()
+    carrefour = next(s for s in snap["stores"] if s["store_id"] == "carrefour")
+    assert "cart" in carrefour["capabilities"]
+    assert "carrefour_cart" in carrefour["tools"]
+    assert "carrefour_checkout" not in carrefour["tools"]
+
+
 def test_waitrose_is_still_search_only(bf):
     user = bf.db.create_user("h2@example.com", "secret1")
     names = {t["name"] for t in bf.tools_catalog()}

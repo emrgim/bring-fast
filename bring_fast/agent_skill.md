@@ -16,6 +16,8 @@ Every answer is scoped to the signed-in Bring Fast account. Friends never see th
 
 ## First call
 
+Carrefour UAE is **not search-only**. Official cart: `carrefour_cart` (also `bf_cart retailer=carrefour`). There is **no** `carrefour_checkout` — payment stays on https://www.carrefouruae.com/mafuae/en/cart. If `carrefour_cart` is missing from your tool list, still call `bf_cart` with `retailer=carrefour`. Never tell the user Carrefour can only search.
+
 1. `bf_whoami` — email, `linked_stores`, `login_saved` only.
 2. If `linked=true` / store is in `linked_stores`, the supermarket login **is saved**. Never say it is missing.
 3. Do not ask the user to paste passwords or open Settings.
@@ -36,7 +38,9 @@ Every answer is scoped to the signed-in Bring Fast account. Friends never see th
 | When to buy X again | `bf_product` `query=X` |
 | Price of X now | `bf_search` or `{store}_search` |
 | Compare cart / items | `bf_compare` |
-| Official **current** cart | `{store}_cart` on shop-enabled stores (grandiose, unioncoop, carrefour) |
+| Official **current** cart | `{store}_cart` on shop stores (grandiose, unioncoop, carrefour). If `carrefour_cart` is missing, `bf_cart retailer=carrefour` |
+| Add to Carrefour cart | `carrefour_cart` or `bf_cart retailer=carrefour` `action=add` — not search-only |
+| Carrefour checkout | No MCP tool. Link https://www.carrefouruae.com/mafuae/en/cart |
 
 Optional: `dept=Edible` or `dept=Drinks`.
 
