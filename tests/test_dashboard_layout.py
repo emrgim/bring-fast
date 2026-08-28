@@ -214,6 +214,19 @@ def test_theme_toggle_cycles_light_dark_auto(client):
     assert 'return "auto"' in html
 
 
+def test_theme_toggle_inverts_and_splits_on_auto(client):
+    html = client.get("/login").text
+
+    # Light and Dark fill against the page; a ghost outline would vanish.
+    assert "background:var(--fill); color:var(--on-fill); border-color:var(--fill);" in html
+    assert html.count('class="theme-toggle"') == 1
+    assert 'class="ghost theme-toggle"' not in html
+    # Auto is both palettes, split at 45 degrees, letters inverted on each half.
+    assert ':root[data-theme-pref="auto"] .theme-toggle' in html
+    assert "linear-gradient(45deg, #000 50%, #fff 50%)" in html
+    assert "mix-blend-mode:difference;" in html
+
+
 def test_mobile_header_pads_the_safe_area_only_at_the_top(bf, client):
     html = client.get("/login").text
 

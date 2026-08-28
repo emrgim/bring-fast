@@ -274,7 +274,23 @@
     .user { color:var(--muted); font-size:13px; }
     .user a { color:var(--ink); }
     .nav-right { display:flex; align-items:center; gap:12px; flex-wrap:wrap; justify-content:flex-end; }
-    .nav-right .theme-toggle { padding:7px 10px; font-size:12px; width:auto; min-width:5.2em; min-height:36px; text-align:center; }
+    /* The theme chip is inverted against the page, so Light is a dark tile
+       and Dark is a light one. A ghost outline disappears into the header. */
+    .nav-right .theme-toggle {
+      padding:7px 10px; font-size:12px; width:auto; min-width:5.2em; min-height:36px; text-align:center;
+      background:var(--fill); color:var(--on-fill); border-color:var(--fill);
+      position:relative; isolation:isolate;
+    }
+    /* Auto is both palettes at once: a 45-degree split, half white, half
+       black, with the letters inverted so they stay readable on either half. */
+    :root[data-theme-pref="auto"] .theme-toggle {
+      background:#fff; color:#111; border-color:var(--line);
+    }
+    :root[data-theme-pref="auto"] .theme-toggle::after {
+      content:""; position:absolute; inset:0; pointer-events:none;
+      background:linear-gradient(45deg, #000 50%, #fff 50%);
+      mix-blend-mode:difference;
+    }
     .tabs { display:flex; gap:8px; }
     .tabs a {
       color:var(--muted); font-size:12px; font-weight:700; letter-spacing:.08em;
@@ -813,12 +829,12 @@
           <div class="user"><span class="who">{{ user.email }} · </span><a href="/logout">Sign out</a></div>
           <button class="ghost upd-btn" type="button" id="pwa-install">Install</button>
           <button class="ghost upd-btn" type="button" id="upd-nav">Update</button>
-          <button class="ghost theme-toggle" type="button" data-theme-toggle>Auto</button>
+          <button class="theme-toggle" type="button" data-theme-toggle>Auto</button>
         </div>
       {% else %}
         <div class="nav-right">
           <button class="ghost upd-btn" type="button" id="pwa-install">Install</button>
-          <button class="ghost theme-toggle" type="button" data-theme-toggle>Auto</button>
+          <button class="theme-toggle" type="button" data-theme-toggle>Auto</button>
         </div>
       {% endif %}
     </nav>
