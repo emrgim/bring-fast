@@ -311,10 +311,9 @@
   /* Turning the screen changes which shape is being read. */
   window.addEventListener("resize", flush, {passive:true});
   /* A reader already at the end is not waiting on politeness. */
-  window.addEventListener("scroll", function(){
-    var bottom=document.documentElement.scrollHeight-window.scrollY-window.innerHeight;
-    if(bottom<NEAR_END){ rush=true; if(!busy) idle(more); }
-  }, {passive:true});
+  window.__bfScroll.on(function(){
+    if(window.__bfScroll.nearBottom(NEAR_END)){ rush=true; if(!busy) idle(more); }
+  });
   /* Not before the page it belongs to has finished: the board and the first
      batch are what the reader opened the tab for. */
   if(!at) return;
