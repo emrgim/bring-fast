@@ -578,8 +578,23 @@
     .sheet-panel iframe { flex:1; border:0; background:var(--bg); }
     @media (max-width:720px) {
       html { -webkit-text-size-adjust:100%; }
-      body { padding-bottom: calc(72px + env(safe-area-inset-bottom)); }
-      .wrap { padding:10px 12px calc(88px + env(safe-area-inset-bottom)); }
+      /* The window itself must not scroll. A position:fixed dock is laid
+         out against the layout viewport, and iOS then draws it across the
+         middle of the shelf once the visual viewport has moved — a pinch,
+         or just a fling. The shell is a column the height of the screen:
+         wrap scrolls, the dock is simply the last row. min-height:0 lets
+         wrap shrink below its cards so the dock is not pushed off-screen. */
+      html, body {
+        height:100%; height:100svh; height:100dvh; max-height:100dvh;
+        min-height:0; overflow:hidden;
+      }
+      body { display:flex; flex-direction:column; padding-bottom:0; }
+      .wrap {
+        flex:1 1 auto; min-height:0; width:100%;
+        overflow-x:hidden; overflow-y:auto;
+        -webkit-overflow-scrolling:touch; overscroll-behavior:contain;
+        padding:10px 12px 16px;
+      }
       .app-head { margin:0 -12px 8px; }
       nav.topnav {
         margin:0; padding:8px 12px;
@@ -589,8 +604,8 @@
       nav.topnav .tabs { display:none !important; }
       /* The dock carries the tabs on a phone, but signing out has to stay
          reachable: the address is the only thing that goes. Compact-on-scroll
-         must not hide this block either — that is a normal finger scroll, not
-         the installed-app pinch that parks the sticky header off-screen. */
+         must not hide this block either — that is a finger scroll inside
+         wrap, not a document bounce. */
       nav.topnav .user { font-size:11px; flex-shrink:0; }
       nav.topnav .user .who { display:none; }
       nav.topnav .nav-right { gap:10px; flex-shrink:0; }
@@ -697,9 +712,10 @@
          left to clear. */
       .bars-scroller { display:block; }
       .dock {
-        display:flex; position:fixed; left:0; right:0;
-        top:auto !important; bottom:0; height:auto;
-        z-index:200; margin:0 !important;
+        display:flex; position:relative; left:auto; right:auto;
+        top:auto; bottom:auto; height:auto;
+        flex:0 0 auto; width:100%;
+        z-index:20; margin:0;
         padding:6px 8px calc(8px + env(safe-area-inset-bottom));
         padding-left:max(8px, env(safe-area-inset-left));
         padding-right:max(8px, env(safe-area-inset-right));
@@ -741,9 +757,18 @@
          neither. A descendant cannot hand the pinch back, so the sideways row
          scrollers keep working untouched. */
       html, body { overscroll-behavior:none; touch-action:pan-x pan-y; }
+      .wrap { overscroll-behavior:none; }
     }
     /* Home-screen Safari before it learned the display-mode query. */
     :root.installed, :root.installed body { touch-action:pan-x pan-y; overscroll-behavior:none; }
+    :root.installed .wrap { overscroll-behavior:none; }
+    /* Installed still reserved a dock-height of empty space under the cards
+       from when the dock was position:fixed. On a phone the dock is in the
+       column, so that pad is a hole above the tabs; this wins over the
+       standalone rule. */
+    @media (max-width:720px) {
+      .wrap { padding-bottom:16px; }
+    }
     table.data th.sort.asc a:after { content:" ↑"; opacity:1; }
     table.data th.sort.desc a:after { content:" ↓"; opacity:1; }
     table.data td { padding:10px 8px; border-top:1px dashed var(--line); vertical-align:middle; }
@@ -821,6 +846,42 @@
   </style>
 </head>
 <body>
+  <script>
+    /* The phone shell scrolls .wrap. Desk still scrolls the window.
+       Compact-on-scroll, the spend pin and the Buys shelf have to watch
+       the box that actually moved. */
+    window.__bfScroll=(function(){
+      function wrap(){ return document.querySelector(".wrap"); }
+      function isDoc(el){
+        return el===document.scrollingElement || el===document.documentElement || el===document.body;
+      }
+      function box(){
+        var el=wrap();
+        if(!el) return document.scrollingElement||document.documentElement;
+        var oy="";
+        try { oy=getComputedStyle(el).overflowY; } catch(e){}
+        if(oy==="auto" || oy==="scroll") return el;
+        return document.scrollingElement||document.documentElement;
+      }
+      function y(){
+        var el=box();
+        if(isDoc(el)) return window.scrollY||el.scrollTop||0;
+        return el.scrollTop||0;
+      }
+      function on(fn){
+        window.addEventListener("scroll", fn, {passive:true});
+        var el=wrap();
+        if(el) el.addEventListener("scroll", fn, {passive:true});
+      }
+      function nearBottom(px){
+        var el=box();
+        var top=isDoc(el) ? (window.scrollY||el.scrollTop||0) : (el.scrollTop||0);
+        var height=isDoc(el) ? (window.innerHeight||el.clientHeight) : el.clientHeight;
+        return (el.scrollHeight-top-height)<px;
+      }
+      return {box:box, y:y, on:on, nearBottom:nearBottom};
+    })();
+  </script>
   <div class="wrap">
     <header class="app-head">
     <nav class="topnav">
@@ -902,12 +963,12 @@
       function sync(){
         /* Shrink the mark after a short scroll. Do not hide Sign out: that
            stays in .user, and compact only drops the address (.who). */
-        nav.classList.toggle("is-compact", window.scrollY>24);
+        nav.classList.toggle("is-compact", window.__bfScroll.y()>24);
         var box=head||nav;
         document.documentElement.style.setProperty("--sticky-top", box.offsetHeight+"px");
       }
       sync();
-      window.addEventListener("scroll", sync, {passive:true});
+      window.__bfScroll.on(sync);
       window.addEventListener("resize", sync);
     })();
     (function(){
@@ -977,7 +1038,7 @@
         pin.classList.toggle("on", avg.getBoundingClientRect().bottom < top);
       }
       sync();
-      window.addEventListener("scroll", sync, {passive:true});
+      window.__bfScroll.on(sync);
       window.addEventListener("resize", sync);
     })();
     (function(){
