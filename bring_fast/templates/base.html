@@ -747,9 +747,9 @@
          its receipts, so All + Yearly read as a 2025-only view with no bar
          left to clear. */
       .bars-scroller { display:block; }
-      /* Labels sit in a 44px row. Only the home-indicator inset is added
-         below that — not another 14px of padding — so the bar stays short
-         and HOME’s fill still reaches the screen edge. */
+      /* Labels sit in a 44px row. The home-indicator inset is the only
+         extra below — not 14px of padding on every side, and not another
+         44px stacked on the inset. HOME’s fill still reaches the edge. */
       .dock {
         display:flex; position:relative; left:auto; right:auto;
         top:auto; bottom:auto; height:auto;
@@ -766,9 +766,8 @@
         flex:1; display:flex; align-items:center; justify-content:center;
         text-align:center; color:var(--muted); font-size:10px; font-weight:700;
         letter-spacing:.08em; text-transform:uppercase; border-radius:0;
-        text-decoration:none;
-        min-height:calc(44px + env(safe-area-inset-bottom));
-        padding:0 4px env(safe-area-inset-bottom);
+        text-decoration:none; min-height:44px;
+        padding:8px 4px env(safe-area-inset-bottom);
       }
       .dock a.on { color:var(--on-fill); background:var(--fill); }
     }
