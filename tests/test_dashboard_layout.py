@@ -230,12 +230,15 @@ def test_theme_toggle_inverts_and_splits_on_auto(client):
 def test_mobile_header_does_not_double_the_top_safe_area(client):
     html = client.get("/login").text
 
-    # The in-flow mask owns env(safe-area-inset-top). Header padding must
-    # not add it again (that plus iOS shifting sticky left a hole above
-    # BRING FAST where titles showed through the clock).
+    # The in-flow mask owns env(safe-area-inset-top) (and a short --vvt
+    # when the inset is 0). Header padding must not add it again.
     assert "max(8px, env(safe-area-inset-top))" not in html
     assert "max(10px, env(safe-area-inset-top))" not in html
     assert "calc(8px + env(safe-area-inset-top))" not in html
+    phone = html[html.index("@media (max-width:720px)") :]
+    body = phone[phone.index("body {\n        display:flex") : phone.index(".wrap {")]
+    assert "top:0" in body
+    assert "top:var(--vvt" not in body
 
 
 def test_the_top_safe_area_is_an_in_flow_mask(bf, client):
@@ -260,12 +263,12 @@ def test_the_top_safe_area_is_an_in_flow_mask(bf, client):
     mask = mask[: mask.index("}")]
     assert "position:fixed" not in mask
     assert "flex:0 0 auto" in mask
-    assert "height:env(safe-area-inset-top, 0px)" in mask
-    assert "flex-basis:env(safe-area-inset-top, 0px)" in mask
+    assert "height:max(env(safe-area-inset-top, 0px), var(--vvt, 0px))" in mask
+    assert "flex-basis:max(env(safe-area-inset-top, 0px), var(--vvt, 0px))" in mask
     assert "pointer-events:none" in mask
     assert "background:var(--bg)" in mask
     phone = html[html.index("@media (max-width:720px)") :]
-    assert ".safe-mask-top { flex:0 0 env(safe-area-inset-top, 0px); }" in phone
+    assert ".safe-mask-top { flex:0 0 max(env(safe-area-inset-top, 0px), var(--vvt, 0px)); }" in phone
     assert "padding-top: max(8px, env(safe-area-inset-top))" not in phone
     head = html[html.index('<header class="app-head">') : html.index("</header>")]
     assert '<a href="/logout">Sign out</a>' in head

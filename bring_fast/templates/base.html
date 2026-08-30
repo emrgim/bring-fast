@@ -88,10 +88,12 @@
   </script>
   <script>
     /* iOS sizes 100dvh against the layout viewport. The visual viewport is
-       often shorter (home bar, Safari chrome) or shifted (offsetTop), so a
-       100dvh column leaves a white band under HOME / BUYS / STORES and can
-       shove YOUR SPEND under the island. Lock the phone shell to the visual
-       viewport; skip while pinched so a browser-tab zoom does not reflow. */
+       often shorter (home bar, Safari chrome). Lock the phone column to that
+       height so HOME / BUYS / STORES sit on the pixels the reader can see.
+       offsetTop is not a hole to leave above the app: on iPhone it is the
+       translucent status bar / Dynamic Island, still on screen. Pin the
+       shell at y=0 so the header paints behind it; skip while pinched so a
+       browser-tab zoom does not reflow. */
     window.__bfShell=(function(){
       function fit(){
         var vv=window.visualViewport;
@@ -100,8 +102,13 @@
         var t=vv?vv.offsetTop:0;
         if(!h) return;
         var r=document.documentElement;
-        r.style.setProperty("--vvh", h+"px");
-        r.style.setProperty("--vvt", t+"px");
+        /* Cover from the top of the webview to the visual bottom. Adding
+           offsetTop keeps the dock flush when iOS reports the island as a
+           shift; never use that shift as body.top. A short offset is the
+           overlay itself and becomes the mask height so the mark sits below
+           the island even when safe-area-inset-top is 0. */
+        r.style.setProperty("--vvh", (h+t)+"px");
+        r.style.setProperty("--vvt", (t>0 && t<80 ? t : 0)+"px");
       }
       fit();
       requestAnimationFrame(fit);
@@ -151,7 +158,7 @@
        drag, wheel, trackpad or key. */
     * { box-sizing:border-box; scrollbar-width:none; -ms-overflow-style:none; }
     *::-webkit-scrollbar { display:none; }
-    html, body { margin:0; min-height:100%; }
+    html, body { margin:0; min-height:100%; background:var(--bg); }
     html {
       -webkit-text-size-adjust:100%; text-size-adjust:100%;
       -webkit-tap-highlight-color:transparent;
@@ -185,14 +192,15 @@
        start at y=0 (viewport-fit=cover), so a scrolled title (Special
        Edition 24 x) painted through the clock. A position:fixed overlay
        cannot cover that on this shell: body is a transform containing
-       block (--vvt / spend-pin), and iOS samples the document pixels
-       under the bar, not the overlay. This row takes the inset in the
-       column, so wrap never occupies those pixels. Header padding must
-       not add the same inset again. */
+       block (spend-pin), and iOS samples the document pixels under the
+       bar, not the overlay. This row takes the inset in the column, so
+       wrap never occupies those pixels. Header padding must not add the
+       same inset again. When the inset is 0 but iOS still reports a
+       short visualViewport.offsetTop (--vvt), use the larger of the two. */
     .safe-mask-top {
       flex:0 0 auto;
-      flex-basis:env(safe-area-inset-top, 0px);
-      height:env(safe-area-inset-top, 0px);
+      flex-basis:max(env(safe-area-inset-top, 0px), var(--vvt, 0px));
+      height:max(env(safe-area-inset-top, 0px), var(--vvt, 0px));
       width:100%;
       margin:0; padding:0;
       background:var(--bg);
@@ -628,18 +636,22 @@
       /* The window itself must not scroll. A position:fixed dock is laid
          out against the layout viewport, and iOS then draws it across the
          middle of the shelf once the visual viewport has moved — a pinch,
-         or just a fling. The shell is a column the height of the *visual*
-         viewport (--vvh / --vvt from __bfShell): wrap scrolls, the dock is
-         the last row, glued to the pixels the reader can see. min-height:0
-         lets wrap shrink below its cards so the dock is not pushed off-screen. */
+         or just a fling. The shell is a column from y=0 to the visual
+         bottom (--vvh from __bfShell): wrap scrolls, the dock is the last
+         row, glued to the pixels the reader can see. min-height:0 lets wrap
+         shrink below its cards so the dock is not pushed off-screen.
+         Shifting the body by the visual-viewport offset left a see-through
+         strip above the header: iOS reports the island as offsetTop, and
+         that strip is still on screen. */
       html, body {
         height:100%; height:100svh; height:100dvh; height:var(--vvh, 100dvh);
         min-height:0; min-height:var(--vvh, 100dvh);
         overflow:hidden;
+        background:var(--bg);
       }
       body {
         display:flex; flex-direction:column; padding-bottom:0;
-        position:fixed; top:var(--vvt, 0px); left:0; right:0; width:100%;
+        position:fixed; top:0; left:0; right:0; width:100%;
         /* Containing block for spend-pin / veil, so they follow the visual
            shell instead of the layout viewport. */
         transform:translateY(0);
@@ -653,7 +665,7 @@
         padding:0 12px 16px;
       }
       .app-head { margin:0 -12px 8px; }
-      .safe-mask-top { flex:0 0 env(safe-area-inset-top, 0px); }
+      .safe-mask-top { flex:0 0 max(env(safe-area-inset-top, 0px), var(--vvt, 0px)); }
       nav.topnav {
         margin:0; padding:8px 12px;
       }
