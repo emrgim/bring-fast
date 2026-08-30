@@ -232,3 +232,29 @@ def test_mobile_header_pads_the_safe_area_only_at_the_top(bf, client):
 
     assert "max(8px, env(safe-area-inset-top))" in html
     assert "calc(8px + env(safe-area-inset-top))" not in html
+
+
+def test_the_top_safe_area_is_an_opaque_mask(bf, client):
+    """Product titles must not show through the iPhone status bar.
+
+    viewport-fit=cover lets wrap paint at y=0. iOS also sometimes shifts
+    a sticky header down by the inset, leaving a hole above BRING FAST
+    where a scrolled card (Special Edition 24 x) would show. The mask
+    is a fixed strip of --bg over that inset.
+    """
+    _seed(bf, "safetop@example.com")
+    client.post("/login", data={"email": "safetop@example.com", "password": "secret1", "intent": "signin"})
+    html = client.get("/dashboard").text
+    assert 'class="safe-mask-top"' in html
+    assert html.index('class="safe-mask-top"') < html.index('class="wrap"')
+    mask = html[html.index(".safe-mask-top {") :]
+    mask = mask[: mask.index("}")]
+    assert "position:fixed" in mask
+    assert "height:env(safe-area-inset-top, 0px)" in mask
+    assert "pointer-events:none" in mask
+    assert "z-index:80" in mask
+    assert "background:var(--bg)" in mask
+    # Header still clears the island; Sign out stays in the title row.
+    assert "max(8px, env(safe-area-inset-top))" in html
+    head = html[html.index('<header class="app-head">') : html.index("</header>")]
+    assert '<a href="/logout">Sign out</a>' in head

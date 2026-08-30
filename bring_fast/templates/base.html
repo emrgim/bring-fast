@@ -151,7 +151,7 @@
        drag, wheel, trackpad or key. */
     * { box-sizing:border-box; scrollbar-width:none; -ms-overflow-style:none; }
     *::-webkit-scrollbar { display:none; }
-    html, body { margin:0; min-height:100%; }
+    html, body { margin:0; min-height:100%; background:var(--bg); }
     html {
       -webkit-text-size-adjust:100%; text-size-adjust:100%;
       -webkit-tap-highlight-color:transparent;
@@ -180,6 +180,16 @@
       position:sticky; top:0; z-index:40;
       margin:0 -14px 18px;
       background:var(--bg);
+    }
+    /* Opaque lid over the status bar / Dynamic Island. iOS lets wrap
+       content paint at y=0 (viewport-fit=cover) and may also shift
+       position:sticky down by the inset, so product titles would show
+       through the clock. This strip is the mask; it does not take taps. */
+    .safe-mask-top {
+      position:fixed; top:0; left:0; right:0; z-index:80;
+      height:env(safe-area-inset-top, 0px);
+      background:var(--bg);
+      pointer-events:none;
     }
     nav {
       display:flex; justify-content:space-between; align-items:center;
@@ -923,6 +933,7 @@
       return {box:box, y:y, on:on, nearBottom:nearBottom};
     })();
   </script>
+  <div class="safe-mask-top" aria-hidden="true"></div>
   <div class="wrap">
     <header class="app-head">
     <nav class="topnav">
