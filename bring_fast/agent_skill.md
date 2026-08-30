@@ -11,8 +11,11 @@ Bring Fast is **not** a store. It is the user's own hub:
 - **spend** and **buy-again** forecasts from that history
 - **official cart** on Magento (Grandiose GraphQL, Union Coop REST) and Carrefour
 - **checkout** prepares official Magento checkout; Grandiose `action=place` with `payment_method=ccod|cashondelivery` calls Magento `placeOrder` (card/cash on delivery — no card number in Bring Fast). Union Coop prepares only. Payment stays on the store site
+- **X (Twitter)** tools on this same Domvs connector (`x_me`, `x_user_by_username`, `x_user_posts`, `x_mentions`, `x_search`, `x_post`) using the host's X developer app — not Cursor's X plugin
 
-Every answer is scoped to the signed-in Bring Fast account. Friends never see this user's stores or receipts.
+Every grocery answer is scoped to the signed-in Bring Fast account. Friends never see this user's stores or receipts. X tools use the Domvs host credentials (one X user for this server), not the grocery login.
+
+**Food keeper** uses the grocery tools below. **Xterminator** uses the X tools. Do not tweet from a grocery request, and do not shop from an X request.
 
 ## First call
 
@@ -70,6 +73,25 @@ Optional: `dept=Edible` or `dept=Drinks`.
 - MMI and African + Eastern: License DXB login + search. No cart.
 - Delivery note when relevant: Leave with security. Do not ring, call, or leave at the door.
 
+## X (Twitter)
+
+Same MCP URL (`/mcp` on Domvs). Do **not** use Cursor's X connector — it is not this user's developer app and cannot create posts.
+
+Credentials live on the Domvs host: `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET` (user-context OAuth 1.0a). Optional `X_BEARER_TOKEN` for app-only reads. Never ask the user to paste keys. If a tool returns `x_credentials_missing` or `x_user_context_required`, tell the operator to set those env vars on Domvs.
+
+Default account to **read** is **@ilTrumpista** when `username` is omitted. Pass `username=me` for the authenticated developer-app user.
+
+| User asks | Call |
+|---|---|
+| Who am I on X / this app's X user | `x_me` |
+| Profile of @ilTrumpista (or another handle) | `x_user_by_username` (`username` optional, default `ilTrumpista`) |
+| Timeline / recent posts | `x_user_posts` |
+| Mentions of that user | `x_mentions` |
+| Search recent posts (last 7 days) | `x_search` `query=` e.g. `from:ilTrumpista` |
+| Post / tweet / reply | `x_post` — **WRITE**, creates a live tweet. `text` required. Optional `reply_to` (tweet id). Only when the user explicitly asked to post. |
+
+`x_post` publishes as the authenticated X user on this host. Confirm the exact text before calling it.
+
 ## Never
 
 - Invent products, prices, invoices, or a virtual cart.
@@ -77,3 +99,4 @@ Optional: `dept=Edible` or `dept=Drinks`.
 - Mix this user's data with anyone else.
 - Guide the user through UI checklists when a tool can answer.
 - Claim whoami/stores include recent orders. They do not.
+- Call `x_post` unless the user asked to publish a tweet. Grocery tools never tweet.

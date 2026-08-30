@@ -1,6 +1,6 @@
 [project]
 name = "bring-fast"
-version = "1.10.18"
+version = "1.10.19"
 description = "Bring Fast — multi-user grocery MCP + dashboard"
 readme = "README.md"
 license = "MIT"
@@ -45,7 +45,7 @@ build-backend = "setuptools.build_meta"
 include = ["bring_fast*"]
 
 [tool.setuptools.package-data]
-bring_fast = ["templates/*", "static/**/*", "data/*"]
+bring_fast = ["templates/*", "static/**/*", "data/*", "agent_skill.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

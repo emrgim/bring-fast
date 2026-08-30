@@ -1,3 +1,4 @@
 include README.md LICENSE
+include bring_fast/agent_skill.md
 recursive-include bring_fast/templates *
 recursive-include bring_fast/static *

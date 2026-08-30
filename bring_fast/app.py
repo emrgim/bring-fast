@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import __version__, catalog, checkout, compare, db, forecast, mcp_skill, purchases, update
+from . import __version__, catalog, checkout, compare, db, forecast, mcp_skill, purchases, update, x
 from .stores.cart_match import peel_remove_name
 
 HOST = os.environ.get("BRINGFAST_HOST", "127.0.0.1")
@@ -1535,7 +1535,7 @@ def _store_tools() -> list[dict[str, Any]]:
 
 
 def tools_catalog() -> list[dict[str, Any]]:
-    return _store_tools()
+    return _store_tools() + x.tools()
 
 
 def _ok(**kw):
@@ -2176,6 +2176,17 @@ def _normalize_tool(name: str, args: dict[str, Any]) -> tuple[str, dict[str, Any
         "checkout": "bf_checkout",
         "status": "bf_status",
         "bf_retailers": "bf_stores",
+        "tweet": "x_post",
+        "twitter_post": "x_post",
+        "create_tweet": "x_post",
+        "post_tweet": "x_post",
+        "twitter_me": "x_me",
+        "twitter_user": "x_user_by_username",
+        "twitter_profile": "x_user_by_username",
+        "twitter_posts": "x_user_posts",
+        "twitter_timeline": "x_user_posts",
+        "twitter_mentions": "x_mentions",
+        "twitter_search": "x_search",
     }
     n = aliases.get(n, n)
     ids = [r["id"] for r in db.RETAILERS]
@@ -2253,6 +2264,8 @@ def _compare(user: dict[str, Any], args: dict[str, Any]) -> str:
 def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
     uid = user["id"]
     name, args = _normalize_tool(name, args or {})
+    if name in x.TOOL_NAMES:
+        return x.call_tool(name, args)
     if name == "bf_whoami":
         return _ok(**_account_snapshot(user))
     if name == "bf_search":
