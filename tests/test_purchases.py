@@ -47,7 +47,7 @@ def test_purchases_tab_lists_parsed_invoice(bf, client):
     assert 'aria-label="More likely to buy"' in detail.text
 
 
-def test_likely_thumbs_change_the_score_and_toggle_off(bf, client):
+def test_likely_thumbs_stack_instead_of_toggling(bf, client):
     user = bf.db.create_user("vote@example.com", "secret1")
     bf.purchases.upsert_invoice(
         user["id"],
@@ -71,13 +71,19 @@ def test_likely_thumbs_change_the_score_and_toggle_off(bf, client):
     key = "ean:b1"
     first = client.get("/purchases")
     assert ">0<" in first.text or "Likely" in first.text
-    # Warm the shelf memo, then a vote must drop it so the new score shows.
     bf.purchases.product_shelf(user["id"])
-    up = client.post(f"/purchases/{key}/vote", data={"vote": "up", "next": "/purchases"}, follow_redirects=True)
+    headers = {"Accept": "application/json", "X-Requested-With": "fetch"}
+    up = client.post(f"/purchases/{key}/vote", data={"vote": "up", "next": "/purchases"}, headers=headers)
     assert up.status_code == 200
-    assert bf.forecast.load_votes(user["id"]).get(key) == "up"
-    assert 'aria-pressed="true"' in up.text
-    assert "55" in up.text
+    assert up.headers["content-type"].startswith("application/json")
+    body = up.json()
+    assert body["push"] == 1
+    assert body["vote"] == "up"
+    assert body["likely"] == 55
+    assert bf.forecast.load_votes(user["id"]).get(key) == 1
+    page = client.get("/purchases")
+    assert 'aria-pressed="true"' in page.text
+    assert "55" in page.text
     home = client.get("/dashboard")
     assert 'aria-label="More likely to buy"' in home.text
     assert "55" in home.text
@@ -87,15 +93,71 @@ def test_likely_thumbs_change_the_score_and_toggle_off(bf, client):
     assert 'aria-pressed="true"' in detail.text
     assert 'class="likely-line"' in detail.text
     assert "<div class=\"lead\">" in detail.text
-    again = client.post(f"/purchases/{key}/vote", data={"vote": "up", "next": "/purchases"}, follow_redirects=True)
-    assert bf.forecast.load_votes(user["id"]).get(key, "") == ""
+    again = client.post(f"/purchases/{key}/vote", data={"vote": "up", "next": "/purchases"}, headers=headers)
+    assert again.status_code == 200
+    assert again.json()["push"] == 2
+    assert again.json()["likely"] > body["likely"]
+    assert bf.forecast.load_votes(user["id"]).get(key) == 2
+    third = client.post(f"/purchases/{key}/vote", data={"vote": "up", "next": "/purchases"}, headers=headers)
+    assert third.json()["push"] == 3
+    assert third.json()["likely"] > again.json()["likely"]
     down = client.post(
         f"/purchases/{key}/vote",
         data={"vote": "down", "next": "/purchases"},
-        follow_redirects=True,
+        headers=headers,
     )
-    assert bf.forecast.load_votes(user["id"]).get(key) == "down"
-    assert 'aria-pressed="true"' in down.text
+    assert down.status_code == 200
+    assert down.json()["push"] == 2
+    assert down.json()["likely"] < third.json()["likely"]
+    assert bf.forecast.load_votes(user["id"]).get(key) == 2
+
+
+def test_vote_endpoint_returns_json_without_navigation(bf, client):
+    user = bf.db.create_user("xhrvote@example.com", "secret1")
+    bf.purchases.upsert_invoice(
+        user["id"],
+        {
+            "retailer": "carrefour",
+            "store_name": "Carrefour",
+            "invoice_no": "v2",
+            "invoice_date": "2026-08-23",
+            "items": [
+                {
+                    "name": "White Bread",
+                    "qty": 1,
+                    "unit_price": 4,
+                    "line_total": 4,
+                    "barcode": "b1",
+                }
+            ],
+        },
+    )
+    client.post("/login", data={"email": "xhrvote@example.com", "password": "secret1", "intent": "signin"})
+    key = "ean:b1"
+    r = client.post(
+        f"/purchases/{key}/vote",
+        data={"vote": "up", "next": "/purchases"},
+        headers={"Accept": "application/json", "X-Requested-With": "fetch"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 200
+    assert r.status_code != 303
+    assert "location" not in {k.lower() for k in r.headers}
+    assert r.headers["content-type"].startswith("application/json")
+    assert "<html" not in r.text.lower()
+    assert r.json()["key"] == key
+    assert r.json()["push"] == 1
+    html = client.get("/purchases").text
+    assert "var BURST_MS=5000" in html
+    assert 'class="likely-burst"' in html
+    assert 'animation:likely-burst-fill 5s linear forwards' in html
+    burst = html[html.index('class="likely-votes"') : html.index("</form>", html.index('class="likely-votes"'))]
+    assert burst.index('value="up"') < burst.index("likely-burst") < burst.index('value="down"')
+    assert "e.preventDefault()" in html
+    assert 'Accept":"application/json"' in html
+    assert "if(!key || bursts[key]) return" in html
+    assert "commit(key)" in html
+    assert "box.scrollTop+=delta" in html
 
 
 def test_official_title_does_not_replace_receipt_name(bf, client):

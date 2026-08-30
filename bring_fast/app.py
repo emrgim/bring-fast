@@ -1104,22 +1104,45 @@ def _local_next(raw: str, fallback: str) -> str:
     return dest
 
 
+def _wants_json(request: Request) -> bool:
+    accept = (request.headers.get("accept") or "").lower()
+    xhr = (request.headers.get("x-requested-with") or "").lower()
+    if xhr in ("xmlhttprequest", "fetch"):
+        return True
+    return "application/json" in accept and "text/html" not in accept.split(",")[0]
+
+
 @app.post("/purchases/{key:path}/vote")
 def vote_likely(request: Request, key: str, vote: str = Form(""), next: str = Form("")):
     user = current_user(request)
+    wants = _wants_json(request)
     if not user:
+        if wants:
+            return JSONResponse({"error": "auth"}, status_code=401)
         return RedirectResponse("/login?mode=signin&next=/purchases", status_code=303)
     key = purchases.canonical_key(key)
     dest = _local_next(next or request.headers.get("referer") or "", f"/purchases/{key}")
     product = purchases.product_purchases(user["id"], key)
     if not product:
+        if wants:
+            return JSONResponse({"error": "not found"}, status_code=404)
         return RedirectResponse("/purchases", status_code=303)
     wanted = (vote or "").strip().lower()
     if wanted not in ("up", "down"):
+        if wants:
+            return JSONResponse({"error": "vote"}, status_code=400)
         return RedirectResponse(dest, status_code=303)
-    current = forecast.load_votes(user["id"]).get(key, "")
-    forecast.set_vote(user["id"], key, "" if current == wanted else wanted)
+    push = forecast.set_vote(user["id"], key, wanted)
     purchases.forget_shelf()
+    product = purchases.product_purchases(user["id"], key) or product
+    payload = {
+        "key": key,
+        "likely": int(product.get("likely") or 0),
+        "push": int(push),
+        "vote": forecast.vote_label(push),
+    }
+    if wants:
+        return JSONResponse(payload)
     return RedirectResponse(dest, status_code=303)
 
 
@@ -1338,9 +1361,10 @@ def _store_tools() -> list[dict[str, Any]]:
             "description": (
                 "Weekly-style shopping list from invoice history (mean cadence, as before). "
                 "Each item has likely 0-100: how much more probable it is a real buy-again "
-                "(EWMA + regularity, then this user's thumbs up/down on Likely). "
-                "Thumbs up raises likely and can put a weak staple on the list; thumbs down "
-                "drops it. 500ml single water stays on the list with likely=0 unless thumbed. "
+                "(EWMA + regularity, then this user's stacked thumbs on Likely). "
+                "Each thumbs-up raises likely and can put a weak staple on the list; each "
+                "thumbs-down lowers it. Repeated taps accumulate. "
+                "500ml single water stays on the list with likely=0 unless thumbed. "
                 "horizon_days=0 today, 1 tomorrow, 7 week. exclude=comma keys or names."
             ),
             "inputSchema": {

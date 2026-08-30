@@ -100,44 +100,99 @@ def set_exclusion(user_id: int, product_key: str, *, on: bool = True) -> None:
     con.close()
 
 
-def load_votes(user_id: int) -> dict[str, str]:
+VOTE_FIRST_UP = 40
+VOTE_STACK = 12
+VOTE_FLOOR = 55
+VOTE_DOWN = 0.2
+VOTE_PUSH_MAX = 50
+
+
+def parse_push(raw: Any) -> int:
+    """A signed stack of thumbs. Legacy 'up'/'down' rows count as ±1."""
+    if raw is None or isinstance(raw, bool):
+        return 0
+    if isinstance(raw, int):
+        n = int(raw)
+    else:
+        bit = str(raw).strip().lower()
+        if not bit or bit == "0":
+            return 0
+        if bit in ("up", "+"):
+            return 1
+        if bit in ("down", "-"):
+            return -1
+        try:
+            n = int(bit)
+        except ValueError:
+            return 0
+    return max(-VOTE_PUSH_MAX, min(VOTE_PUSH_MAX, n))
+
+
+def vote_label(push: int) -> str:
+    if push > 0:
+        return "up"
+    if push < 0:
+        return "down"
+    return ""
+
+
+def load_votes(user_id: int) -> dict[str, int]:
     con = db.connect()
     rows = con.execute("SELECT product_key, vote FROM forecast_votes WHERE user_id=?", (user_id,)).fetchall()
     con.close()
-    return {r["product_key"]: r["vote"] for r in rows if r["vote"] in ("up", "down")}
+    out: dict[str, int] = {}
+    for r in rows:
+        n = parse_push(r["vote"])
+        if n:
+            out[r["product_key"]] = n
+    return out
 
 
-def set_vote(user_id: int, product_key: str, vote: str = "") -> str:
-    vote = (vote or "").strip().lower()
-    if vote not in ("up", "down"):
-        vote = ""
+def set_vote(user_id: int, product_key: str, vote: str | int = "") -> int:
+    """Accumulate a thumbs push. 'up'/'down' add ±1; an int sets the value; '' clears."""
     con = db.connect()
-    if vote:
+    row = con.execute(
+        "SELECT vote FROM forecast_votes WHERE user_id=? AND product_key=?",
+        (user_id, product_key),
+    ).fetchone()
+    current = parse_push(row["vote"] if row else 0)
+    if vote is None or (isinstance(vote, str) and not str(vote).strip()):
+        push = 0
+    elif isinstance(vote, str) and vote.strip().lower() in ("up", "+"):
+        push = current + 1
+    elif isinstance(vote, str) and vote.strip().lower() in ("down", "-"):
+        push = current - 1
+    else:
+        push = parse_push(vote)
+    push = max(-VOTE_PUSH_MAX, min(VOTE_PUSH_MAX, push))
+    if push:
         con.execute(
             "INSERT OR REPLACE INTO forecast_votes(user_id, product_key, vote, updated_at) VALUES (?,?,?,?)",
-            (user_id, product_key, vote, date.today().isoformat()),
+            (user_id, product_key, str(push), date.today().isoformat()),
         )
     else:
         con.execute("DELETE FROM forecast_votes WHERE user_id=? AND product_key=?", (user_id, product_key))
     con.commit()
     con.close()
-    return vote
+    return push
 
 
-def apply_vote(row: dict[str, Any], vote: str = "") -> dict[str, Any]:
-    """Shift a computed likely score after the user thumbs a product."""
-    vote = (vote or "").strip().lower()
-    if vote not in ("up", "down"):
-        vote = ""
-    row["vote"] = vote
-    row["likely_vote"] = vote
+def apply_vote(row: dict[str, Any], vote: str | int = "") -> dict[str, Any]:
+    """Shift a computed likely score by the stacked thumbs push."""
+    push = parse_push(vote)
+    row["push"] = push
+    row["likely_push"] = push
+    row["vote"] = vote_label(push)
+    row["likely_vote"] = row["vote"]
     score = int(row.get("score") or 0)
-    if vote == "up":
-        row["score"] = min(100, max(score + 40, 55))
+    if push > 0:
+        bumped = score + VOTE_FIRST_UP + VOTE_STACK * (push - 1)
+        floor = VOTE_FLOOR + VOTE_STACK * (push - 1)
+        row["score"] = min(100, max(bumped, floor))
         if row.get("reason") != "noise":
             row["include"] = True
-    elif vote == "down":
-        row["score"] = int(round(score * 0.2))
+    elif push < 0:
+        row["score"] = int(round(score * (VOTE_DOWN ** (-push))))
         row["include"] = False
     return row
 
@@ -260,7 +315,7 @@ def classify(
     lapsed_factor: float,
     max_last_age_days: int,
     excluded: bool,
-    vote: str = "",
+    vote: str | int = "",
 ) -> dict[str, Any]:
     official = rec.get("official_name") or ""
     receipt = rec.get("receipt_name") or ""
@@ -385,7 +440,7 @@ def forecast(
     for rec in hist.values():
         name = (rec.get("official_name") or rec.get("receipt_name") or "")
         excluded = rec["key"] in blocked or rec["key"].lower() in extra or name.lower() in extra
-        row = classify(rec, today=today, excluded=excluded, vote=votes.get(rec["key"], ""), **{k: cfg[k] for k in (
+        row = classify(rec, today=today, excluded=excluded, vote=votes.get(rec["key"], 0), **{k: cfg[k] for k in (
             "min_buys", "max_interval_days", "max_cv", "ewma_alpha", "lapsed_factor", "max_last_age_days"
         )})
         if want_dept and row.get("dept") != want_dept:
@@ -393,7 +448,11 @@ def forecast(
         if not include_excluded and not row["include"]:
             continue
         out.append(row)
-    out.sort(key=lambda p: (-int(p.get("score") or 0), int(p.get("due_in_days") if p.get("due_in_days") is not None else 10**6)))
+    out.sort(key=lambda p: (
+        -int(p.get("score") or 0),
+        -int(p.get("likely_push") or p.get("push") or 0),
+        int(p.get("due_in_days") if p.get("due_in_days") is not None else 10**6),
+    ))
     horizon = max(0, int(horizon_days))
     for p in out:
         p["in_horizon"] = p.get("due_in_days") is not None and p["due_in_days"] <= horizon

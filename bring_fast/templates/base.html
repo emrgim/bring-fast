@@ -289,6 +289,17 @@
     }
     .likely-votes button.on { background:var(--fill); color:var(--on-fill); border-color:var(--fill); }
     .likely-votes button svg { display:block; }
+    .likely-burst {
+      display:inline-block; width:18px; height:3px; flex:0 0 18px;
+      background:var(--line); overflow:hidden; position:relative;
+      vertical-align:middle;
+    }
+    .likely-burst i { display:block; width:0; height:100%; background:var(--ink); }
+    .likely-burst.armed i { animation:likely-burst-fill 5s linear forwards; }
+    @keyframes likely-burst-fill { from { width:0; } to { width:100%; } }
+    @media (prefers-reduced-motion: reduce) {
+      .likely-burst.armed i { animation:none; width:100%; }
+    }
     td.likely-cell { white-space:nowrap; }
     td.likely-cell .likely-votes { margin-left:6px; }
     .ok { color:var(--ink); font-size:12px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; }
@@ -765,6 +776,7 @@
       }
       .mcard .amt small { display:block; font-weight:600; color:var(--muted); font-size:11px; }
       .likely-votes button { min-height:28px; width:auto; }
+      .likely-votes .likely-burst { width:18px; min-width:18px; height:3px; min-height:3px; }
       .msort { margin:0 0 10px; padding:0 0 4px; }
       .prod-head { flex-direction:column; }
       .prod-head .hero { width:96px; height:96px; flex-basis:96px; }
@@ -1046,6 +1058,153 @@
       sync();
       window.__bfScroll.on(sync);
       window.addEventListener("resize", sync);
+    })();
+    (function(){
+      /* Likely thumbs are a stacked push, not an on/off vote. Fetch so the
+         page does not reload and jump. The tiny bar between the thumbs is a
+         5s burst: taps accumulate live, the card only moves when it ends. */
+      var BURST_MS=5000;
+      var bursts={};
+      function keyOf(box){ return (box.getAttribute("data-product")||"").trim(); }
+      function units(key){
+        var out=[];
+        if(!key) return out;
+        document.querySelectorAll(".mcard[data-product], tr.rowlink[data-product]").forEach(function(el){
+          if(el.getAttribute("data-product")===key) out.push(el);
+        });
+        return out;
+      }
+      function isItem(el){
+        if(!el || !el.getAttribute) return false;
+        if(!el.getAttribute("data-product")) return false;
+        return el.classList && (el.classList.contains("mcard") || el.classList.contains("rowlink"));
+      }
+      function pin(el){
+        var box=window.__bfScroll?window.__bfScroll.box():(document.scrollingElement||document.documentElement);
+        var before=el.getBoundingClientRect().top;
+        return function(){
+          var after=el.getBoundingClientRect().top;
+          var delta=after-before;
+          if(!delta) return;
+          if(box===document.scrollingElement||box===document.documentElement||box===document.body){
+            window.scrollBy(0, delta);
+          } else {
+            box.scrollTop+=delta;
+          }
+        };
+      }
+      function rank(el){
+        return [+(el.getAttribute("data-likely")||0), +(el.getAttribute("data-push")||0)];
+      }
+      function ahead(a, b){
+        var x=rank(a), y=rank(b);
+        if(x[0]!==y[0]) return x[0]>y[0];
+        return x[1]>y[1];
+      }
+      function reorder(el){
+        var parent=el.parentNode;
+        if(!parent) return;
+        var sibs=[];
+        for(var i=0;i<parent.children.length;i++){
+          if(isItem(parent.children[i])) sibs.push(parent.children[i]);
+        }
+        if(sibs.length<2) return;
+        var restore=pin(el);
+        var others=sibs.filter(function(n){ return n!==el; });
+        var at=-1;
+        for(var j=0;j<others.length;j++){
+          if(ahead(el, others[j])){ at=j; break; }
+        }
+        if(at<0) parent.appendChild(el);
+        else parent.insertBefore(el, others[at]);
+        restore();
+      }
+      function commit(key){
+        units(key).forEach(reorder);
+      }
+      function arm(key){
+        if(!key || bursts[key]) return;
+        document.querySelectorAll("form.likely-votes").forEach(function(form){
+          if(keyOf(form)!==key) return;
+          var bar=form.querySelector(".likely-burst");
+          if(!bar) return;
+          bar.classList.remove("armed");
+          void bar.offsetWidth;
+          bar.classList.add("armed");
+        });
+        bursts[key]=setTimeout(function(){
+          delete bursts[key];
+          document.querySelectorAll("form.likely-votes").forEach(function(form){
+            if(keyOf(form)!==key) return;
+            var bar=form.querySelector(".likely-burst");
+            if(bar) bar.classList.remove("armed");
+          });
+          commit(key);
+        }, BURST_MS);
+      }
+      function paint(box, data){
+        var push=+data.push||0;
+        var likely=+data.likely||0;
+        var key=data.key||keyOf(box);
+        box.setAttribute("data-push", String(push));
+        var up=box.querySelector('button[value="up"]');
+        var down=box.querySelector('button[value="down"]');
+        if(up){
+          up.classList.toggle("on", push>0);
+          up.setAttribute("aria-pressed", push>0?"true":"false");
+        }
+        if(down){
+          down.classList.toggle("on", push<0);
+          down.setAttribute("aria-pressed", push<0?"true":"false");
+        }
+        var n=box.parentNode?box.parentNode.querySelector(".likely-n"):null;
+        if(n) n.textContent=String(likely);
+        units(key).forEach(function(el){
+          el.setAttribute("data-likely", String(likely));
+          el.setAttribute("data-push", String(push));
+          var num=el.querySelector(".likely-n");
+          if(num) num.textContent=String(likely);
+        });
+      }
+      function send(box, wanted){
+        var key=keyOf(box);
+        arm(key);
+        var body=new URLSearchParams();
+        body.set("vote", wanted);
+        var nxt=box.querySelector('input[name="next"]');
+        if(nxt && nxt.value) body.set("next", nxt.value);
+        fetch(box.getAttribute("action")||("/purchases/"+encodeURIComponent(key)+"/vote"), {
+          method:"POST",
+          credentials:"same-origin",
+          headers:{
+            "Accept":"application/json",
+            "Content-Type":"application/x-www-form-urlencoded",
+            "X-Requested-With":"fetch"
+          },
+          body:body.toString()
+        }).then(function(r){
+          if(!r.ok) throw new Error("vote "+r.status);
+          return r.json();
+        }).then(function(data){
+          paint(box, data||{});
+          var k=(data&&data.key)||key;
+          if(!bursts[k]) commit(k);
+        }).catch(function(){});
+      }
+      document.addEventListener("click", function(e){
+        var btn=e.target.closest("form.likely-votes button[name='vote']");
+        if(!btn) return;
+        e.preventDefault();
+        e.stopPropagation();
+        var box=btn.closest("form.likely-votes");
+        if(!box) return;
+        send(box, btn.value||"");
+      }, true);
+      document.addEventListener("submit", function(e){
+        var box=e.target.classList && e.target.classList.contains("likely-votes") ? e.target : null;
+        if(!box) return;
+        e.preventDefault();
+      }, true);
     })();
     (function(){
       var sc=document.querySelector(".bars-scroller");

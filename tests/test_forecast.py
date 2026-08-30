@@ -89,11 +89,13 @@ def test_thumbs_up_raises_a_weak_staple_onto_the_list(bf):
     assert after["include"] is True
     assert after["score"] >= 55
     assert after["vote"] == "up"
+    assert after["likely_push"] == 1
     assert after["reason"] == "occasional_small_pack"
     on_list = [p for p in shopping_list(user["id"], horizon_days=30, today=today) if "pellegrino" in p["name"].lower()]
     assert on_list
     assert on_list[0]["likely"] >= 55
     assert on_list[0]["likely_vote"] == "up"
+    assert on_list[0]["likely_push"] == 1
 
 
 def test_thumbs_down_cuts_score_and_drops_from_shopping_list(bf):
@@ -113,4 +115,71 @@ def test_thumbs_down_cuts_score_and_drops_from_shopping_list(bf):
     assert held["include"] is False
     assert held["score"] == int(round(before["score"] * 0.2))
     assert held["vote"] == "down"
+    assert held["likely_push"] == -1
     assert "White Bread" not in [p["name"] for p in shopping_list(user["id"], horizon_days=7, today=today)]
+
+
+def test_stacked_thumbs_raise_more_than_one_up(bf):
+    """Three ups then a commit ranks a product above a sibling with one up."""
+    user = bf.db.create_user("stack@example.com", "secret1")
+    milk = {"name": "Almarai Full Fat Milk 2L", "qty": 1, "unit_price": 12, "line_total": 12, "barcode": "m1"}
+    bread = {"name": "White Bread", "qty": 1, "unit_price": 4, "line_total": 4, "barcode": "b1"}
+    days = ("2026-07-20", "2026-07-27", "2026-08-03", "2026-08-10", "2026-08-17")
+    for i, day in enumerate(days):
+        _buy(bf, user["id"], f"M{i}", day, [milk])
+        _buy(bf, user["id"], f"B{i}", day, [bread])
+    today = date(2026, 8, 24)
+    rows = {p["name"]: p for p in forecast.forecast(user["id"], today=today)}
+    milk_row = rows["Almarai Full Fat Milk 2L"]
+    bread_row = rows["White Bread"]
+    forecast.set_vote(user["id"], milk_row["key"], "up")
+    forecast.set_vote(user["id"], bread_row["key"], "up")
+    forecast.set_vote(user["id"], bread_row["key"], "up")
+    forecast.set_vote(user["id"], bread_row["key"], "up")
+    after = {p["name"]: p for p in forecast.forecast(user["id"], today=today)}
+    assert after["White Bread"]["likely_push"] == 3
+    assert after["Almarai Full Fat Milk 2L"]["likely_push"] == 1
+    assert after["White Bread"]["score"] > after["Almarai Full Fat Milk 2L"]["score"] or (
+        after["White Bread"]["score"] == after["Almarai Full Fat Milk 2L"]["score"]
+        and after["White Bread"]["likely_push"] > after["Almarai Full Fat Milk 2L"]["likely_push"]
+    )
+    names = [p["name"] for p in forecast.forecast(user["id"], today=today)]
+    assert names.index("White Bread") < names.index("Almarai Full Fat Milk 2L")
+    once = forecast.apply_vote({"score": 20, "reason": "regular_upcoming", "include": True}, 1)
+    triple = forecast.apply_vote({"score": 20, "reason": "regular_upcoming", "include": True}, 3)
+    assert triple["score"] > once["score"]
+
+
+def test_stacked_thumbs_down_pulls_below_one_down(bf):
+    user = bf.db.create_user("stackdn@example.com", "secret1")
+    bread = {"name": "White Bread", "qty": 1, "unit_price": 4, "line_total": 4, "barcode": "b1"}
+    for i, day in enumerate(("2026-07-20", "2026-07-27", "2026-08-03", "2026-08-10", "2026-08-17")):
+        _buy(bf, user["id"], f"BR{i}", day, [bread])
+    today = date(2026, 8, 24)
+    before = next(p for p in forecast.forecast(user["id"], today=today) if p["name"] == "White Bread")
+    forecast.set_vote(user["id"], before["key"], "down")
+    one = next(p for p in forecast.forecast(user["id"], today=today, include_excluded=True) if p["name"] == "White Bread")
+    forecast.set_vote(user["id"], before["key"], "down")
+    forecast.set_vote(user["id"], before["key"], "down")
+    three = next(p for p in forecast.forecast(user["id"], today=today, include_excluded=True) if p["name"] == "White Bread")
+    assert one["likely_push"] == -1
+    assert three["likely_push"] == -3
+    assert three["score"] < one["score"]
+    assert three["include"] is False
+
+
+def test_legacy_up_down_rows_still_count_as_a_push(bf):
+    user = bf.db.create_user("legacyvote@example.com", "secret1")
+    bread = {"name": "White Bread", "qty": 1, "unit_price": 4, "line_total": 4, "barcode": "b1"}
+    _buy(bf, user["id"], "BR0", "2026-08-17", [bread])
+    key = "ean:b1"
+    con = bf.db.connect()
+    con.execute(
+        "INSERT INTO forecast_votes(user_id, product_key, vote, updated_at) VALUES (?,?,?,?)",
+        (user["id"], key, "up", "2026-08-24"),
+    )
+    con.commit()
+    con.close()
+    assert forecast.load_votes(user["id"]).get(key) == 1
+    assert forecast.parse_push("down") == -1
+    assert forecast.parse_push("3") == 3
