@@ -278,27 +278,51 @@
     .ghost { background:transparent; color:var(--ink); border:1px solid var(--line); font-weight:600; }
     .mcard-go { color:inherit; text-decoration:none; }
     .likely-line { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+    .likely-n { display:inline-block; padding:0 3px; }
     .prod-head .lead { max-width:72ch; }
     form.likely-votes {
-      display:inline-flex; align-items:center; gap:2px; flex:0 0 auto;
-      vertical-align:middle; width:auto; margin:0;
+      display:inline-flex; flex-direction:column; align-items:stretch; gap:2px;
+      flex:0 0 auto; vertical-align:middle; width:auto; margin:0; font-size:0;
     }
+    .likely-thumbs { display:flex; align-items:center; gap:2px; line-height:0; }
     .likely-votes button {
       display:inline-flex; align-items:center; justify-content:center;
       width:auto; min-width:28px; min-height:28px; padding:2px 5px; line-height:1;
     }
-    .likely-votes button.on { background:var(--fill); color:var(--on-fill); border-color:var(--fill); }
     .likely-votes button svg { display:block; }
+    .likely-votes button.flash { animation:likely-thumb-hit .22s steps(1) forwards; }
+    .likely-votes button:focus:not(:focus-visible) { outline:none; }
     .likely-burst {
-      display:inline-block; width:18px; height:3px; flex:0 0 18px;
-      background:var(--line); overflow:hidden; position:relative;
-      vertical-align:middle;
+      display:block; width:100%; height:3px; flex:none; min-height:0; max-height:3px;
+      line-height:0; font-size:0; background:transparent; overflow:hidden; position:relative;
     }
-    .likely-burst i { display:block; width:0; height:100%; background:var(--ink); }
+    .likely-burst i { display:block; position:absolute; left:0; top:0; width:0; height:3px; background:var(--ink); }
     .likely-burst.armed i { animation:likely-burst-fill 5s linear forwards; }
     @keyframes likely-burst-fill { from { width:0; } to { width:100%; } }
+    .likely-n.bursting { animation:likely-n-blink .5s steps(1) infinite; }
+    .likely-n.hit { animation:likely-hit .22s steps(1); }
+    .likely-n.bursting.hit { animation:likely-hit .22s steps(1); }
+    .likely-n.commit { animation:likely-n-commit .16s steps(1) forwards; }
+    @keyframes likely-thumb-hit {
+      0%, 55% { background:var(--fill); color:var(--on-fill); border-color:var(--fill); }
+      100% { background:transparent; color:var(--ink); border-color:var(--line); }
+    }
+    @keyframes likely-n-blink {
+      0%, 49% { background:var(--fill); color:var(--on-fill); }
+      50%, 100% { background:transparent; color:var(--ink); }
+    }
+    @keyframes likely-hit {
+      0%, 55% { background:var(--fill); color:var(--on-fill); }
+      100% { background:transparent; color:var(--ink); }
+    }
+    @keyframes likely-n-commit {
+      0%, 45% { background:var(--fill); color:var(--on-fill); }
+      100% { background:transparent; color:var(--ink); }
+    }
     @media (prefers-reduced-motion: reduce) {
       .likely-burst.armed i { animation:none; width:100%; }
+      .likely-n.bursting { animation:none; background:var(--fill); color:var(--on-fill); }
+      .likely-n.hit, .likely-n.commit, .likely-votes button.flash { animation:none; }
     }
     td.likely-cell { white-space:nowrap; }
     td.likely-cell .likely-votes { margin-left:6px; }
@@ -776,7 +800,7 @@
       }
       .mcard .amt small { display:block; font-weight:600; color:var(--muted); font-size:11px; }
       .likely-votes button { min-height:28px; width:auto; }
-      .likely-votes .likely-burst { width:18px; min-width:18px; height:3px; min-height:3px; }
+      .likely-votes .likely-burst { width:100%; min-width:0; height:3px; min-height:0; max-height:3px; line-height:0; font-size:0; }
       .msort { margin:0 0 10px; padding:0 0 4px; }
       .prod-head { flex-direction:column; }
       .prod-head .hero { width:96px; height:96px; flex-basis:96px; }
@@ -1060,12 +1084,53 @@
       window.addEventListener("resize", sync);
     })();
     (function(){
-      /* Likely thumbs are a stacked push, not an on/off vote. Fetch so the
-         page does not reload and jump. The tiny bar between the thumbs is a
-         5s burst: taps accumulate live, the card only moves when it ends. */
+      /* Likely thumbs are a stacked push, not a toggle. Fetch so the
+         page does not reload and jump. The tiny bar under the thumbs is a
+         5s burst: first tap starts it, further taps accumulate live, then a
+         last flash affirms the number and the card may move. Thumbs flash
+         and return to neutral — they never stay selected. */
       var BURST_MS=5000;
+      var COMMIT_MS=160;
+      var HIT_MS=220;
       var bursts={};
       function keyOf(box){ return (box.getAttribute("data-product")||"").trim(); }
+      function poke(el, cls){
+        if(!el) return;
+        el.classList.remove(cls);
+        void el.offsetWidth;
+        el.classList.add(cls);
+      }
+      function numbers(key){
+        var out=[];
+        if(!key) return out;
+        function add(n){
+          if(n && out.indexOf(n)<0) out.push(n);
+        }
+        document.querySelectorAll(".mcard[data-product], tr.rowlink[data-product]").forEach(function(el){
+          if(el.getAttribute("data-product")!==key) return;
+          add(el.querySelector(".likely-n"));
+        });
+        document.querySelectorAll("form.likely-votes").forEach(function(form){
+          if(keyOf(form)!==key) return;
+          var line=form.closest(".likely-line")||form.parentNode;
+          if(line && line.querySelector) add(line.querySelector(".likely-n"));
+        });
+        return out;
+      }
+      function forms(key){
+        var out=[];
+        document.querySelectorAll("form.likely-votes").forEach(function(form){
+          if(keyOf(form)===key) out.push(form);
+        });
+        return out;
+      }
+      function neutralize(form){
+        if(!form) return;
+        form.querySelectorAll("button[name='vote']").forEach(function(b){
+          b.classList.remove("on");
+          b.removeAttribute("aria-pressed");
+        });
+      }
       function units(key){
         var out=[];
         if(!key) return out;
@@ -1122,52 +1187,71 @@
       function commit(key){
         units(key).forEach(reorder);
       }
+      function flash(key, wanted){
+        forms(key).forEach(function(form){
+          var btn=form.querySelector('button[value="'+wanted+'"]');
+          poke(btn, "flash");
+          if(btn){
+            btn.blur();
+            clearTimeout(btn._flash);
+            btn._flash=setTimeout(function(){ btn.classList.remove("flash"); }, HIT_MS);
+          }
+        });
+        numbers(key).forEach(function(n){
+          poke(n, "hit");
+          clearTimeout(n._hit);
+          n._hit=setTimeout(function(){ n.classList.remove("hit"); }, HIT_MS);
+        });
+      }
+      function finish(key){
+        forms(key).forEach(function(form){
+          var bar=form.querySelector(".likely-burst");
+          if(bar) bar.classList.remove("armed");
+        });
+        numbers(key).forEach(function(n){
+          clearTimeout(n._hit);
+          n.classList.remove("bursting","hit");
+          poke(n, "commit");
+        });
+        bursts[key]=setTimeout(function(){
+          delete bursts[key];
+          numbers(key).forEach(function(n){ n.classList.remove("commit","hit","bursting"); });
+          commit(key);
+        }, COMMIT_MS);
+      }
       function arm(key){
         if(!key || bursts[key]) return;
-        document.querySelectorAll("form.likely-votes").forEach(function(form){
-          if(keyOf(form)!==key) return;
+        forms(key).forEach(function(form){
           var bar=form.querySelector(".likely-burst");
           if(!bar) return;
           bar.classList.remove("armed");
           void bar.offsetWidth;
           bar.classList.add("armed");
         });
-        bursts[key]=setTimeout(function(){
-          delete bursts[key];
-          document.querySelectorAll("form.likely-votes").forEach(function(form){
-            if(keyOf(form)!==key) return;
-            var bar=form.querySelector(".likely-burst");
-            if(bar) bar.classList.remove("armed");
-          });
-          commit(key);
-        }, BURST_MS);
+        numbers(key).forEach(function(n){
+          n.classList.remove("bursting","commit");
+          void n.offsetWidth;
+          n.classList.add("bursting");
+        });
+        bursts[key]=setTimeout(function(){ finish(key); }, BURST_MS);
       }
       function paint(box, data){
         var push=+data.push||0;
         var likely=+data.likely||0;
         var key=data.key||keyOf(box);
-        box.setAttribute("data-push", String(push));
-        var up=box.querySelector('button[value="up"]');
-        var down=box.querySelector('button[value="down"]');
-        if(up){
-          up.classList.toggle("on", push>0);
-          up.setAttribute("aria-pressed", push>0?"true":"false");
-        }
-        if(down){
-          down.classList.toggle("on", push<0);
-          down.setAttribute("aria-pressed", push<0?"true":"false");
-        }
-        var n=box.parentNode?box.parentNode.querySelector(".likely-n"):null;
-        if(n) n.textContent=String(likely);
+        forms(key).forEach(function(form){
+          form.setAttribute("data-push", String(push));
+          neutralize(form);
+        });
+        numbers(key).forEach(function(n){ n.textContent=String(likely); });
         units(key).forEach(function(el){
           el.setAttribute("data-likely", String(likely));
           el.setAttribute("data-push", String(push));
-          var num=el.querySelector(".likely-n");
-          if(num) num.textContent=String(likely);
         });
       }
       function send(box, wanted){
         var key=keyOf(box);
+        flash(key, wanted);
         arm(key);
         var body=new URLSearchParams();
         body.set("vote", wanted);
@@ -1191,6 +1275,7 @@
           if(!bursts[k]) commit(k);
         }).catch(function(){});
       }
+      document.querySelectorAll("form.likely-votes").forEach(neutralize);
       document.addEventListener("click", function(e){
         var btn=e.target.closest("form.likely-votes button[name='vote']");
         if(!btn) return;
