@@ -496,7 +496,7 @@ def spend_home(
         and (d.get("date") or "") <= focus_end
     ]
     total_spend = sum(d["spend"] for d in card_days)
-    periods = purchases.period_span(focus_since, focus_until, grain)
+    head = purchases.period_headline(total_spend, focus_since, focus_until, grain)
     top = purchases.list_products(
         user["id"],
         sort="spend",
@@ -517,10 +517,10 @@ def spend_home(
             "tab": "dashboard",
             "days": days,
             "dash_spend": total_spend,
-            "period_avg": round(total_spend / periods, 2),
-            "period_word": purchases.PERIOD_WORDS[grain],
-            "period_unit": purchases.period_unit(grain, periods),
-            "periods_text": purchases.format_periods(periods),
+            "period_avg": head["period_avg"],
+            "period_word": head["period_word"],
+            "period_unit": head["period_unit"],
+            "periods_text": head["periods_text"],
             "range_start": focus_since or "",
             "range_end": focus_end,
             "products": top,
@@ -881,7 +881,7 @@ def purchases_page(
         and (d.get("date") or "") <= focus_end
     ]
     total_spend = sum(d["spend"] for d in card_days)
-    periods = purchases.period_span(focus_since, focus_until, grain)
+    head = purchases.period_headline(total_spend, focus_since, focus_until, grain)
     shelf = purchases.product_shelf(
         user["id"],
         sort=sort,
@@ -933,10 +933,10 @@ def purchases_page(
             # would weigh more than the products.
             "days_json": json.dumps(purchases.day_marks(days)),
             "dash_spend": total_spend,
-            "period_avg": round(total_spend / periods, 2),
-            "period_word": purchases.PERIOD_WORDS[grain],
-            "period_unit": purchases.period_unit(grain, periods),
-            "periods_text": purchases.format_periods(periods),
+            "period_avg": head["period_avg"],
+            "period_word": head["period_word"],
+            "period_unit": head["period_unit"],
+            "periods_text": head["periods_text"],
             "range_start": focus_since or "",
             "range_end": focus_end,
             "dash_receipts": (

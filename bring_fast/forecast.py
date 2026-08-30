@@ -153,10 +153,10 @@ def buy_history(
     where = "WHERE i.user_id=?"
     args: list[Any] = [user_id]
     if since:
-        where += " AND i.invoice_date>=?"
+        where += " AND substr(i.invoice_date,1,10)>=?"
         args.append(since)
     if until:
-        where += " AND i.invoice_date<=?"
+        where += " AND substr(i.invoice_date,1,10)<=?"
         args.append(until.isoformat())
     if keys is not None:
         wanted = [k for k in keys if k]

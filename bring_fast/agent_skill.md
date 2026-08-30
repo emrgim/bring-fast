@@ -55,6 +55,8 @@ Optional: `dept=Edible` or `dept=Drinks`.
 
 - Currency is **AED**.
 - Spend, orders, and ranks come from **invoices**, not from a local cart.
+- Range chips are inclusive calendar days ending today: 1w=7, 1m=30, 1y=365. All starts at the first invoice. Grain changes the bars and the average divisor, not the date window.
+- HOME average is `total ÷ N` where N is the printed period count (calendar length of that window; empty months count). The number next to ÷ is the number used.
 - Frequency = buys ÷ days from first buy of that product to the end of the view. Sort by rate, not interval.
 - Typical unit price = **median**. Drop piece-vs-kg (ratio outside 1/3–3×).
 - Shopping list skips one-offs, lapsed items (last buy > 90 days), bags, and products the user thumbed down.
