@@ -82,7 +82,6 @@ def test_likely_thumbs_stack_instead_of_toggling(bf, client):
     assert body["likely"] == 55
     assert bf.forecast.load_votes(user["id"]).get(key) == 1
     page = client.get("/purchases")
-    assert 'aria-pressed="true"' in page.text
     assert "55" in page.text
     home = client.get("/dashboard")
     assert 'aria-label="More likely to buy"' in home.text
@@ -90,7 +89,6 @@ def test_likely_thumbs_stack_instead_of_toggling(bf, client):
     detail = client.get(f"/purchases/{key}")
     assert "likely" in detail.text
     assert "55" in detail.text
-    assert 'aria-pressed="true"' in detail.text
     assert 'class="likely-line"' in detail.text
     assert "<div class=\"lead\">" in detail.text
     again = client.post(f"/purchases/{key}/vote", data={"vote": "up", "next": "/purchases"}, headers=headers)
@@ -152,12 +150,80 @@ def test_vote_endpoint_returns_json_without_navigation(bf, client):
     assert 'class="likely-burst"' in html
     assert 'animation:likely-burst-fill 5s linear forwards' in html
     burst = html[html.index('class="likely-votes"') : html.index("</form>", html.index('class="likely-votes"'))]
-    assert burst.index('value="up"') < burst.index("likely-burst") < burst.index('value="down"')
+    assert burst.index("likely-thumbs") < burst.index('value="up"') < burst.index('value="down"')
+    assert burst.index('value="down"') < burst.index("likely-burst")
+    assert not (burst.index('value="up"') < burst.index("likely-burst") < burst.index('value="down"'))
     assert "e.preventDefault()" in html
     assert 'Accept":"application/json"' in html
     assert "if(!key || bursts[key]) return" in html
+    assert "finish(key)" in html
     assert "commit(key)" in html
     assert "box.scrollTop+=delta" in html
+
+
+def test_likely_thumbs_stay_neutral_and_bar_sits_under(bf, client):
+    """Thumbs are a push, not a selected on-state. The burst bar sits under them."""
+    user = bf.db.create_user("neutral@example.com", "secret1")
+    bf.purchases.upsert_invoice(
+        user["id"],
+        {
+            "retailer": "carrefour",
+            "store_name": "Carrefour",
+            "invoice_no": "n1",
+            "invoice_date": "2026-08-23",
+            "items": [
+                {
+                    "name": "White Bread",
+                    "qty": 1,
+                    "unit_price": 4,
+                    "line_total": 4,
+                    "barcode": "n1",
+                }
+            ],
+        },
+    )
+    client.post("/login", data={"email": "neutral@example.com", "password": "secret1", "intent": "signin"})
+    key = "ean:n1"
+    headers = {"Accept": "application/json", "X-Requested-With": "fetch"}
+    assert client.post(f"/purchases/{key}/vote", data={"vote": "up", "next": "/purchases"}, headers=headers).json()["push"] == 1
+    assert client.post(f"/purchases/{key}/vote", data={"vote": "up", "next": "/purchases"}, headers=headers).json()["push"] == 2
+
+    def votes_form(html):
+        i = html.index('class="likely-votes"')
+        return html[i : html.index("</form>", i)]
+
+    for path in ("/purchases", "/dashboard", f"/purchases/{key}"):
+        html = client.get(path).text
+        form = votes_form(html)
+        assert 'aria-pressed="true"' not in form, path
+        assert 'aria-pressed=' not in form, path
+        assert "ghost on" not in form, path
+        assert 'class="ghost"' in form
+        assert form.index("likely-thumbs") < form.index('value="up"') < form.index('value="down"')
+        assert form.index('value="down"') < form.index("likely-burst")
+        assert not (form.index('value="up"') < form.index("likely-burst") < form.index('value="down"'))
+
+    html = client.get("/purchases").text
+    votes_css = html[html.index("form.likely-votes {") : html.index(".likely-thumbs {")]
+    assert "flex-direction:column" in votes_css
+    assert "align-items:stretch" in votes_css
+    burst_css = html[html.index(".likely-burst {") : html.index(".likely-burst i {")]
+    assert "width:100%" in burst_css
+    assert "height:3px" in burst_css
+    assert "width:18px" not in burst_css
+    assert ".likely-votes button.on" not in html
+    assert 'classList.toggle("on", push' not in html
+    assert 'setAttribute("aria-pressed"' not in html
+    assert "poke(n, \"hit\")" in html
+    assert "poke(n, \"commit\")" in html
+    assert ".likely-n.bursting" in html
+    assert "@keyframes likely-n-blink" in html
+    assert "@keyframes likely-thumb-hit" in html
+    assert "@keyframes likely-n-commit" in html
+    assert "function flash(key, wanted)" in html
+    assert "if(!key || bursts[key]) return" in html
+    assert "var HIT_MS=220" in html
+    assert "var COMMIT_MS=160" in html
 
 
 def test_official_title_does_not_replace_receipt_name(bf, client):
