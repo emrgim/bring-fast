@@ -208,7 +208,10 @@ def test_the_installed_app_does_not_rubber_band(bf, client):
     # Installed there is nothing behind the app to pull down to, so: none.
     assert "overscroll-behavior:none" in block
     assert "overscroll-behavior-y:contain" not in html
-    assert "env(safe-area-inset-top)" in block
+    # The in-flow mask owns the top inset; standalone must not pad the
+    # header by the same amount or titles show through the clock.
+    assert "nav.topnav { padding-top: max(10px, env(safe-area-inset-top)); }" not in html
+    assert "env(safe-area-inset-bottom)" in block
     # Nothing offers to install an app that is already installed.
     assert "#pwa-install, #ios-install { display:none !important; }" in block
     # Home-screen Safari that predates the display-mode query gets it too.

@@ -181,6 +181,25 @@
       margin:0 -14px 18px;
       background:var(--bg);
     }
+    /* In-flow lid over the status bar / Dynamic Island. wrap used to
+       start at y=0 (viewport-fit=cover), so a scrolled title (Special
+       Edition 24 x) painted through the clock. A position:fixed overlay
+       cannot cover that on this shell: body is a transform containing
+       block (--vvt / spend-pin), and iOS samples the document pixels
+       under the bar, not the overlay. This row takes the inset in the
+       column, so wrap never occupies those pixels. Header padding must
+       not add the same inset again. */
+    .safe-mask-top {
+      flex:0 0 auto;
+      flex-basis:env(safe-area-inset-top, 0px);
+      height:env(safe-area-inset-top, 0px);
+      width:100%;
+      margin:0; padding:0;
+      background:var(--bg);
+      pointer-events:none;
+      position:relative;
+      z-index:80;
+    }
     nav {
       display:flex; justify-content:space-between; align-items:center;
       margin:0; padding:10px 14px;
@@ -632,9 +651,9 @@
         padding:10px 12px 16px;
       }
       .app-head { margin:0 -12px 8px; }
+      .safe-mask-top { flex:0 0 env(safe-area-inset-top, 0px); }
       nav.topnav {
         margin:0; padding:8px 12px;
-        padding-top: max(8px, env(safe-area-inset-top));
       }
       .app-head .filters { margin:0; padding:8px 0; }
       nav.topnav .tabs { display:none !important; }
@@ -787,7 +806,6 @@
     table.data th.sort a { color:var(--ink); font-weight:700; }
     table.data th a:after { content:" ↕"; opacity:.35; }
     @media (display-mode: standalone), (display-mode: fullscreen) {
-      nav.topnav { padding-top: max(10px, env(safe-area-inset-top)); }
       .wrap { padding-bottom: calc(90px + env(safe-area-inset-bottom)); }
       #pwa-install, #ios-install { display:none !important; }
       /* Installed there is no browser to pull down to, so a rubber band at the
@@ -809,6 +827,8 @@
        standalone rule. */
     @media (max-width:720px) {
       .wrap { padding-bottom:16px; }
+      /* Beats any later standalone header pad: the mask owns the inset. */
+      nav.topnav { padding-top:8px; }
     }
     table.data th.sort.asc a:after { content:" ↑"; opacity:1; }
     table.data th.sort.desc a:after { content:" ↓"; opacity:1; }
@@ -923,6 +943,7 @@
       return {box:box, y:y, on:on, nearBottom:nearBottom};
     })();
   </script>
+  <div class="safe-mask-top" aria-hidden="true"></div>
   <div class="wrap">
     <header class="app-head">
     <nav class="topnav">
