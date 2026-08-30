@@ -128,12 +128,19 @@ def test_the_phone_dock_stays_at_the_bottom_of_the_shell(bf, client):
     assert html.index("@media (display-mode: standalone)") < html.rindex(".wrap { padding-bottom:16px; }")
     assert html.index('class="wrap"') < html.index('<footer class="dock"')
     # 100dvh is the layout viewport on iOS. The visual viewport is what
-    # the reader sees; --vvh / --vvt pin the column to that box.
+    # the reader sees; --vvh is that height plus offsetTop so the dock
+    # still meets the visual bottom. body is pinned at y=0 — offsetTop
+    # is the translucent island, still on screen, not a hole above the app.
     assert "max-height:100dvh" not in shell
     assert "height:var(--vvh, 100dvh)" in shell
     assert "window.__bfShell" in html
     assert "visualViewport" in html
-    assert "position:fixed" in phone[phone.index("body {\n        display:flex") : phone.index(".wrap {")]
+    body = phone[phone.index("body {\n        display:flex") : phone.index(".wrap {")]
+    assert "position:fixed" in body
+    assert "top:0" in body
+    assert "top:var(--vvt" not in body
+    assert "(h+t)" in html
+    assert "t>0 && t<80" in html
 
 
 def test_the_phone_dock_paints_behind_the_home_bar(bf, client):
@@ -160,6 +167,42 @@ def test_the_phone_dock_paints_behind_the_home_bar(bf, client):
         page = client.get(path).text
         assert '<footer class="dock"' in page, path
         assert "padding:8px 4px env(safe-area-inset-bottom)" in page, path
+
+
+def test_the_phone_header_paints_behind_the_status_bar(bf, client):
+    """The BF bar must reach y=0 of the webview. iOS reports the island as
+    visualViewport.offsetTop; that strip is still on screen. Shifting body
+    by it left a hole that showed whatever was behind the app. Padding on
+    topnav cannot fill a gap that lives outside the body. The mask row
+    takes max(safe-area, short --vvt); topnav must not add the inset again.
+    """
+    _signed_in(bf, client, "island@example.com")
+    html = client.get("/dashboard").text
+    phone = html[html.index("@media (max-width:720px)") :]
+    body = phone[phone.index("body {\n        display:flex") : phone.index(".wrap {")]
+    wrap = phone[phone.index(".wrap {") : phone.index(".app-head {")]
+    nav = phone[phone.index("nav.topnav {") : phone.index(".app-head .filters")]
+    shell = phone[phone.index("html, body {") : phone.index(".app-head {")]
+
+    assert "top:0" in body
+    assert "top:var(--vvt" not in body
+    assert "background:var(--bg)" in shell
+    assert "padding:0 12px 16px" in wrap
+    assert "env(safe-area-inset-top)" not in nav
+    assert "padding-top: max(8px, env(safe-area-inset-top)" not in html
+    assert "padding-top: max(10px, env(safe-area-inset-top)" not in html
+    assert ".safe-mask-top { flex:0 0 max(env(safe-area-inset-top, 0px), var(--vvt, 0px)); }" in phone
+    assert 'class="safe-mask-top"' in html
+    assert html.index('class="safe-mask-top"') < html.index('class="wrap"')
+    # Cover from y=0 to the visual bottom so the dock does not sit above a hole.
+    assert 'r.style.setProperty("--vvh", (h+t)+"px")' in html
+    assert 'r.style.setProperty("--vvt", (t>0 && t<80 ? t : 0)+"px")' in html
+    # Compact-on-scroll still keeps Sign out; the dock fill still lives on the tabs.
+    assert "nav.classList.toggle(\"is-compact\", window.__bfScroll.y()>24)" in html
+    assert "nav.is-compact .user { display:none" not in html
+    links = phone[phone.index(".dock a {") : phone.index(".dock a.on")]
+    assert "env(safe-area-inset-bottom)" in links
+    assert "env(safe-area-inset-bottom)" not in phone[phone.index(".dock {") : phone.index(".dock a {")]
 
 
 def test_date_fields_do_not_zoom_the_page_on_ios(bf, client):
