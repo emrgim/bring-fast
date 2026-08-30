@@ -282,20 +282,21 @@
     .prod-head .lead { max-width:72ch; }
     form.likely-votes {
       display:inline-flex; flex-direction:column; align-items:stretch; gap:2px;
-      flex:0 0 auto; vertical-align:middle; width:auto; margin:0;
+      flex:0 0 auto; vertical-align:middle; width:auto; margin:0; font-size:0;
     }
-    .likely-thumbs { display:flex; align-items:center; gap:2px; }
+    .likely-thumbs { display:flex; align-items:center; gap:2px; line-height:0; }
     .likely-votes button {
       display:inline-flex; align-items:center; justify-content:center;
       width:auto; min-width:28px; min-height:28px; padding:2px 5px; line-height:1;
     }
     .likely-votes button svg { display:block; }
     .likely-votes button.flash { animation:likely-thumb-hit .22s steps(1) forwards; }
+    .likely-votes button:focus:not(:focus-visible) { outline:none; }
     .likely-burst {
-      display:block; width:100%; height:3px; flex:0 0 3px;
-      background:var(--line); overflow:hidden; position:relative;
+      display:block; width:100%; height:3px; flex:none; min-height:0; max-height:3px;
+      line-height:0; font-size:0; background:transparent; overflow:hidden; position:relative;
     }
-    .likely-burst i { display:block; width:0; height:100%; background:var(--ink); }
+    .likely-burst i { display:block; position:absolute; left:0; top:0; width:0; height:3px; background:var(--ink); }
     .likely-burst.armed i { animation:likely-burst-fill 5s linear forwards; }
     @keyframes likely-burst-fill { from { width:0; } to { width:100%; } }
     .likely-n.bursting { animation:likely-n-blink .5s steps(1) infinite; }
@@ -799,7 +800,7 @@
       }
       .mcard .amt small { display:block; font-weight:600; color:var(--muted); font-size:11px; }
       .likely-votes button { min-height:28px; width:auto; }
-      .likely-votes .likely-burst { width:100%; min-width:0; height:3px; min-height:3px; }
+      .likely-votes .likely-burst { width:100%; min-width:0; height:3px; min-height:0; max-height:3px; line-height:0; font-size:0; }
       .msort { margin:0 0 10px; padding:0 0 4px; }
       .prod-head { flex-direction:column; }
       .prod-head .hero { width:96px; height:96px; flex-basis:96px; }
@@ -1188,7 +1189,13 @@
       }
       function flash(key, wanted){
         forms(key).forEach(function(form){
-          poke(form.querySelector('button[value="'+wanted+'"]'), "flash");
+          var btn=form.querySelector('button[value="'+wanted+'"]');
+          poke(btn, "flash");
+          if(btn){
+            btn.blur();
+            clearTimeout(btn._flash);
+            btn._flash=setTimeout(function(){ btn.classList.remove("flash"); }, HIT_MS);
+          }
         });
         numbers(key).forEach(function(n){
           poke(n, "hit");

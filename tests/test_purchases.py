@@ -210,6 +210,8 @@ def test_likely_thumbs_stay_neutral_and_bar_sits_under(bf, client):
     burst_css = html[html.index(".likely-burst {") : html.index(".likely-burst i {")]
     assert "width:100%" in burst_css
     assert "height:3px" in burst_css
+    assert "max-height:3px" in burst_css
+    assert "line-height:0" in burst_css
     assert "width:18px" not in burst_css
     assert ".likely-votes button.on" not in html
     assert 'classList.toggle("on", push' not in html
