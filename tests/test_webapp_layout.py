@@ -87,9 +87,11 @@ def test_a_landscape_notch_never_clips_a_row(bf, client):
     html = client.get("/login").text
 
     assert "padding-left:env(safe-area-inset-left); padding-right:env(safe-area-inset-right);" in html
-    # The dock sits inside the side insets. Home-bar inset is on the tabs.
+    # The dock sits inside the side insets. Home-bar inset is on the tabs,
+    # and the label row is 44px — not 14px of extra padding on every side.
     assert "padding-left:max(8px, env(safe-area-inset-left));" in html
-    assert "calc(14px + env(safe-area-inset-bottom))" in html
+    assert "calc(44px + env(safe-area-inset-bottom))" in html
+    assert "calc(14px + env(safe-area-inset-bottom))" not in html
     assert "calc(8px + env(safe-area-inset-bottom))" not in html
 
 
@@ -148,11 +150,14 @@ def test_the_phone_dock_paints_behind_the_home_bar(bf, client):
     assert "env(safe-area-inset-bottom)" not in dock
     assert "padding:0" in dock
     assert "env(safe-area-inset-bottom)" in links
-    assert "align-items:flex-start" in links
+    assert "align-items:center" in links
+    assert "align-items:flex-start" not in links
+    assert "calc(44px + env(safe-area-inset-bottom))" in links
+    assert "calc(14px + env(safe-area-inset-bottom))" not in links
     for path in ("/dashboard", "/purchases", "/stores"):
         page = client.get(path).text
         assert '<footer class="dock"' in page, path
-        assert "calc(14px + env(safe-area-inset-bottom))" in page, path
+        assert "calc(44px + env(safe-area-inset-bottom))" in page, path
 
 
 def test_date_fields_do_not_zoom_the_page_on_ios(bf, client):
