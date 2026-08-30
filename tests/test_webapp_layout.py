@@ -277,7 +277,7 @@ def test_the_buy_page_is_never_wider_than_the_phone(bf, client):
     # The filter row runs edge to edge by cancelling the wrap padding exactly.
     # Any leftover desktop nudge on the board makes the page wider than the
     # screen, and a page wider than the screen can be dragged and pinched.
-    assert "padding:10px 12px 16px" in phone
+    assert "padding:0 12px 16px" in phone
     assert "margin:0 -12px 10px" in phone
     assert "margin:0;" in board
 
