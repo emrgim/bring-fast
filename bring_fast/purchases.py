@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from . import db
-from .depts import classify_dept, normalize_dept
+from .depts import classify_dept, matches_dept, normalize_dept
 
 
 def ean13_check_digit(body: str) -> str:
@@ -338,6 +338,19 @@ def _parse_day(raw: str | None) -> date | None:
         return None
 
 
+def _date_bounds(since: str | None, until: date | None, column: str = "i.invoice_date") -> tuple[str, list[Any]]:
+    """Compare calendar dates, not the raw TEXT. A timestamp on `until` would lose that day."""
+    sql = ""
+    args: list[Any] = []
+    if since:
+        sql += f" AND substr({column},1,10)>=?"
+        args.append(since)
+    if until:
+        sql += f" AND substr({column},1,10)<=?"
+        args.append(until.isoformat())
+    return sql, args
+
+
 def _pretty_unit(n: float, unit: str) -> str:
     if abs(n - round(n)) < 0.08:
         v = max(1, int(round(n)))
@@ -550,7 +563,8 @@ def window(range_key: str, start: str = "", end: str = "") -> tuple[str | None, 
         return until.replace(day=1).isoformat(), until, "this_month"
     days = RANGES.get(key)
     if days:
-        return (until - timedelta(days=days)).isoformat(), until, key
+        # Inclusive length: 1w is 7 dates ending today, not 8.
+        return (until - timedelta(days=days - 1)).isoformat(), until, key
     return None, until, "all"
 
 
@@ -574,7 +588,7 @@ def since_date(range_key: str) -> str | None:
     days = RANGES.get(range_key, None)
     if not days:
         return None
-    return (date.today() - timedelta(days=days)).isoformat()
+    return (date.today() - timedelta(days=days - 1)).isoformat()
 
 
 def _unit_price(row: dict[str, Any]) -> float | None:
@@ -619,12 +633,9 @@ def list_products(
     con = db.connect()
     where = "WHERE i.user_id=?"
     args: list[Any] = [user_id]
-    if since:
-        where += " AND i.invoice_date>=?"
-        args.append(since)
-    if until:
-        where += " AND i.invoice_date<=?"
-        args.append(until.isoformat())
+    date_sql, date_args = _date_bounds(since, until)
+    where += date_sql
+    args.extend(date_args)
     extra, extra_args = _store_sql(stores)
     where += extra
     args.extend(extra_args)
@@ -676,7 +687,7 @@ def list_products(
         official = r["official_name"] or ""
         display = official or receipt
         dept_label = classify_dept(receipt, official)
-        if normalize_dept(dept) and dept_label != normalize_dept(dept):
+        if not matches_dept(dept, receipt, official):
             continue
         out.append(
             {
@@ -823,12 +834,9 @@ def product_purchases(user_id: int, key: str, since: str | None = None, until: d
     skus = [r["barcode"] for r in sku_rows if r["barcode"]]
     where = "WHERE i.user_id=? AND it.product_key=?"
     args: list[Any] = [user_id, key]
-    if since:
-        where += " AND i.invoice_date>=?"
-        args.append(since)
-    if until:
-        where += " AND i.invoice_date<=?"
-        args.append(until.isoformat())
+    date_sql, date_args = _date_bounds(since, until)
+    where += date_sql
+    args.extend(date_args)
     rows = con.execute(
         f"""
         SELECT i.invoice_date, i.retailer, i.store_name, i.invoice_no, i.order_no,
@@ -958,15 +966,10 @@ def invoice_count(
     extra, extra_args = _store_sql(stores, "retailer")
     where += extra
     args.extend(extra_args)
-    clauses: list[str] = []
-    if since:
-        clauses.append("substr(invoice_date,1,10)>=?")
-        args.append(since)
-    if until:
-        clauses.append("substr(invoice_date,1,10)<=?")
-        args.append(until.isoformat())
-    if clauses:
-        cond = " AND ".join(clauses)
+    date_sql, date_args = _date_bounds(since, until, "invoice_date")
+    if date_sql:
+        cond = date_sql.removeprefix(" AND ")
+        args.extend(date_args)
         if include_undated:
             where += f" AND (({cond}) OR invoice_date='')"
         else:
@@ -987,20 +990,19 @@ def daily_spend(
     con = db.connect()
     where = "WHERE i.user_id=?"
     args: list[Any] = [user_id]
-    if since:
-        where += " AND i.invoice_date>=?"
-        args.append(since)
-    if until:
-        where += " AND i.invoice_date<=?"
-        args.append(until.isoformat())
+    date_sql, date_args = _date_bounds(since, until)
+    where += date_sql
+    args.extend(date_args)
     extra, extra_args = _store_sql(stores)
     where += extra
     args.extend(extra_args)
     rows = con.execute(
         f"""
-        SELECT i.invoice_date, i.retailer, i.store_name, i.invoice_no, it.name, it.line_total
+        SELECT i.invoice_date, i.retailer, i.store_name, i.invoice_no, it.name, it.line_total,
+               NULLIF(pm.official_name,'') AS official_name
         FROM invoices i
         JOIN invoice_items it ON it.invoice_id = i.id
+        LEFT JOIN product_meta pm ON pm.product_key = it.product_key
         {where}
         ORDER BY i.invoice_date ASC, i.id ASC
         """,
@@ -1010,7 +1012,7 @@ def daily_spend(
     days: dict[str, dict[str, Any]] = {}
     seen_inv: set[tuple[str, str, str]] = set()
     for r in rows:
-        if normalize_dept(dept) and classify_dept(r["name"] or "") != normalize_dept(dept):
+        if not matches_dept(dept, r["name"] or "", r["official_name"] or ""):
             continue
         day = (r["invoice_date"] or "")[:10]
         if not day:
@@ -1068,7 +1070,7 @@ def spend_snapshot(
         week_days = daily_spend(user_id, since=week_since, until=week_until)
     week_total = sum(d["spend"] for d in week_days)
     week_span = max(1, (week_until - (_parse_day(week_since) or week_until)).days + 1)
-    periods = period_span(since, until, grain)
+    head = period_headline(total, since, until, grain)
     return {
         "total": total,
         "receipts": receipts,
@@ -1079,11 +1081,7 @@ def spend_snapshot(
         "today": round(float(today), 2),
         "week_avg": round(week_total / week_span, 2),
         "grain": grain,
-        "periods": periods,
-        "periods_text": format_periods(periods),
-        "period_unit": period_unit(grain, periods),
-        "period_word": PERIOD_WORDS[grain],
-        "period_avg": round(total / periods, 2),
+        **head,
     }
 
 
@@ -1251,6 +1249,33 @@ def format_periods(n: float) -> str:
     return str(int(round(n))) if abs(n - round(n)) < 0.05 else f"{n:.1f}"
 
 
+def period_divisor(n: float) -> tuple[str, float]:
+    """The number printed next to ÷ is the number we divide by."""
+    text = format_periods(n)
+    try:
+        shown = float(text)
+    except ValueError:
+        shown = float(n or 1)
+    if shown <= 0:
+        return "1", 1.0
+    return text, shown
+
+
+def period_headline(total: float, since: str | None, until: date | None, grain: str) -> dict[str, Any]:
+    """HOME/Buys average: total ÷ the printed period count for this grain."""
+    grain = grain if grain in GRAINS else "daily"
+    periods = period_span(since, until, grain)
+    text, divisor = period_divisor(periods)
+    return {
+        "periods": periods,
+        "periods_text": text,
+        "period_divisor": divisor,
+        "period_unit": period_unit(grain, periods),
+        "period_word": PERIOD_WORDS[grain],
+        "period_avg": round(float(total or 0) / divisor, 2),
+    }
+
+
 def _grain_key(day: date, grain: str) -> tuple[str, str]:
     if grain == "weekly":
         start = day - timedelta(days=day.weekday())
@@ -1303,27 +1328,25 @@ def price_trend(
     con = db.connect()
     where = "WHERE i.user_id=?"
     args: list[Any] = [user_id]
-    if since:
-        where += " AND i.invoice_date>=?"
-        args.append(since)
-    if until:
-        where += " AND i.invoice_date<=?"
-        args.append(until.isoformat())
+    date_sql, date_args = _date_bounds(since, until)
+    where += date_sql
+    args.extend(date_args)
     rows = con.execute(
         f"""
-        SELECT it.product_key, i.invoice_date, it.qty, it.unit_price, it.line_total, it.name
+        SELECT it.product_key, i.invoice_date, it.qty, it.unit_price, it.line_total, it.name,
+               NULLIF(pm.official_name,'') AS official_name
         FROM invoice_items it
         JOIN invoices i ON i.id = it.invoice_id
+        LEFT JOIN product_meta pm ON pm.product_key = it.product_key
         {where}
         ORDER BY i.invoice_date ASC, i.id ASC
         """,
         args,
     ).fetchall()
     con.close()
-    want_dept = normalize_dept(dept)
     by_prod: dict[str, list[tuple[str, float]]] = {}
     for r in rows:
-        if want_dept and classify_dept(r["name"] or "") != want_dept:
+        if not matches_dept(dept, r["name"] or "", r["official_name"] or ""):
             continue
         price = _unit_price(dict(r))
         day = (r["invoice_date"] or "")[:10]
@@ -1488,12 +1511,9 @@ def typical_unit_prices(user_id: int, since: str | None = None, until: date | No
     con = db.connect()
     where = "WHERE i.user_id=?"
     args: list[Any] = [user_id]
-    if since:
-        where += " AND i.invoice_date>=?"
-        args.append(since)
-    if until:
-        where += " AND i.invoice_date<=?"
-        args.append(until.isoformat())
+    date_sql, date_args = _date_bounds(since, until)
+    where += date_sql
+    args.extend(date_args)
     rows = con.execute(
         f"""
         SELECT it.product_key, it.qty, it.unit_price, it.line_total
@@ -1743,18 +1763,21 @@ def spend_report(
         {"date": b["date"], "label": b.get("label") or b["date"], "spend": round(float(b["spend"]), 2), "invoices": int(b.get("count") or 0)}
         for b in bucket_series(days, grain)
     ]
+    grain = grain if grain in GRAINS else "monthly"
+    week_head = period_headline(total, since, until, "weekly")
+    month_head = period_headline(total, since, until, "monthly")
     return {
         "currency": "AED",
         "range": key,
-        "grain": grain if grain in GRAINS else "monthly",
+        "grain": grain,
         "since": since,
         "until": until.isoformat(),
         "total": total,
         "invoices": invoices,
         "invoices_total": invoice_count(user_id, include_undated=True),
         "days": span_days,
-        "avg_per_week": round(total / (span_days / 7.0), 2),
-        "avg_per_month": round(total / (span_days / 30.437), 2),
+        "avg_per_week": week_head["period_avg"],
+        "avg_per_month": month_head["period_avg"],
         "last_7_days": last_week,
         "last_30_days": last_month,
         "orders": list_orders(user_id, since=since, until=until, include_items=False, limit=80),
@@ -1774,12 +1797,9 @@ def list_orders(
     con = db.connect()
     where = "WHERE i.user_id=?"
     args: list[Any] = [user_id]
-    if since:
-        where += " AND i.invoice_date>=?"
-        args.append(since)
-    if until:
-        where += " AND i.invoice_date<=?"
-        args.append(until.isoformat())
+    date_sql, date_args = _date_bounds(since, until)
+    where += date_sql
+    args.extend(date_args)
     rows = con.execute(
         f"""
         SELECT i.id, i.invoice_no, i.order_no, i.invoice_date, i.retailer, i.store_name,
