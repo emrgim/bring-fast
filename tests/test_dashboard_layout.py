@@ -227,8 +227,45 @@ def test_theme_toggle_inverts_and_splits_on_auto(client):
     assert "mix-blend-mode:difference;" in html
 
 
-def test_mobile_header_pads_the_safe_area_only_at_the_top(bf, client):
+def test_mobile_header_does_not_double_the_top_safe_area(client):
     html = client.get("/login").text
 
-    assert "max(8px, env(safe-area-inset-top))" in html
+    # The in-flow mask owns env(safe-area-inset-top). Header padding must
+    # not add it again (that plus iOS shifting sticky left a hole above
+    # BRING FAST where titles showed through the clock).
+    assert "max(8px, env(safe-area-inset-top))" not in html
+    assert "max(10px, env(safe-area-inset-top))" not in html
     assert "calc(8px + env(safe-area-inset-top))" not in html
+
+
+def test_the_top_safe_area_is_an_in_flow_mask(bf, client):
+    """Product titles must not show through the iPhone status bar.
+
+    viewport-fit=cover lets wrap paint at y=0. Padding the header by the
+    inset only moves BRING FAST down; the pixels behind the clock are
+    still wrap, so a scrolled card (Special Edition 24 x) shows through.
+    The mask is a column row the height of the inset, not a fixed overlay
+    (body is a transform containing block, and iOS samples document
+    pixels under the bar).
+    """
+    _seed(bf, "safetop@example.com")
+    client.post(
+        "/login",
+        data={"email": "safetop@example.com", "password": "secret1", "intent": "signin"},
+    )
+    html = client.get("/dashboard").text
+    assert 'class="safe-mask-top"' in html
+    assert html.index('class="safe-mask-top"') < html.index('class="wrap"')
+    mask = html[html.index(".safe-mask-top {") :]
+    mask = mask[: mask.index("}")]
+    assert "position:fixed" not in mask
+    assert "flex:0 0 auto" in mask
+    assert "height:env(safe-area-inset-top, 0px)" in mask
+    assert "flex-basis:env(safe-area-inset-top, 0px)" in mask
+    assert "pointer-events:none" in mask
+    assert "background:var(--bg)" in mask
+    phone = html[html.index("@media (max-width:720px)") :]
+    assert ".safe-mask-top { flex:0 0 env(safe-area-inset-top, 0px); }" in phone
+    assert "padding-top: max(8px, env(safe-area-inset-top))" not in phone
+    head = html[html.index('<header class="app-head">') : html.index("</header>")]
+    assert '<a href="/logout">Sign out</a>' in head
