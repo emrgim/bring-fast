@@ -124,10 +124,13 @@ def test_the_phone_dock_stays_at_the_bottom_of_the_shell(bf, client):
     # still in the standalone block; the later 720px rule cancels it.
     assert html.index("@media (display-mode: standalone)") < html.rindex(".wrap { padding-bottom:16px; }")
     assert html.index('class="wrap"') < html.index('<footer class="dock"')
-    # A 100dvh cap left a hole above the iPhone home bar the column
-    # could not grow into. fill-available is allowed to be taller.
+    # 100dvh is the layout viewport on iOS. The visual viewport is what
+    # the reader sees; --vvh / --vvt pin the column to that box.
     assert "max-height:100dvh" not in shell
-    assert "min-height:-webkit-fill-available" in shell
+    assert "height:var(--vvh, 100dvh)" in shell
+    assert "window.__bfShell" in html
+    assert "visualViewport" in html
+    assert "position:fixed" in phone[phone.index("body {\n        display:flex") : phone.index(".wrap {")]
 
 
 def test_the_phone_dock_paints_behind_the_home_bar(bf, client):

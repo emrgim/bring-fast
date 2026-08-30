@@ -86,6 +86,34 @@
       }};
     })();
   </script>
+  <script>
+    /* iOS sizes 100dvh against the layout viewport. The visual viewport is
+       often shorter (home bar, Safari chrome) or shifted (offsetTop), so a
+       100dvh column leaves a white band under HOME / BUYS / STORES and can
+       shove YOUR SPEND under the island. Lock the phone shell to the visual
+       viewport; skip while pinched so a browser-tab zoom does not reflow. */
+    window.__bfShell=(function(){
+      function fit(){
+        var vv=window.visualViewport;
+        if(vv && vv.scale && Math.abs(vv.scale-1)>0.02) return;
+        var h=vv?vv.height:(window.innerHeight||0);
+        var t=vv?vv.offsetTop:0;
+        if(!h) return;
+        var r=document.documentElement;
+        r.style.setProperty("--vvh", h+"px");
+        r.style.setProperty("--vvt", t+"px");
+      }
+      fit();
+      requestAnimationFrame(fit);
+      if(window.visualViewport){
+        visualViewport.addEventListener("resize", fit);
+        visualViewport.addEventListener("scroll", fit);
+      }
+      window.addEventListener("resize", fit);
+      window.addEventListener("orientationchange", function(){ setTimeout(fit, 250); });
+      return {fit:fit};
+    })();
+  </script>
   <style>
     :root {
       --bg:#fff;
@@ -581,19 +609,22 @@
       /* The window itself must not scroll. A position:fixed dock is laid
          out against the layout viewport, and iOS then draws it across the
          middle of the shelf once the visual viewport has moved — a pinch,
-         or just a fling. The shell is a column the height of the screen:
-         wrap scrolls, the dock is simply the last row. min-height:0 lets
-         wrap shrink below its cards so the dock is not pushed off-screen.
-         max-height:100dvh used to cap the column short of the iPhone home
-         bar; fill-available can grow past dvh so the dock reaches the
-         visual bottom. */
+         or just a fling. The shell is a column the height of the *visual*
+         viewport (--vvh / --vvt from __bfShell): wrap scrolls, the dock is
+         the last row, glued to the pixels the reader can see. min-height:0
+         lets wrap shrink below its cards so the dock is not pushed off-screen. */
       html, body {
-        height:100%; height:100svh; height:100dvh;
-        min-height:0; min-height:100%; min-height:100svh; min-height:100dvh;
-        min-height:-webkit-fill-available;
+        height:100%; height:100svh; height:100dvh; height:var(--vvh, 100dvh);
+        min-height:0; min-height:var(--vvh, 100dvh);
         overflow:hidden;
       }
-      body { display:flex; flex-direction:column; padding-bottom:0; }
+      body {
+        display:flex; flex-direction:column; padding-bottom:0;
+        position:fixed; top:var(--vvt, 0px); left:0; right:0; width:100%;
+        /* Containing block for spend-pin / veil, so they follow the visual
+           shell instead of the layout viewport. */
+        transform:translateY(0);
+      }
       .wrap {
         flex:1 1 auto; min-height:0; width:100%;
         overflow-x:hidden; overflow-y:auto;
