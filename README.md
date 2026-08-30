@@ -236,6 +236,36 @@ Grok discovers OAuth and opens the Bring Fast login. Friends register their own 
 Official checkout stays on each supermarket site. Grandiose Magento `ccod` /
 `cashondelivery` place the order on grandiose.ae without taking a card number.
 
+## X (Twitter)
+
+The same `/mcp` connector exposes X API v2 tools so Grok bots such as
+**Xterminator** can read [@ilTrumpista](https://x.com/ilTrumpista) and create
+posts through **this host's** X developer app. Grocery tools (Food keeper) are
+unchanged. This is not Cursor's X plugin.
+
+| Tool | What it does |
+| --- | --- |
+| `x_me` | Authenticated X user for the developer app |
+| `x_user_by_username` | Profile; default `ilTrumpista` |
+| `x_user_posts` | Recent posts / timeline |
+| `x_mentions` | Mentions of that user |
+| `x_search` | Recent search (last 7 days); `query` required |
+| `x_post` | **WRITE** — create a tweet (`text`, optional `reply_to` id) |
+
+Set these on the Domvs process (never commit them):
+
+```
+X_API_KEY
+X_API_SECRET
+X_ACCESS_TOKEN
+X_ACCESS_TOKEN_SECRET
+X_BEARER_TOKEN   # optional, app-only reads
+```
+
+If a tool is called without credentials it returns `x_credentials_missing` and
+names those variables. `x_post` and `x_me` need the four user-context keys;
+a bearer token alone is not enough to post.
+
 ## Tests
 
 ```bash
@@ -243,7 +273,9 @@ Official checkout stays on each supermarket site. Grandiose Magento `ccod` /
 .venv/bin/python -m pytest
 ```
 
-`tests/test_mcp_handshake.py` replays the OAuth and MCP handshake a client performs.
+`tests/test_x.py` covers X tool credentials-missing errors and request shaping
+without calling the live X API. `tests/test_mcp_handshake.py` replays the OAuth
+and MCP handshake a client performs.
 Login, refresh tokens, and per-user store sessions are covered in `tests/test_login.py`,
 `tests/test_oauth.py`, and `tests/test_store_login.py`. The installed app is covered in
 `tests/test_pwa.py`, `tests/test_offline_ui.py`, `tests/test_webapp_layout.py`, and

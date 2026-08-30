@@ -9,7 +9,9 @@ DESCRIPTION = (
     "It searches live supermarket catalogs, ranks spend from official invoices, "
     "forecasts what to buy next, and talks to official store carts "
     "(Grandiose, Union Coop, Carrefour). OAuth is the same email/password as the dashboard. "
-    "No local cart."
+    "No local cart. "
+    "This same connector also exposes X (Twitter) tools for the host's developer app "
+    "(read @ilTrumpista, search recent posts, and create tweets with x_post)."
 )
 
 SKILL_NAME = "bring-fast-agent"
