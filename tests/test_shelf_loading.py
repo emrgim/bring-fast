@@ -43,7 +43,7 @@ def _signed_in(bf, client, email, **kw):
 
 
 def _cards(html):
-    return re.findall(r'class="mcard"><a class="mcard-go" href="/purchases/ean:(\d+)', html)
+    return re.findall(r'class="mcard"[^>]*><a class="mcard-go" href="/purchases/ean:(\d+)', html)
 
 
 def _note(html):

@@ -461,7 +461,7 @@ SORTS = {
     "times": lambda p: p["times_bought"],
     "qty": lambda p: p["qty_total"],
     "frequency": _freq_score,
-    "likely": lambda p: int(p.get("likely") or 0),
+    "likely": lambda p: (int(p.get("likely") or 0), int(p.get("likely_push") or p.get("push") or 0)),
     "spend": lambda p: p["spend_total"],
 }
 
@@ -731,7 +731,7 @@ def attach_likely(user_id: int, products: list[dict[str, Any]], *, today: date |
             rec,
             today=today,
             excluded=rec["key"] in blocked,
-            vote=votes.get(rec["key"], ""),
+            vote=votes.get(rec["key"], 0),
             min_buys=fc.DEFAULTS["min_buys"],
             max_interval_days=fc.DEFAULTS["max_interval_days"],
             max_cv=fc.DEFAULTS["max_cv"],
@@ -744,6 +744,7 @@ def attach_likely(user_id: int, products: list[dict[str, Any]], *, today: date |
         p["likely"] = int(hab.get("score") or 0)
         p["likely_reason"] = hab.get("reason") or ""
         p["likely_vote"] = hab.get("vote") or ""
+        p["likely_push"] = int(hab.get("likely_push") or hab.get("push") or 0)
     return products
 
 
@@ -1565,6 +1566,7 @@ def _public_product(p: dict[str, Any]) -> dict[str, Any]:
         "likely": int(p.get("likely") or p.get("score") or 0),
         "likely_reason": p.get("likely_reason") or p.get("reason"),
         "likely_vote": p.get("likely_vote") or p.get("vote") or "",
+        "likely_push": int(p.get("likely_push") or p.get("push") or 0),
         "score": p.get("score"),
         "reason": p.get("reason"),
         "first_buy": p.get("first_buy") or "",
@@ -1639,7 +1641,7 @@ def shopping_list(
             rec,
             today=today,
             excluded=rec["key"] in blocked or rec["key"].lower() in extra or (rec.get("official_name") or rec.get("receipt_name") or "").lower() in extra,
-            vote=votes.get(rec["key"], ""),
+            vote=votes.get(rec["key"], 0),
             min_buys=int(min_buys) if min_buys is not None else fc.DEFAULTS["min_buys"],
             max_interval_days=fc.DEFAULTS["max_interval_days"],
             max_cv=fc.DEFAULTS["max_cv"],
@@ -1665,11 +1667,12 @@ def shopping_list(
         if p.get("key") in blocked or (p.get("key") or "").lower() in extra or name in extra:
             continue
         hab = classified.get(p["key"]) or {}
-        if hab.get("vote") == "down":
+        if int(hab.get("push") or hab.get("likely_push") or 0) < 0:
             continue
         p["likely"] = int(hab.get("score") or 0)
         p["likely_reason"] = hab.get("reason") or "unknown"
         p["likely_vote"] = hab.get("vote") or ""
+        p["likely_push"] = int(hab.get("push") or hab.get("likely_push") or 0)
         p["score"] = p["likely"]
         p["reason"] = p["likely_reason"]
         p["weighted_interval_days"] = hab.get("weighted_interval_days")
@@ -1678,7 +1681,11 @@ def shopping_list(
         p["cv"] = hab.get("cv")
         p["days_since"] = hab.get("days_since")
         rows.append(p)
-    rows.sort(key=lambda p: (-int(p.get("likely") or 0), int(p.get("due_in_days") or 0)))
+    rows.sort(key=lambda p: (
+        -int(p.get("likely") or 0),
+        -int(p.get("likely_push") or p.get("push") or 0),
+        int(p.get("due_in_days") or 0),
+    ))
     return [_public_product(p) for p in rows[: max(1, min(int(limit or 20), 50))]]
 
 
