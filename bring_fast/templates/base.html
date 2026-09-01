@@ -188,6 +188,10 @@
       margin:0 -14px 18px;
       background:var(--bg);
     }
+    /* Category panel lives in this sticky bar. Sticky + taller-than-viewport
+       would pin the first rows and hide the rest (Stores sits in the page
+       body, so wrap can scroll it). While All is open, the header unsticks. */
+    .app-head.is-filter-open { position:relative; top:auto; }
     /* In-flow lid over the status bar / Dynamic Island. wrap used to
        start at y=0 (viewport-fit=cover), so a scrolled title (Special
        Edition 24 x) painted through the clock. A position:fixed overlay
@@ -520,25 +524,37 @@
     }
     .chip-row .store-chip, .msort .store-chip { flex:0 0 auto; }
     .chip-row .store-chip:after, .msort .store-chip:after { content:" ▾"; }
+    #category-wrap, #store-wrap { width:100%; }
     .store-panel {
-      display:flex; flex-direction:column; gap:2px;
+      display:flex; flex-direction:column; align-items:stretch; gap:0;
       margin:6px 0 10px; padding:8px;
       border:1px solid var(--line); background:var(--bg); color:var(--ink);
-      position:static; width:auto;
+      position:static; width:100%; max-width:100%; align-self:stretch;
+      text-align:left; touch-action:pan-y;
     }
     .store-panel[hidden] { display:none !important; }
+    .store-panel-list {
+      display:flex; flex-direction:column; gap:2px; align-items:stretch;
+      width:100%; min-height:0; text-align:left;
+      overflow-x:hidden; overflow-y:auto; overscroll-behavior:contain;
+      -webkit-overflow-scrolling:touch; touch-action:pan-y;
+    }
     .store-panel label.on { background:var(--fill); color:var(--on-fill); }
     .store-panel label {
-      display:flex; align-items:center; gap:8px; margin:0; padding:8px;
+      display:flex; align-items:center; justify-content:flex-start; gap:8px;
+      margin:0; padding:8px; width:100%; box-sizing:border-box;
       font-size:12px; font-weight:700; letter-spacing:0; text-transform:none;
-      color:inherit; cursor:pointer;
+      text-align:left; color:inherit; cursor:pointer; touch-action:pan-y;
     }
     .store-panel input[type=checkbox] {
       width:16px; height:16px; flex:0 0 16px; padding:0; margin:0;
       border:1px solid var(--ink); background:var(--bg); cursor:pointer;
     }
     .store-panel input[type=checkbox]:checked { background:var(--fill); }
-    .store-actions { display:flex; gap:8px; margin-top:8px; }
+    .store-actions {
+      display:flex; gap:8px; flex:0 0 auto; margin-top:8px; padding-top:8px;
+      border-top:1px solid var(--line);
+    }
     .store-actions button { flex:1; min-height:36px; width:auto; padding:8px 12px; }
     .filters button {
       background:var(--fill); color:var(--on-fill); border-color:var(--fill);
@@ -608,7 +624,8 @@
     .pop .row > span:first-child { min-width:0; flex:1 1 auto; overflow-wrap:anywhere; }
     .pop .row .amt { flex:0 0 auto; white-space:nowrap; }
     .filters { display:flex; flex-direction:column; gap:6px; margin:0 0 12px; }
-    .filters form { display:flex; gap:4px; align-items:center; flex-wrap:nowrap; flex:0 0 auto; }
+    /* Date row only — store-panel is a vertical checklist, not a chip strip. */
+    .filters form.filter-dates { display:flex; gap:4px; align-items:center; flex-wrap:nowrap; flex:0 0 auto; }
     .filter-dates { width:100%; min-width:0; overflow-x:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
     /* An empty date field on iOS has no intrinsic width once appearance is
        stripped, and collapses to a sliver beside the end date. Chrome then
@@ -746,11 +763,12 @@
       .grain a, .chip-row a, .chip-row .store-chip, .msort a, .msort .store-chip, .filters button {
         flex:0 0 auto; padding:5px 8px; font-size:11px;
       }
-      .store-panel { margin:0 0 10px; }
-      .store-panel label { min-height:44px; }
+      .store-panel { margin:0 0 10px; padding:8px 12px; text-align:left; }
+      .store-panel-list { width:100%; }
+      .store-panel label { min-height:44px; justify-content:flex-start; text-align:left; }
       .store-panel input[type=checkbox] { width:20px; height:20px; flex-basis:20px; }
       .store-actions button { min-height:44px; }
-      .filters form { display:flex; }
+      .filters form.filter-dates { display:flex; }
       /* Under 16px iOS zooms the whole page the moment a field takes focus,
          and never zooms back out. The row scrolls sideways, so it fits. */
       .filters input[type=date] { font-size:16px; height:36px; width:14em; min-width:14em; max-width:14em; padding:4px 8px; flex:0 0 14em; }
@@ -1751,6 +1769,10 @@
           wrap.classList.toggle("is-open", on);
           panel.hidden=!on;
           btn.setAttribute("aria-expanded", on?"true":"false");
+          var head=wrap.closest(".app-head");
+          if(head){
+            head.classList.toggle("is-filter-open", !!head.querySelector(".msort-wrap.is-open"));
+          }
           if(!on) reset();
         }
         btn.addEventListener("click", function(){ setOpen(panel.hidden); });

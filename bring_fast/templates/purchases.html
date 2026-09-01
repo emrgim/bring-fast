@@ -79,12 +79,14 @@
   <input type="hidden" name="end" value="{{ end }}"/>
   {% endif %}
   {% if day %}<input type="hidden" name="day" value="{{ day }}"/>{% endif %}
+  <div class="store-panel-list">
   {% for s in store_options %}
   <label class="{% if s.id in stores %}on{% endif %}">
     <input type="checkbox" name="store" value="{{ s.id }}"{% if s.id in stores %} checked{% endif %}/>
     {{ s.name }}
   </label>
   {% endfor %}
+  </div>
   <div class="store-actions">
     <button type="button" class="ghost" id="store-clear" data-filter-clear>Clear all</button>
     <button type="submit">Done</button>
