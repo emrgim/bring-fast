@@ -19,6 +19,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import __version__, catalog, checkout, compare, db, forecast, mcp_skill, purchases, update, x
+from .macro_categories import MACRO_CATEGORIES, normalize_macro as normalize_macro_slug
 from .stores.cart_match import peel_remove_name
 
 HOST = os.environ.get("BRINGFAST_HOST", "127.0.0.1")
@@ -1344,7 +1345,9 @@ def _store_tools() -> list[dict[str, Any]]:
             "description": (
                 "Rank THIS user's bought products. "
                 "sort=unit_price for most expensive typical unit price; sort=spend for most money spent; "
-                "sort=frequency for bought most often. dept=Edible|Drinks. range=1w|1m|3m|1y|all."
+                "sort=frequency for bought most often. dept=Edible|Drinks. range=1w|1m|3m|1y|all. "
+                "category=<macro slug> filters by grocery macro-category (e.g. cheese, dairy, meat). "
+                "Each product includes category (macro slug)."
             ),
             "inputSchema": {
                 "type": "object",
@@ -1353,6 +1356,7 @@ def _store_tools() -> list[dict[str, Any]]:
                     "limit": {"type": "integer"},
                     "dept": {"type": "string"},
                     "range": {"type": "string"},
+                    "category": {"type": "string"},
                 },
             },
         },
@@ -1381,12 +1385,21 @@ def _store_tools() -> list[dict[str, Any]]:
         {
             "name": "bf_product",
             "description": (
-                "One product from THIS user's invoices: last buy, typical unit AED, frequency, next due date. "
-                "Use for: when should I buy Heineken / milk again."
+                "One product from THIS user's invoices: last buy, typical unit AED, frequency, next due date, "
+                "and category (macro slug). "
+                "Use for: when should I buy Heineken / milk again. "
+                "Pass category=cheese (or another slug from MACRO_CATEGORIES) with query= to recategorize "
+                "that product; omit category to only look up."
             ),
             "inputSchema": {
                 "type": "object",
-                "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}},
+                "properties": {
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer"},
+                    "category": {"type": "string"},
+                    "macro": {"type": "string"},
+                    "macro_category": {"type": "string"},
+                },
                 "required": ["query"],
             },
         },
@@ -2332,6 +2345,9 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
         sort = str(args.get("sort") or "spend")
         if sort in ("price", "expensive", "unit", "cost"):
             sort = "unit_price"
+        category = str(
+            args.get("category") or args.get("macro") or args.get("macro_category") or ""
+        ).strip()
         return _ok(
             sort=sort,
             products=purchases.ranked_products(
@@ -2339,6 +2355,7 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
                 sort=sort,
                 limit=int(args.get("limit") or 10),
                 dept=str(args.get("dept") or ""),
+                category=category,
                 range_key=str(args.get("range") or "all"),
             ),
         )
@@ -2360,6 +2377,27 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
         q = str(args.get("query") or args.get("q") or args.get("name") or "").strip()
         if not q:
             return json.dumps({"success": False, "error": "Pass query=product name or barcode."})
+        category = str(
+            args.get("category") or args.get("macro") or args.get("macro_category") or ""
+        ).strip()
+        if category:
+            slug = normalize_macro_slug(category)
+            if not slug:
+                valid = ", ".join(MACRO_CATEGORIES)
+                return json.dumps(
+                    {"success": False, "error": f"Invalid category slug {category!r}. Valid slugs: {valid}"}
+                )
+            product, candidates, err = purchases.find_product_for_recategorize(uid, q)
+            if err:
+                payload: dict[str, Any] = {"success": False, "error": err, "query": q}
+                if candidates:
+                    payload["candidates"] = candidates
+                return json.dumps(payload, ensure_ascii=False)
+            assert product is not None
+            purchases.set_macro_category(product["key"], slug)
+            hits = purchases.find_products(uid, q, limit=int(args.get("limit") or 8))
+            updated = hits[0] if hits else None
+            return _ok(query=q, category=slug, products=hits, product=updated)
         hits = purchases.find_products(uid, q, limit=int(args.get("limit") or 8))
         return _ok(query=q, products=hits, product=hits[0] if hits else None)
     if name == "bf_cart":

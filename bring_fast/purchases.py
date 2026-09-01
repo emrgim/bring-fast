@@ -11,7 +11,14 @@ from typing import Any
 
 from . import db
 from .depts import classify_dept, matches_dept, normalize_dept
-from .macro_categories import OTHER, classify_macro, classify_macro_from_open_facts, normalize_macro
+from .macro_categories import (
+    MACRO_CATEGORIES,
+    OTHER,
+    classify_macro,
+    classify_macro_from_open_facts,
+    is_valid_macro,
+    normalize_macro,
+)
 
 
 def ean13_check_digit(body: str) -> str:
@@ -144,6 +151,31 @@ def ensure_macro_category(
         },
     )
     return macro
+
+
+def set_macro_category(product_key: str, slug: str) -> str:
+    """Overwrite macro-category assignment (unlike ensure_macro_category)."""
+    key = canonical_key(product_key)
+    if not key:
+        raise ValueError("product_key is required")
+    normalized = normalize_macro(slug)
+    if not normalized or not is_valid_macro(normalized):
+        valid = ", ".join(MACRO_CATEGORIES)
+        raise ValueError(f"Invalid category slug {slug!r}. Valid slugs: {valid}")
+    con = db.connect()
+    row = con.execute("SELECT product_key FROM product_meta WHERE product_key=?", (key,)).fetchone()
+    if not row:
+        con.execute(
+            """INSERT INTO product_meta(product_key, sku, category, official_name, image_url, source, official_ean, macro_category)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (key, "", "", "", "", "", "", normalized),
+        )
+    else:
+        con.execute("UPDATE product_meta SET macro_category=? WHERE product_key=?", (normalized, key))
+    con.commit()
+    con.close()
+    forget_shelf()
+    return normalized
 
 
 def merge_product_keys(old_key: str, new_key: str) -> None:
@@ -1643,6 +1675,7 @@ def _public_product(p: dict[str, Any]) -> dict[str, Any]:
         "next_due": p.get("next_due") or "",
         "due_in_days": p.get("due_in_days"),
         "status": p.get("status") or "unknown",
+        "category": normalize_macro(p.get("macro_category")),
     }
 
 
@@ -1764,12 +1797,16 @@ def ranked_products(
     sort: str = "spend",
     limit: int = 10,
     dept: str = "",
+    category: str = "",
     range_key: str = "all",
     today: date | None = None,
 ) -> list[dict[str, Any]]:
     today = today or date.today()
     since, until, _ = resolve_window(user_id, range_key, end=today.isoformat())
     rows = forecast_products(user_id, since=since, until=until, dept=dept, today=today)
+    cat = normalize_macro(category)
+    if cat:
+        rows = [p for p in rows if normalize_macro(p.get("macro_category")) == cat]
     if sort == "unit_price":
         rows = [p for p in rows if p.get("typical_unit_aed") is not None]
         rows.sort(key=lambda p: float(p["typical_unit_aed"]), reverse=True)
@@ -1782,12 +1819,14 @@ def ranked_products(
     return [_public_product(p) for p in rows[: max(1, min(int(limit or 10), 50))]]
 
 
-def find_products(user_id: int, query: str, *, limit: int = 8, today: date | None = None) -> list[dict[str, Any]]:
+def _search_product_hits(
+    user_id: int, query: str, *, today: date | None = None
+) -> list[tuple[int, int, dict[str, Any]]]:
     q = re.sub(r"\s+", " ", (query or "").strip().lower())
     if not q:
         return []
     today = today or date.today()
-    hits = []
+    hits: list[tuple[int, int, dict[str, Any]]] = []
     for p in forecast_products(user_id, today=today):
         blob = " ".join(
             [
@@ -1802,7 +1841,26 @@ def find_products(user_id: int, query: str, *, limit: int = 8, today: date | Non
             score = 0 if (p.get("name") or "").lower() == q else 1
             hits.append((score, -int(p.get("times_bought") or 0), p))
     hits.sort(key=lambda t: (t[0], t[1]))
-    return [_public_product(t[2]) for t in hits[: max(1, min(int(limit or 8), 20))]]
+    return hits
+
+
+def find_products(user_id: int, query: str, *, limit: int = 8, today: date | None = None) -> list[dict[str, Any]]:
+    hits = _search_product_hits(user_id, query, today=today)
+    cap = max(1, min(int(limit or 8), 20))
+    return [_public_product(t[2]) for t in hits[:cap]]
+
+
+def find_product_for_recategorize(
+    user_id: int, query: str, *, today: date | None = None
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]], str | None]:
+    """Resolve one product for category write. Returns (product, candidates, error)."""
+    hits = _search_product_hits(user_id, query, today=today)
+    if not hits:
+        return None, [], "No matching product in invoice history."
+    if len(hits) >= 2 and hits[0][0] == hits[1][0]:
+        candidates = [_public_product(t[2]) for t in hits[:8]]
+        return None, candidates, "Query matches multiple products equally; pass a more specific query."
+    return hits[0][2], [_public_product(t[2]) for t in hits[:8]], None
 
 
 def spend_report(
