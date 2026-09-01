@@ -11,6 +11,7 @@ from typing import Any
 
 from . import db
 from .depts import classify_dept, matches_dept, normalize_dept
+from .macro_categories import OTHER, classify_macro, classify_macro_from_open_facts, normalize_macro
 
 
 def ean13_check_digit(body: str) -> str:
@@ -79,25 +80,32 @@ def product_key(barcode: str, name: str, con: Any | None = None) -> str:
 
 def upsert_product_meta(product_key: str, meta: dict[str, Any]) -> None:
     key = canonical_key(product_key)
+    incoming_macro = normalize_macro(meta.get("macro_category"))
     con = db.connect()
     con.execute(
-        """INSERT INTO product_meta(product_key, sku, category, official_name, image_url, source, official_ean)
-           VALUES (?,?,?,?,?,?,?)
+        """INSERT INTO product_meta(product_key, sku, category, official_name, image_url, source, official_ean, macro_category)
+           VALUES (?,?,?,?,?,?,?,?)
            ON CONFLICT(product_key) DO UPDATE SET
-             sku=excluded.sku,
-             category=excluded.category,
-             official_name=excluded.official_name,
-             image_url=excluded.image_url,
-             source=excluded.source,
-             official_ean=excluded.official_ean""",
+             sku=CASE WHEN excluded.sku!='' THEN excluded.sku ELSE product_meta.sku END,
+             category=CASE WHEN excluded.category!='' THEN excluded.category ELSE product_meta.category END,
+             official_name=CASE WHEN excluded.official_name!='' THEN excluded.official_name ELSE product_meta.official_name END,
+             image_url=CASE WHEN excluded.image_url!='' THEN excluded.image_url ELSE product_meta.image_url END,
+             source=CASE WHEN excluded.source!='' THEN excluded.source ELSE product_meta.source END,
+             official_ean=CASE WHEN excluded.official_ean!='' THEN excluded.official_ean ELSE product_meta.official_ean END,
+             macro_category=CASE
+               WHEN ifnull(product_meta.macro_category,'')!='' THEN product_meta.macro_category
+               WHEN excluded.macro_category!='' THEN excluded.macro_category
+               ELSE product_meta.macro_category
+             END""",
         (
             key,
             meta.get("sku") or meta.get("official_ean") or "",
             meta.get("category") or "",
-            meta.get("name") or "",
+            meta.get("name") or meta.get("official_name") or "",
             meta.get("image_url") or "",
             meta.get("source") or "",
             meta.get("official_ean") or meta.get("sku") or "",
+            incoming_macro,
         ),
     )
     con.commit()
@@ -105,10 +113,49 @@ def upsert_product_meta(product_key: str, meta: dict[str, Any]) -> None:
     forget_shelf()
 
 
+def ensure_macro_category(
+    product_key: str,
+    receipt_name: str,
+    *,
+    official_name: str = "",
+) -> str:
+    """Assign macro-category on first sight; keep existing assignment forever."""
+    key = canonical_key(product_key)
+    meta = get_product_meta(key) or {}
+    existing = normalize_macro(meta.get("macro_category"))
+    if existing:
+        return existing
+    extra = (official_name or meta.get("official_name") or "").strip()
+    macro = classify_macro(receipt_name, extra)
+    if macro == OTHER and meta.get("category"):
+        mapped = classify_macro_from_open_facts(str(meta["category"]))
+        if mapped:
+            macro = mapped
+    upsert_product_meta(
+        key,
+        {
+            "sku": meta.get("sku") or "",
+            "category": meta.get("category") or "",
+            "name": meta.get("official_name") or "",
+            "image_url": meta.get("image_url") or "",
+            "source": meta.get("source") or "",
+            "official_ean": meta.get("official_ean") or "",
+            "macro_category": macro,
+        },
+    )
+    return macro
+
+
 def merge_product_keys(old_key: str, new_key: str) -> None:
     if not old_key or not new_key or old_key == new_key:
         return
     con = db.connect()
+    old_row = con.execute(
+        "SELECT macro_category FROM product_meta WHERE product_key=?", (old_key,)
+    ).fetchone()
+    new_row = con.execute(
+        "SELECT macro_category FROM product_meta WHERE product_key=?", (new_key,)
+    ).fetchone()
     con.execute("UPDATE invoice_items SET product_key=? WHERE product_key=?", (new_key, old_key))
     con.execute("UPDATE catalog_prices SET product_key=? WHERE product_key=?", (new_key, old_key))
     con.execute(
@@ -116,6 +163,13 @@ def merge_product_keys(old_key: str, new_key: str) -> None:
         "ON CONFLICT(alias_key) DO UPDATE SET canonical_key=excluded.canonical_key",
         (old_key, new_key),
     )
+    old_macro = normalize_macro(old_row["macro_category"]) if old_row else ""
+    new_macro = normalize_macro(new_row["macro_category"]) if new_row else ""
+    if old_macro and not new_macro:
+        con.execute(
+            "UPDATE product_meta SET macro_category=? WHERE product_key=?",
+            (old_macro, new_key),
+        )
     con.execute("DELETE FROM product_meta WHERE product_key=?", (old_key,))
     con.commit()
     con.close()
@@ -325,6 +379,17 @@ def upsert_invoice(user_id: int, parsed: dict[str, Any], *, gmail_id: str = "") 
                 attach_for_receipt(parsed["retailer"], key, name, barcode)
             except Exception:
                 continue
+    seen_macro: set[str] = set()
+    for key, name, _barcode in pending:
+        if key in seen_macro:
+            continue
+        seen_macro.add(key)
+        meta = get_product_meta(key) or {}
+        official = (meta.get("official_name") or "").strip()
+        try:
+            ensure_macro_category(key, name, official_name=official)
+        except Exception:
+            continue
     forget_shelf()
     return invoice_id
 
@@ -656,6 +721,7 @@ def list_products(
                MAX(NULLIF(pm.official_name,'')) AS official_name,
                MAX(it.barcode) AS barcode,
                MAX(COALESCE(NULLIF(it.image_url,''), NULLIF(pm.image_url,''))) AS image_url,
+               MAX(NULLIF(pm.macro_category,'')) AS macro_category,
                SUM(it.qty) AS qty_total,
                COUNT(*) AS buy_count,
                COUNT(DISTINCT i.id) AS invoice_count,
@@ -689,6 +755,7 @@ def list_products(
         dept_label = classify_dept(receipt, official)
         if not matches_dept(dept, receipt, official):
             continue
+        macro = normalize_macro(r["macro_category"])
         out.append(
             {
                 "key": r["product_key"],
@@ -706,6 +773,7 @@ def list_products(
                 "first_buy": r["first_buy"] or "",
                 "last_buy": r["last_buy"] or "",
                 "dept": dept_label,
+                "macro_category": macro,
             }
         )
     attach_likely(user_id, out, today=until)
@@ -881,6 +949,7 @@ def product_purchases(user_id: int, key: str, since: str | None = None, until: d
         "barcodes": barcodes,
         "skus": sku_list,
         "category": meta.get("category") or "",
+        "macro_category": normalize_macro(meta.get("macro_category")),
         "official_name": official,
         "image_url": head["image_url"] or meta.get("image_url") or "",
         "purchases": list(reversed(buys)),
