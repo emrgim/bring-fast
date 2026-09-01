@@ -174,12 +174,16 @@ def test_category_panel_uses_store_panel_classes(bf, client):
         panel_css = page[page.index(".store-panel {") : page.index(".store-panel[hidden]")]
         assert "position:absolute" not in panel_css
         assert "position:static" in panel_css
+        assert "text-align:left" in panel_css
         assert "store-panel-list" in page
         assert "overflow-y:auto" in page
+        assert "text-align:left" in page[page.index(".store-panel-list {") : page.index(".store-panel label.on")]
+        assert "justify-content:flex-start" in page
+        assert ".app-head.is-filter-open { position:relative; top:auto; }" in page
+        assert 'head.classList.toggle("is-filter-open"' in page
 
     phone = client.get("/purchases").text
-    phone = phone[phone.index("@media (max-width:720px)") :]
-    assert phone.index('id="category-panel"') < phone.index('id="buy-cards"')
+    phone_css = phone[phone.index("@media (max-width:720px)") :]
+    assert phone_css.index('id="category-panel"') < phone_css.index('id="buy-cards"')
     assert 'class="store-panel-list"' in phone
-    assert phone.index('id="store-panel"') < phone.index('id="buy-cards"')
-    assert phone.index('class="store-panel-list"') < phone.index('id="store-panel"') + 200
+    assert phone_css.index('id="store-panel"') < phone_css.index('id="buy-cards"')
