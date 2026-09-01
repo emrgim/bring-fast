@@ -175,10 +175,14 @@ def test_store_panel_expands_in_flow_and_inverts_when_filtered(bf, client):
     )
     client.post("/login", data={"email": "storeui@example.com", "password": "secret1", "intent": "signin"})
     html = client.get("/purchases").text
+    head = html[html.index('<header class="app-head">') : html.index("</header>")]
+    assert 'id="category-panel"' in head
+    assert 'id="store-panel"' not in head
+    assert 'id="store-panel"' in html
     phone = html[html.index("@media (max-width:720px)") :]
     # The chip row scrolls sideways; the store list is a sibling so that
     # overflow cannot clip it, and opening it pushes the cards down.
-    assert ".store-panel { margin:0 0 10px; padding:8px 12px; }" in phone
+    assert ".store-panel { margin:0 0 10px; padding:8px 12px; text-align:left; }" in phone
     assert "store-panel-list" in html
     assert html.index('id="store-toggle"') < html.index('id="buy-cards"')
     assert html.index('id="store-panel"') < html.index('id="buy-cards"')
