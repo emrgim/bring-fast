@@ -115,6 +115,86 @@ def test_product_lookup_next_due(bf):
     assert hits[0]["next_due"]
     tool = json_call(bf, user, "bf_product", {"query": "Heineken"})
     assert tool["product"]["name"] == "Heineken Can 24x50CL"
+    assert "category" in tool["product"]
+
+
+def test_bf_product_recategorize(bf):
+    from bring_fast.macro_categories import CHEESE, DAIRY
+
+    user = bf.db.create_user("recat@example.com", "secret1")
+    item = {
+        "name": "Fresh Milk 2L",
+        "qty": 1,
+        "unit_price": 8.5,
+        "line_total": 8.5,
+        "barcode": "111222333",
+    }
+    _buy(bf, user["id"], "M1", "2026-08-01", [item])
+    tool = json_call(bf, user, "bf_product", {"query": "milk", "category": CHEESE})
+    assert tool["success"] is True
+    assert tool["product"]["category"] == CHEESE
+    key = bf.purchases.product_key("111222333", "Fresh Milk 2L")
+    assert bf.purchases.get_product_meta(key)["macro_category"] == CHEESE
+
+    bad = json_call(bf, user, "bf_product", {"query": "milk", "category": "fromage"})
+    assert bad["success"] is False
+    assert "Valid slugs" in bad["error"]
+
+    # Overwrite cheese back to dairy.
+    tool2 = json_call(bf, user, "bf_product", {"query": "milk", "category": DAIRY})
+    assert tool2["success"] is True
+    assert tool2["product"]["category"] == DAIRY
+
+
+def test_bf_products_category_filter(bf):
+    from bring_fast.macro_categories import CHEESE, SOFT_DRINKS
+
+    user = bf.db.create_user("catfilter@example.com", "secret1")
+    _buy(bf, user["id"], "A", "2026-08-01", [_coke()])
+    _buy(
+        bf,
+        user["id"],
+        "B",
+        "2026-08-02",
+        [{"name": "PRESIDENT BRI 200G", "qty": 1, "unit_price": 10, "line_total": 10, "barcode": "3228020232026"}],
+    )
+    tool = json_call(bf, user, "bf_products", {"category": CHEESE, "limit": 20})
+    assert tool["success"] is True
+    names = {p["name"] for p in tool["products"]}
+    assert any("BRI" in n or "President" in n for n in names)
+    assert not any("Coca" in n for n in names)
+    for p in tool["products"]:
+        assert p["category"] == CHEESE
+
+    all_tool = json_call(bf, user, "bf_products", {"limit": 20})
+    cats = {p["category"] for p in all_tool["products"]}
+    assert CHEESE in cats
+    assert SOFT_DRINKS in cats
+
+
+def test_public_product_includes_category(bf):
+    from datetime import date
+
+    user = bf.db.create_user("pubcat@example.com", "secret1")
+    _buy(bf, user["id"], "A", "2026-08-01", [_coke()])
+    hits = bf.purchases.find_products(user["id"], "coca", today=date(2026, 8, 24))
+    assert hits[0]["category"] == "soft_drinks"
+
+
+def test_bf_product_ambiguous_query(bf):
+    user = bf.db.create_user("ambig@example.com", "secret1")
+    for i, name in enumerate(("Green Apple", "Red Apple")):
+        _buy(
+            bf,
+            user["id"],
+            f"A{i}",
+            "2026-08-01",
+            [{"name": name, "qty": 1, "unit_price": 5, "line_total": 5, "barcode": f"apple{i}"}],
+        )
+    tool = json_call(bf, user, "bf_product", {"query": "apple", "category": "fruit"})
+    assert tool["success"] is False
+    assert "candidates" in tool
+    assert len(tool["candidates"]) >= 2
 
 
 def test_purchase_tools_are_listed(bf):

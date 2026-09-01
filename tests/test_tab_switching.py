@@ -9,6 +9,10 @@ import re
 from urllib.parse import parse_qsl, urlsplit
 
 _CHIP = re.compile(r'<a class="([^"]*)"[^>]*>([^<]+)</a>')
+_ALL_BTN = re.compile(
+    r'<button[^>]*id="category-toggle"[^>]*class="([^"]*)"[^>]*>([^<]+)</button>'
+    r'|<button[^>]*class="([^"]*)"[^>]*id="category-toggle"[^>]*>([^<]+)</button>'
+)
 _DATE = re.compile(r'<input type="date" name="(start|end)" value="([^"]*)"')
 
 
@@ -24,12 +28,25 @@ def _filter_view(html):
     head = html.split('<header class="app-head">', 1)[1].split("</header>", 1)[0]
     grain = re.search(r'<div class="grain">(.*?)</div>', html, re.S)
     grain_html = grain.group(1) if grain else ""
-    dept = _CHIP.findall(_section(head, "Department"))
+    dept_html = _section(head, "Department")
+    dept = _CHIP.findall(dept_html)
+    all_btn = _ALL_BTN.search(dept_html)
+    dept_chips = []
+    if all_btn:
+        label = all_btn.group(2) or all_btn.group(4) or ""
+        dept_chips.append(label.split("·")[0].strip())
+    dept_chips.extend([label for _cls, label in dept])
+    dept_on = []
+    if all_btn:
+        cls = all_btn.group(1) or all_btn.group(3) or ""
+        if " on" in (" " + cls + " "):
+            dept_on.append("All")
+    dept_on.extend([label for cls, label in dept if cls == "on"])
     rng = _CHIP.findall(_section(head, "Range"))
     return {
-        "dept_on": [label for cls, label in dept if cls == "on"],
+        "dept_on": dept_on,
         "range_on": [label for cls, label in rng if cls == "on"],
-        "dept_chips": [label for _cls, label in dept],
+        "dept_chips": dept_chips,
         "range_chips": [label for _cls, label in rng],
         "dates": dict(_DATE.findall(head)),
         "custom_on": bool(re.search(r'<form method="get"[^>]*class="on"', head)),

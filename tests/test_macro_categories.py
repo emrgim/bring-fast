@@ -1,5 +1,7 @@
 """Macro-category constants and receipt import assignment."""
 
+import pytest
+
 from bring_fast import purchases
 from bring_fast.macro_categories import (
     ALCOHOL,
@@ -86,3 +88,39 @@ def test_upsert_meta_does_not_overwrite_macro(bf):
     meta = purchases.get_product_meta(key)
     assert meta["macro_category"] == CHEESE
     assert meta["official_name"] == "Brie Updated"
+
+
+def test_set_macro_category_overwrites_sticky(bf):
+    user = bf.db.create_user("setmacro@example.com", "secret12")
+    parsed = {
+        "retailer": "carrefour",
+        "invoice_no": "SET-1",
+        "invoice_date": "2026-01-01",
+        "items": [
+            {"name": "PRESIDENT BRI 200G", "qty": 1, "unit_price": 10, "line_total": 10, "barcode": "3228020232026"},
+        ],
+    }
+    purchases.upsert_invoice(user["id"], parsed)
+    key = purchases.product_key("3228020232026", "PRESIDENT BRI 200G")
+    assert purchases.get_product_meta(key)["macro_category"] == CHEESE
+
+    purchases.set_macro_category(key, DAIRY)
+    assert purchases.get_product_meta(key)["macro_category"] == DAIRY
+
+    # Re-import must stay dairy (ensure is sticky, but we overwrote explicitly).
+    parsed2 = {
+        "retailer": "carrefour",
+        "invoice_no": "SET-2",
+        "invoice_date": "2026-02-01",
+        "items": [
+            {"name": "PRESIDENT BRI 200G", "qty": 1, "unit_price": 10, "line_total": 10, "barcode": "3228020232026"},
+        ],
+    }
+    purchases.upsert_invoice(user["id"], parsed2)
+    assert purchases.get_product_meta(key)["macro_category"] == DAIRY
+
+
+def test_set_macro_category_invalid_slug(bf):
+    key = "name:test-invalid-macro"
+    with pytest.raises(ValueError, match="Invalid category slug"):
+        purchases.set_macro_category(key, "fromage")
