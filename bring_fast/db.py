@@ -377,6 +377,8 @@ def _init_schema(con: sqlite3.Connection) -> None:
     meta_cols = {r[1] for r in con.execute("PRAGMA table_info(product_meta)").fetchall()}
     if "official_ean" not in meta_cols:
         con.execute("ALTER TABLE product_meta ADD COLUMN official_ean TEXT")
+    if "macro_category" not in meta_cols:
+        con.execute("ALTER TABLE product_meta ADD COLUMN macro_category TEXT")
     con.execute(
         """CREATE TABLE IF NOT EXISTS product_aliases (
             alias_key TEXT PRIMARY KEY,
