@@ -24,12 +24,14 @@
       <input type="hidden" name="end" value="{{ end }}"/>
       {% endif %}
       {% if day %}<input type="hidden" name="day" value="{{ day }}"/>{% endif %}
+      <div class="store-panel-list">
       {% for slug in macro_options %}
       <label class="{% if slug in categories %}on{% endif %}">
         <input type="checkbox" name="category" value="{{ slug }}"{% if slug in categories %} checked{% endif %}/>
         {{ macro_labels[slug] }}
       </label>
       {% endfor %}
+      </div>
       <div class="store-actions">
         <button type="button" class="ghost" id="category-clear" data-filter-clear>Clear all</button>
         <button type="submit">Done</button>

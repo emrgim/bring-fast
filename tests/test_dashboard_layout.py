@@ -178,7 +178,8 @@ def test_store_panel_expands_in_flow_and_inverts_when_filtered(bf, client):
     phone = html[html.index("@media (max-width:720px)") :]
     # The chip row scrolls sideways; the store list is a sibling so that
     # overflow cannot clip it, and opening it pushes the cards down.
-    assert ".store-panel { margin:0 0 10px; }" in phone
+    assert ".store-panel { margin:0 0 10px; padding:8px 12px; }" in phone
+    assert "store-panel-list" in html
     assert html.index('id="store-toggle"') < html.index('id="buy-cards"')
     assert html.index('id="store-panel"') < html.index('id="buy-cards"')
     assert 'class="store-chip"' in html
