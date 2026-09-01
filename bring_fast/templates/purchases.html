@@ -6,7 +6,7 @@
 {% import "_shelf_shapes.html" as shapes with context %}
 {% import "_filters.html" as filt with context %}
 {% block under_nav %}
-{{ filt.bar("/purchases", sort=sort, dir=dir, store_q=store_q, store_tail=store_tail) }}
+{{ filt.bar("/purchases", sort=sort, dir=dir, store_q=store_q, store_tail=store_tail, category_q=category_q, category_tail=category_tail, categories=categories, filter_action="/purchases") }}
 {% endblock %}
 {% block body %}
 {# Same bar as the home tab, so the figure stays on screen in both places. #}
@@ -31,7 +31,7 @@
     </div>
     <div class="grain">
       {% for key, label in [('daily','Daily'),('weekly','Weekly'),('monthly','Monthly'),('yearly','Yearly')] %}
-      <a class="{% if grain==key %}on{% endif %}" href="/purchases?sort={{ sort }}&dir={{ dir }}&range={{ range }}&grain={{ key }}&dept={{ dept }}{{ store_tail }}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}">{{ label }}</a>
+      <a class="{% if grain==key %}on{% endif %}" href="/purchases?sort={{ sort }}&dir={{ dir }}&range={{ range }}&grain={{ key }}&dept={{ dept }}{{ store_tail }}{{ category_tail }}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}">{{ label }}</a>
       {% endfor %}
     </div>
   </div>
@@ -46,7 +46,7 @@
   <div class="bars-scroller">
   <div class="bars" id="spend-bars">
     {% for d in days %}
-    <a class="bar {% if grain!='daily' %}wide{% endif %} {% if d.selected %}on{% endif %}" data-i="{{ loop.index0 }}" href="/purchases?sort={{ sort }}&dir={{ dir }}&range={{ range }}&grain={{ grain }}&dept={{ dept }}{{ store_tail }}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}{% if not d.selected %}&day={{ d.date }}{% endif %}" title="{{ d.label }} · AED {{ '%.2f'|format(d.spend) }}">
+    <a class="bar {% if grain!='daily' %}wide{% endif %} {% if d.selected %}on{% endif %}" data-i="{{ loop.index0 }}" href="/purchases?sort={{ sort }}&dir={{ dir }}&range={{ range }}&grain={{ grain }}&dept={{ dept }}{{ store_tail }}{{ category_tail }}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}{% if not d.selected %}&day={{ d.date }}{% endif %}" title="{{ d.label }} · AED {{ '%.2f'|format(d.spend) }}">
       <i style="height:{{ d.pct }}%"></i>
     </a>
     {% endfor %}
@@ -55,24 +55,25 @@
   <div class="pop" id="day-pop"></div>
 </div>
 
-<div class="msort-wrap" id="store-wrap">
+<div class="msort-wrap" id="store-wrap" data-filter-field="store">
 <div class="msort">
-  <a class="{% if sort=='spend' %}on{% endif %}" href="/purchases?sort=spend&dir=desc&range={{ range }}&grain={{ grain }}&dept={{ dept }}{{ store_tail }}">Spent</a>
-  <a class="{% if sort=='frequency' %}on{% endif %}" href="/purchases?sort=frequency&dir=desc&range={{ range }}&grain={{ grain }}&dept={{ dept }}{{ store_tail }}">Frequency</a>
-  <a class="{% if sort=='likely' %}on{% endif %}" href="/purchases?sort=likely&dir=desc&range={{ range }}&grain={{ grain }}&dept={{ dept }}{{ store_tail }}">Likely</a>
-  <a class="{% if sort=='times' %}on{% endif %}" href="/purchases?sort=times&dir=desc&range={{ range }}&grain={{ grain }}&dept={{ dept }}{{ store_tail }}">Times</a>
-  <a class="{% if sort=='name' %}on{% endif %}" href="/purchases?sort=name&dir=asc&range={{ range }}&grain={{ grain }}&dept={{ dept }}{{ store_tail }}">Name</a>
+  <a class="{% if sort=='spend' %}on{% endif %}" href="/purchases?sort=spend&dir=desc&range={{ range }}&grain={{ grain }}&dept={{ dept }}{{ store_tail }}{{ category_tail }}">Spent</a>
+  <a class="{% if sort=='frequency' %}on{% endif %}" href="/purchases?sort=frequency&dir=desc&range={{ range }}&grain={{ grain }}&dept={{ dept }}{{ store_tail }}{{ category_tail }}">Frequency</a>
+  <a class="{% if sort=='likely' %}on{% endif %}" href="/purchases?sort=likely&dir=desc&range={{ range }}&grain={{ grain }}&dept={{ dept }}{{ store_tail }}{{ category_tail }}">Likely</a>
+  <a class="{% if sort=='times' %}on{% endif %}" href="/purchases?sort=times&dir=desc&range={{ range }}&grain={{ grain }}&dept={{ dept }}{{ store_tail }}{{ category_tail }}">Times</a>
+  <a class="{% if sort=='name' %}on{% endif %}" href="/purchases?sort=name&dir=asc&range={{ range }}&grain={{ grain }}&dept={{ dept }}{{ store_tail }}{{ category_tail }}">Name</a>
   {% if store_options %}
-  <button type="button" class="store-chip{% if stores %} on{% endif %}" id="store-toggle" aria-expanded="false" aria-controls="store-panel">Store{% if stores %} · {{ stores|length }}{% endif %}</button>
+  <button type="button" class="store-chip{% if stores %} on{% endif %}" id="store-toggle" data-filter-toggle aria-expanded="false" aria-controls="store-panel">Store{% if stores %} · {{ stores|length }}{% endif %}</button>
   {% endif %}
 </div>
 {% if store_options %}
-<form class="store-panel" id="store-panel" method="get" action="/purchases" hidden data-current="{{ store_q }}" aria-label="Stores">
+<form class="store-panel" id="store-panel" data-filter-panel method="get" action="/purchases" hidden data-current="{{ store_q }}" aria-label="Stores">
   <input type="hidden" name="sort" value="{{ sort }}"/>
   <input type="hidden" name="dir" value="{{ dir }}"/>
   <input type="hidden" name="range" value="{{ range }}"/>
   <input type="hidden" name="grain" value="{{ grain }}"/>
   <input type="hidden" name="dept" value="{{ dept }}"/>
+  {% if category_q %}<input type="hidden" name="category" value="{{ category_q }}"/>{% endif %}
   {% if range=='custom' %}
   <input type="hidden" name="start" value="{{ start }}"/>
   <input type="hidden" name="end" value="{{ end }}"/>
@@ -85,7 +86,7 @@
   </label>
   {% endfor %}
   <div class="store-actions">
-    <button type="button" class="ghost" id="store-clear">Clear all</button>
+    <button type="button" class="ghost" id="store-clear" data-filter-clear>Clear all</button>
     <button type="submit">Done</button>
   </div>
 </form>
@@ -112,22 +113,22 @@
       <tr>
         <th></th>
         <th class="{% if sort=='name' %}sort {{ dir }}{% endif %}">
-          <a href="/purchases?sort=name&dir={{ 'asc' if sort=='name' and dir=='desc' else 'desc' }}&range={{ range }}{{ store_tail }}">Product</a>
+          <a href="/purchases?sort=name&dir={{ 'asc' if sort=='name' and dir=='desc' else 'desc' }}&range={{ range }}{{ store_tail }}{{ category_tail }}">Product</a>
         </th>
         <th class="{% if sort=='times' %}sort {{ dir }}{% endif %}">
-          <a href="/purchases?sort=times&dir={{ 'asc' if sort=='times' and dir=='desc' else 'desc' }}&range={{ range }}{{ store_tail }}">Times</a>
+          <a href="/purchases?sort=times&dir={{ 'asc' if sort=='times' and dir=='desc' else 'desc' }}&range={{ range }}{{ store_tail }}{{ category_tail }}">Times</a>
         </th>
         <th class="{% if sort=='qty' %}sort {{ dir }}{% endif %}">
-          <a href="/purchases?sort=qty&dir={{ 'asc' if sort=='qty' and dir=='desc' else 'desc' }}&range={{ range }}{{ store_tail }}">Units</a>
+          <a href="/purchases?sort=qty&dir={{ 'asc' if sort=='qty' and dir=='desc' else 'desc' }}&range={{ range }}{{ store_tail }}{{ category_tail }}">Units</a>
         </th>
         <th class="{% if sort=='frequency' %}sort {{ dir }}{% endif %}">
-          <a href="/purchases?sort=frequency&dir={{ 'asc' if sort=='frequency' and dir=='desc' else 'desc' }}&range={{ range }}{{ store_tail }}">Frequency</a>
+          <a href="/purchases?sort=frequency&dir={{ 'asc' if sort=='frequency' and dir=='desc' else 'desc' }}&range={{ range }}{{ store_tail }}{{ category_tail }}">Frequency</a>
         </th>
         <th class="{% if sort=='likely' %}sort {{ dir }}{% endif %}">
-          <a href="/purchases?sort=likely&dir={{ 'asc' if sort=='likely' and dir=='desc' else 'desc' }}&range={{ range }}{{ store_tail }}">Likely</a>
+          <a href="/purchases?sort=likely&dir={{ 'asc' if sort=='likely' and dir=='desc' else 'desc' }}&range={{ range }}{{ store_tail }}{{ category_tail }}">Likely</a>
         </th>
         <th class="{% if sort=='spend' %}sort {{ dir }}{% endif %}">
-          <a href="/purchases?sort=spend&dir={{ 'asc' if sort=='spend' and dir=='desc' else 'desc' }}&range={{ range }}{{ store_tail }}">Spent</a>
+          <a href="/purchases?sort=spend&dir={{ 'asc' if sort=='spend' and dir=='desc' else 'desc' }}&range={{ range }}{{ store_tail }}{{ category_tail }}">Spent</a>
         </th>
       </tr>
     </thead>
@@ -338,43 +339,6 @@
   if(!sheet||!close) return;
   close.addEventListener("click", function(){ sheet.classList.remove("open"); frame.src=""; });
   sheet.addEventListener("click", function(e){ if(e.target===sheet){ sheet.classList.remove("open"); frame.src=""; } });
-})();
-</script>
-<script>
-(function(){
-  var wrap=document.getElementById("store-wrap");
-  var btn=document.getElementById("store-toggle");
-  var panel=document.getElementById("store-panel");
-  var clear=document.getElementById("store-clear");
-  if(!wrap||!btn||!panel) return;
-  function current(){
-    return (panel.getAttribute("data-current")||"").split(",").filter(Boolean);
-  }
-  function paint(){
-    panel.querySelectorAll("label").forEach(function(lab){
-      var box=lab.querySelector("input[name=store]");
-      lab.classList.toggle("on", !!(box && box.checked));
-    });
-  }
-  function reset(){
-    var keep=current();
-    panel.querySelectorAll("input[name=store]").forEach(function(el){
-      el.checked=keep.indexOf(el.value)>=0;
-    });
-    paint();
-  }
-  function setOpen(on){
-    wrap.classList.toggle("is-open", on);
-    panel.hidden=!on;
-    btn.setAttribute("aria-expanded", on?"true":"false");
-    if(!on) reset();
-  }
-  btn.addEventListener("click", function(){ setOpen(panel.hidden); });
-  if(clear) clear.addEventListener("click", function(){
-    panel.querySelectorAll("input[name=store]").forEach(function(el){ el.checked=false; });
-    paint();
-  });
-  panel.addEventListener("change", paint);
 })();
 </script>
 {% endblock %}
