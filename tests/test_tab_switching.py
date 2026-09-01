@@ -8,8 +8,16 @@ Sort and store stay on Buys only.
 import re
 from urllib.parse import parse_qsl, urlsplit
 
-_CHIP = re.compile(r'<a class="([^"]*)"[^>]*>([^<]+)</a>')
+_CHIP = re.compile(r'<(?:a|button)[^>]*class="([^"]*)"[^>]*>([^<]+)</(?:a|button)>')
 _DATE = re.compile(r'<input type="date" name="(start|end)" value="([^"]*)"')
+
+
+def _chip_on(cls):
+    return cls == "on" or "on" in cls.split()
+
+
+def _dept_label(text):
+    return "All" if text.strip().startswith("All") else text.strip()
 
 
 def _section(html, label):
@@ -27,9 +35,9 @@ def _filter_view(html):
     dept = _CHIP.findall(_section(head, "Department"))
     rng = _CHIP.findall(_section(head, "Range"))
     return {
-        "dept_on": [label for cls, label in dept if cls == "on"],
+        "dept_on": [_dept_label(label) for cls, label in dept if _chip_on(cls)],
         "range_on": [label for cls, label in rng if cls == "on"],
-        "dept_chips": [label for _cls, label in dept],
+        "dept_chips": [_dept_label(label) for _cls, label in dept],
         "range_chips": [label for _cls, label in rng],
         "dates": dict(_DATE.findall(head)),
         "custom_on": bool(re.search(r'<form method="get"[^>]*class="on"', head)),

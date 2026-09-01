@@ -181,11 +181,21 @@ def test_store_panel_expands_in_flow_and_inverts_when_filtered(bf, client):
     assert ".store-panel { margin:0 0 10px; }" in phone
     assert html.index('id="store-toggle"') < html.index('id="buy-cards"')
     assert html.index('id="store-panel"') < html.index('id="buy-cards"')
+    import re
+
+    def chip_tag(html, chip_id):
+        m = re.search(rf'<button[^>]*id="{chip_id}"[^>]*>', html)
+        return m.group(0) if m else ""
+
+    def chip_has_on(html, chip_id):
+        return bool(re.search(r'class="[^"]*\bon\b', chip_tag(html, chip_id)))
+
     assert 'class="store-chip"' in html
-    assert 'class="store-chip on"' not in html
+    assert not chip_has_on(html, "store-toggle")
+    assert chip_has_on(html, "category-toggle")
     assert ".msort .store-chip.on" in html
     filtered = client.get("/purchases?store=carrefour").text
-    assert 'class="store-chip on"' in filtered
+    assert chip_has_on(filtered, "store-toggle")
     assert "Store · 1" in filtered
 
 

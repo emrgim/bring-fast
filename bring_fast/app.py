@@ -194,8 +194,8 @@ def _safe_next(target: str) -> str:
 
 
 _REMEMBER = ("/dashboard", "/purchases", "/stores")
-_DASHBOARD_KEYS = ("range", "grain", "start", "end", "day", "dept")
-_PURCHASES_KEYS = ("sort", "dir", "range", "grain", "start", "end", "day", "dept", "store")
+_DASHBOARD_KEYS = ("range", "grain", "start", "end", "day", "dept", "category")
+_PURCHASES_KEYS = ("sort", "dir", "range", "grain", "start", "end", "day", "dept", "store", "category")
 _WINDOW_KEYS = ("range", "grain", "start", "end", "day", "dept")
 
 
@@ -257,6 +257,8 @@ def _tab_query_from_request(
     # An omitted store on those URLs is a clear, not a keep.
     if "store" not in params and ("range" in params or "grain" in params):
         out.pop("store", None)
+    if "category" not in params and ("range" in params or "grain" in params):
+        out.pop("category", None)
     return _encode_tab(keys, out)
 
 
@@ -269,6 +271,7 @@ def _remember_dashboard(
     end: str,
     day: str,
     dept: str = "",
+    category_q: str = "",
 ) -> None:
     q = _tab_query_from_request(
         user["id"],
@@ -281,6 +284,7 @@ def _remember_dashboard(
             "end": end if range_key == "custom" else "",
             "day": day,
             "dept": dept,
+            "category": category_q,
         },
         _DASHBOARD_KEYS,
     )
@@ -299,6 +303,7 @@ def _remember_purchases(
     direction: str,
     dept: str,
     store_q: str,
+    category_q: str = "",
 ) -> None:
     q = _tab_query_from_request(
         user["id"],
@@ -314,6 +319,7 @@ def _remember_purchases(
             "day": day,
             "dept": dept,
             "store": store_q,
+            "category": category_q,
         },
         _PURCHASES_KEYS,
     )
@@ -471,6 +477,7 @@ def spend_home(
     grain: str = "monthly",
     day: str = "",
     dept: str = "",
+    category: str = "",
 ):
     user = current_user(request)
     if not user:
@@ -481,8 +488,12 @@ def spend_home(
             return RedirectResponse("/dashboard?" + q, status_code=303)
     grain = grain if grain in purchases.GRAINS else "monthly"
     dept = purchases.normalize_dept(dept)
+    categories = _request_categories(request, category)
+    category_q = purchases.category_query(categories)
     since, until, range_key = purchases.resolve_window(user["id"], range, start, end)
-    raw_days = purchases.daily_spend(user["id"], since=since, until=until, dept=dept)
+    raw_days = purchases.daily_spend(
+        user["id"], since=since, until=until, dept=dept, categories=categories
+    )
     days = purchases.bucket_series(raw_days, grain)
     if grain == "daily":
         days = purchases.fill_daily_calendar(days, since, until)
@@ -504,10 +515,18 @@ def spend_home(
         since=focus_since,
         until=focus_until,
         dept=dept,
+        categories=categories,
         limit=8,
     )
-    trend = purchases.price_trend(user["id"], since=focus_since, until=focus_until, grain=grain, dept=dept)
-    _remember_dashboard(user, request, range_key, grain, start, end, day, dept)
+    trend = purchases.price_trend(
+        user["id"],
+        since=focus_since,
+        until=focus_until,
+        grain=grain,
+        dept=dept,
+        categories=categories,
+    )
+    _remember_dashboard(user, request, range_key, grain, start, end, day, dept, category_q)
     return templates.TemplateResponse(
         request,
         "home.html",
@@ -531,6 +550,10 @@ def spend_home(
             "end": end or until.isoformat(),
             "day": day,
             "dept": dept,
+            "categories": categories,
+            "category_q": category_q,
+            "category_tail": f"&category={category_q}" if category_q else "",
+            "category_options": purchases.macro_category_options(),
         },
     )
 
@@ -840,6 +863,13 @@ def _request_stores(request: Request, store: str = "") -> list[str]:
     return purchases.normalize_stores(raw)
 
 
+def _request_categories(request: Request, category: str = "") -> list[str]:
+    raw = list(request.query_params.getlist("category"))
+    if category and category not in raw:
+        raw.append(category)
+    return purchases.normalize_categories(raw)
+
+
 @app.get("/purchases", response_class=HTMLResponse)
 def purchases_page(
     request: Request,
@@ -852,6 +882,7 @@ def purchases_page(
     dept: str = "",
     day: str = "",
     store: str = "",
+    category: str = "",
 ):
     user = current_user(request)
     if not user:
@@ -866,8 +897,17 @@ def purchases_page(
     dept = purchases.normalize_dept(dept)
     stores = _request_stores(request, store)
     store_q = purchases.store_query(stores)
+    categories = _request_categories(request, category)
+    category_q = purchases.category_query(categories)
     since, until, range_key = purchases.resolve_window(user["id"], range, start, end)
-    raw_days = purchases.daily_spend(user["id"], since=since, until=until, dept=dept, stores=stores)
+    raw_days = purchases.daily_spend(
+        user["id"],
+        since=since,
+        until=until,
+        dept=dept,
+        stores=stores,
+        categories=categories,
+    )
     days = purchases.bucket_series(raw_days, grain)
     if grain == "daily":
         days = purchases.fill_daily_calendar(days, since, until)
@@ -890,6 +930,7 @@ def purchases_page(
         until=focus_until,
         dept=dept,
         stores=stores,
+        categories=categories,
     )
     first = purchases.shelf_batch(shelf, 0, purchases.SHELF_BATCH)
     _remember_purchases(
@@ -904,6 +945,7 @@ def purchases_page(
         direction,
         dept,
         store_q,
+        category_q,
     )
     return templates.TemplateResponse(
         request,
@@ -927,6 +969,7 @@ def purchases_page(
                 start=start,
                 end=end,
                 store=store_q,
+                category=category_q,
             ),
             "days": days,
             # Only what a tap on a bar reads: over years of daily bars the rest
@@ -960,6 +1003,10 @@ def purchases_page(
             "store_q": store_q,
             "store_tail": f"&store={store_q}" if store_q else "",
             "store_options": purchases.user_stores(user["id"]),
+            "categories": categories,
+            "category_q": category_q,
+            "category_tail": f"&category={category_q}" if category_q else "",
+            "category_options": purchases.macro_category_options(),
             "start": start or (since or ""),
             "end": end or until.isoformat(),
             "day": day,
@@ -979,6 +1026,7 @@ def purchases_rows(
     dept: str = "",
     day: str = "",
     store: str = "",
+    category: str = "",
     offset: int = 0,
     limit: int = purchases.SHELF_BATCH,
 ):
@@ -995,6 +1043,7 @@ def purchases_rows(
     grain = grain if grain in purchases.GRAINS else "daily"
     dept = purchases.normalize_dept(dept)
     stores = _request_stores(request, store)
+    categories = _request_categories(request, category)
     since, until, _range_key = purchases.resolve_window(user["id"], range, start, end)
     focus_since, focus_until = purchases.focus_products_window(day, grain, since, until)
     shelf = purchases.product_shelf(
@@ -1005,6 +1054,7 @@ def purchases_rows(
         until=focus_until,
         dept=dept,
         stores=stores,
+        categories=categories,
     )
     batch = purchases.shelf_batch(shelf, offset, limit)
     return templates.TemplateResponse(

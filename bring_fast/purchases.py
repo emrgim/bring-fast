@@ -560,6 +560,40 @@ def _store_sql(stores: list[str] | None, column: str = "i.retailer") -> tuple[st
     return f" AND {column} IN ({','.join('?' * len(stores))})", list(stores)
 
 
+def normalize_categories(raw: str | list[str] | None) -> list[str]:
+    """Known macro-category slugs, in the order they were asked for."""
+    if not raw:
+        return []
+    parts: list[str] = []
+    if isinstance(raw, (list, tuple)):
+        for item in raw:
+            parts.extend(str(item or "").split(","))
+    else:
+        parts.extend(str(raw).split(","))
+    out: list[str] = []
+    for part in parts:
+        slug = normalize_macro(part.strip())
+        if slug and slug not in out:
+            out.append(slug)
+    return out
+
+
+def category_query(categories: list[str] | None) -> str:
+    return ",".join(categories or [])
+
+
+def _category_sql(categories: list[str] | None, column: str = "pm.macro_category") -> tuple[str, list[str]]:
+    if not categories:
+        return "", []
+    return f" AND {column} IN ({','.join('?' * len(categories))})", list(categories)
+
+
+def macro_category_options() -> list[dict[str, str]]:
+    from bring_fast.macro_categories import MACRO_CATEGORIES, MACRO_LABELS
+
+    return [{"id": slug, "name": MACRO_LABELS[slug]} for slug in MACRO_CATEGORIES]
+
+
 def user_stores(user_id: int) -> list[dict[str, str]]:
     """Retailers this user has invoices from, in the Stores-tab order."""
     con = db.connect()
@@ -692,9 +726,11 @@ def list_products(
     until: date | None = None,
     dept: str = "",
     stores: list[str] | None = None,
+    categories: list[str] | None = None,
     limit: int | None = None,
 ) -> list[dict[str, Any]]:
     stores = normalize_stores(stores)
+    categories = normalize_categories(categories)
     con = db.connect()
     where = "WHERE i.user_id=?"
     args: list[Any] = [user_id]
@@ -704,13 +740,16 @@ def list_products(
     extra, extra_args = _store_sql(stores)
     where += extra
     args.extend(extra_args)
+    cat_sql, cat_args = _category_sql(categories)
+    where += cat_sql
+    args.extend(cat_args)
     sort_key = sort if sort in SORTS else "spend"
     order_sql = ""
     limit_sql = ""
     cap = max(0, int(limit)) if limit else 0
     # Dept is applied in Python, so a SQL LIMIT would undershoot. Likely/frequency
     # are not SQL-sortable. The dashboard's top eight by spend is the cheap case.
-    if cap and sort_key in _SQL_SORT and not normalize_dept(dept):
+    if cap and sort_key in _SQL_SORT and not normalize_dept(dept) and not categories:
         direction_sql = "ASC" if (direction or "desc").lower() == "asc" else "DESC"
         order_sql = f"ORDER BY {_SQL_SORT[sort_key]} {direction_sql}"
         limit_sql = f"LIMIT {cap}"
@@ -837,6 +876,7 @@ def product_shelf(
     until: date | None = None,
     dept: str = "",
     stores: list[str] | None = None,
+    categories: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """The whole shelf in display order, held for half a minute.
 
@@ -845,6 +885,7 @@ def product_shelf(
     the last batch would cost as much as the first.
     """
     stores = normalize_stores(stores)
+    categories = normalize_categories(categories)
     key = (
         user_id,
         sort,
@@ -853,6 +894,7 @@ def product_shelf(
         until.isoformat() if until else "",
         dept or "",
         tuple(stores),
+        tuple(categories),
     )
     now = time.monotonic()
     held = _shelf_memo.get(key)
@@ -861,7 +903,14 @@ def product_shelf(
     for stale in [k for k, (at, _) in _shelf_memo.items() if now - at >= _SHELF_HOLD_S]:
         _shelf_memo.pop(stale, None)
     shelf = list_products(
-        user_id, sort=sort, direction=direction, since=since, until=until, dept=dept, stores=stores
+        user_id,
+        sort=sort,
+        direction=direction,
+        since=since,
+        until=until,
+        dept=dept,
+        stores=stores,
+        categories=categories,
     )
     _shelf_memo[key] = (now, shelf)
     return shelf
@@ -1055,8 +1104,10 @@ def daily_spend(
     until: date | None = None,
     dept: str = "",
     stores: list[str] | None = None,
+    categories: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     stores = normalize_stores(stores)
+    categories = normalize_categories(categories)
     con = db.connect()
     where = "WHERE i.user_id=?"
     args: list[Any] = [user_id]
@@ -1066,6 +1117,9 @@ def daily_spend(
     extra, extra_args = _store_sql(stores)
     where += extra
     args.extend(extra_args)
+    cat_sql, cat_args = _category_sql(categories)
+    where += cat_sql
+    args.extend(cat_args)
     rows = con.execute(
         f"""
         SELECT i.invoice_date, i.retailer, i.store_name, i.invoice_no, it.name, it.line_total,
@@ -1393,14 +1447,19 @@ def price_trend(
     until: date | None = None,
     grain: str = "monthly",
     dept: str = "",
+    categories: list[str] | None = None,
 ) -> dict[str, Any]:
     """Mean first→last unit-price change, plus a time series of that same index."""
+    categories = normalize_categories(categories)
     con = db.connect()
     where = "WHERE i.user_id=?"
     args: list[Any] = [user_id]
     date_sql, date_args = _date_bounds(since, until)
     where += date_sql
     args.extend(date_args)
+    cat_sql, cat_args = _category_sql(categories)
+    where += cat_sql
+    args.extend(cat_args)
     rows = con.execute(
         f"""
         SELECT it.product_key, i.invoice_date, it.qty, it.unit_price, it.line_total, it.name,
@@ -1652,11 +1711,20 @@ def forecast_products(
     since: str | None = None,
     until: date | None = None,
     dept: str = "",
+    categories: list[str] | None = None,
     today: date | None = None,
 ) -> list[dict[str, Any]]:
     today = today or date.today()
     until = until or today
-    products = list_products(user_id, sort="frequency", direction="desc", since=since, until=until, dept=dept)
+    products = list_products(
+        user_id,
+        sort="frequency",
+        direction="desc",
+        since=since,
+        until=until,
+        dept=dept,
+        categories=categories,
+    )
     typical = typical_unit_prices(user_id, since=since, until=until)
     out = []
     for p in products:
@@ -1764,12 +1832,20 @@ def ranked_products(
     sort: str = "spend",
     limit: int = 10,
     dept: str = "",
+    categories: list[str] | None = None,
     range_key: str = "all",
     today: date | None = None,
 ) -> list[dict[str, Any]]:
     today = today or date.today()
     since, until, _ = resolve_window(user_id, range_key, end=today.isoformat())
-    rows = forecast_products(user_id, since=since, until=until, dept=dept, today=today)
+    rows = forecast_products(
+        user_id,
+        since=since,
+        until=until,
+        dept=dept,
+        categories=categories,
+        today=today,
+    )
     if sort == "unit_price":
         rows = [p for p in rows if p.get("typical_unit_aed") is not None]
         rows.sort(key=lambda p: float(p["typical_unit_aed"]), reverse=True)

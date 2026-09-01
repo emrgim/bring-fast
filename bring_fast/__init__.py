@@ -1,2 +1,2 @@
 """Bring Fast."""
-__version__ = "1.10.27"
+__version__ = "1.10.29"
