@@ -2,7 +2,7 @@
 {% import "_shelf_shapes.html" as shapes with context %}
 {% import "_filters.html" as filt with context %}
 {% block under_nav %}
-{{ filt.bar("/dashboard") }}
+{{ filt.bar("/dashboard", category_q=category_q, category_tail=category_tail, categories=categories) }}
 {% endblock %}
 {% block body %}
 <div class="spend-pin{% if day %} is-focus{% endif %}" id="spend-pin" aria-hidden="true">
@@ -17,7 +17,7 @@
     </div>
     <div class="grain">
       {% for key, label in [('daily','Daily'),('weekly','Weekly'),('monthly','Monthly'),('yearly','Yearly')] %}
-      <a class="{% if grain==key %}on{% endif %}" href="/dashboard?range={{ range }}&grain={{ key }}{% if dept %}&dept={{ dept }}{% endif %}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}">{{ label }}</a>
+      <a class="{% if grain==key %}on{% endif %}" href="/dashboard?range={{ range }}&grain={{ key }}{% if dept %}&dept={{ dept }}{% endif %}{{ category_tail }}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}">{{ label }}</a>
       {% endfor %}
     </div>
   </div>
@@ -32,7 +32,7 @@
   <div class="bars-scroller">
     <div class="bars" id="spend-bars">
       {% for d in days %}
-      <a class="bar {% if grain!='daily' %}wide{% endif %} {% if d.selected %}on{% endif %}" href="/dashboard?range={{ range }}&grain={{ grain }}{% if dept %}&dept={{ dept }}{% endif %}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}{% if not d.selected %}&day={{ d.date }}{% endif %}" title="{{ d.label }} · AED {{ '%.2f'|format(d.spend) }}">
+      <a class="bar {% if grain!='daily' %}wide{% endif %} {% if d.selected %}on{% endif %}" href="/dashboard?range={{ range }}&grain={{ grain }}{% if dept %}&dept={{ dept }}{% endif %}{{ category_tail }}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}{% if not d.selected %}&day={{ d.date }}{% endif %}" title="{{ d.label }} · AED {{ '%.2f'|format(d.spend) }}">
         <i style="height:{{ d.pct }}%"></i>
       </a>
       {% endfor %}

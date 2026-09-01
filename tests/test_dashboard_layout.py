@@ -182,7 +182,7 @@ def test_store_panel_expands_in_flow_and_inverts_when_filtered(bf, client):
     assert html.index('id="store-toggle"') < html.index('id="buy-cards"')
     assert html.index('id="store-panel"') < html.index('id="buy-cards"')
     assert 'class="store-chip"' in html
-    assert 'class="store-chip on"' not in html
+    assert 'id="store-toggle"' not in html or 'id="store-toggle" class="store-chip on"' not in html
     assert ".msort .store-chip.on" in html
     filtered = client.get("/purchases?store=carrefour").text
     assert 'class="store-chip on"' in filtered

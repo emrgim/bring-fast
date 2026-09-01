@@ -586,6 +586,38 @@ def store_query(stores: list[str] | None) -> str:
     return ",".join(stores or [])
 
 
+_VALID_MACROS = frozenset(MACRO_CATEGORIES)
+
+
+def normalize_categories(raw: str | list[str] | None) -> list[str]:
+    """Known macro slugs, in the order they were asked for. Unknown values drop."""
+    if not raw:
+        return []
+    parts: list[str] = []
+    if isinstance(raw, (list, tuple)):
+        for item in raw:
+            parts.extend(str(item or "").split(","))
+    else:
+        parts.extend(str(raw).split(","))
+    out: list[str] = []
+    for part in parts:
+        slug = normalize_macro(part.strip())
+        if slug and slug in _VALID_MACROS and slug not in out:
+            out.append(slug)
+    return out
+
+
+def category_query(categories: list[str] | None) -> str:
+    return ",".join(categories or [])
+
+
+def matches_categories(categories: list[str] | None, macro: str | None) -> bool:
+    if not categories:
+        return True
+    slug = normalize_macro(macro)
+    return slug in categories
+
+
 def _store_sql(stores: list[str] | None, column: str = "i.retailer") -> tuple[str, list[str]]:
     if not stores:
         return "", []
@@ -724,9 +756,11 @@ def list_products(
     until: date | None = None,
     dept: str = "",
     stores: list[str] | None = None,
+    categories: list[str] | None = None,
     limit: int | None = None,
 ) -> list[dict[str, Any]]:
     stores = normalize_stores(stores)
+    categories = normalize_categories(categories)
     con = db.connect()
     where = "WHERE i.user_id=?"
     args: list[Any] = [user_id]
@@ -742,7 +776,7 @@ def list_products(
     cap = max(0, int(limit)) if limit else 0
     # Dept is applied in Python, so a SQL LIMIT would undershoot. Likely/frequency
     # are not SQL-sortable. The dashboard's top eight by spend is the cheap case.
-    if cap and sort_key in _SQL_SORT and not normalize_dept(dept):
+    if cap and sort_key in _SQL_SORT and not normalize_dept(dept) and not categories:
         direction_sql = "ASC" if (direction or "desc").lower() == "asc" else "DESC"
         order_sql = f"ORDER BY {_SQL_SORT[sort_key]} {direction_sql}"
         limit_sql = f"LIMIT {cap}"
@@ -788,6 +822,8 @@ def list_products(
         if not matches_dept(dept, receipt, official):
             continue
         macro = normalize_macro(r["macro_category"])
+        if not matches_categories(categories, macro):
+            continue
         out.append(
             {
                 "key": r["product_key"],
@@ -869,6 +905,7 @@ def product_shelf(
     until: date | None = None,
     dept: str = "",
     stores: list[str] | None = None,
+    categories: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """The whole shelf in display order, held for half a minute.
 
@@ -877,6 +914,7 @@ def product_shelf(
     the last batch would cost as much as the first.
     """
     stores = normalize_stores(stores)
+    categories = normalize_categories(categories)
     key = (
         user_id,
         sort,
@@ -885,6 +923,7 @@ def product_shelf(
         until.isoformat() if until else "",
         dept or "",
         tuple(stores),
+        tuple(categories),
     )
     now = time.monotonic()
     held = _shelf_memo.get(key)
@@ -893,7 +932,14 @@ def product_shelf(
     for stale in [k for k, (at, _) in _shelf_memo.items() if now - at >= _SHELF_HOLD_S]:
         _shelf_memo.pop(stale, None)
     shelf = list_products(
-        user_id, sort=sort, direction=direction, since=since, until=until, dept=dept, stores=stores
+        user_id,
+        sort=sort,
+        direction=direction,
+        since=since,
+        until=until,
+        dept=dept,
+        stores=stores,
+        categories=categories,
     )
     _shelf_memo[key] = (now, shelf)
     return shelf
@@ -1087,8 +1133,10 @@ def daily_spend(
     until: date | None = None,
     dept: str = "",
     stores: list[str] | None = None,
+    categories: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     stores = normalize_stores(stores)
+    categories = normalize_categories(categories)
     con = db.connect()
     where = "WHERE i.user_id=?"
     args: list[Any] = [user_id]
@@ -1101,7 +1149,8 @@ def daily_spend(
     rows = con.execute(
         f"""
         SELECT i.invoice_date, i.retailer, i.store_name, i.invoice_no, it.name, it.line_total,
-               NULLIF(pm.official_name,'') AS official_name
+               NULLIF(pm.official_name,'') AS official_name,
+               NULLIF(pm.macro_category,'') AS macro_category
         FROM invoices i
         JOIN invoice_items it ON it.invoice_id = i.id
         LEFT JOIN product_meta pm ON pm.product_key = it.product_key
@@ -1115,6 +1164,8 @@ def daily_spend(
     seen_inv: set[tuple[str, str, str]] = set()
     for r in rows:
         if not matches_dept(dept, r["name"] or "", r["official_name"] or ""):
+            continue
+        if not matches_categories(categories, r["macro_category"]):
             continue
         day = (r["invoice_date"] or "")[:10]
         if not day:
@@ -1425,8 +1476,10 @@ def price_trend(
     until: date | None = None,
     grain: str = "monthly",
     dept: str = "",
+    categories: list[str] | None = None,
 ) -> dict[str, Any]:
     """Mean first→last unit-price change, plus a time series of that same index."""
+    categories = normalize_categories(categories)
     con = db.connect()
     where = "WHERE i.user_id=?"
     args: list[Any] = [user_id]
@@ -1436,7 +1489,8 @@ def price_trend(
     rows = con.execute(
         f"""
         SELECT it.product_key, i.invoice_date, it.qty, it.unit_price, it.line_total, it.name,
-               NULLIF(pm.official_name,'') AS official_name
+               NULLIF(pm.official_name,'') AS official_name,
+               NULLIF(pm.macro_category,'') AS macro_category
         FROM invoice_items it
         JOIN invoices i ON i.id = it.invoice_id
         LEFT JOIN product_meta pm ON pm.product_key = it.product_key
@@ -1449,6 +1503,8 @@ def price_trend(
     by_prod: dict[str, list[tuple[str, float]]] = {}
     for r in rows:
         if not matches_dept(dept, r["name"] or "", r["official_name"] or ""):
+            continue
+        if not matches_categories(categories, r["macro_category"]):
             continue
         price = _unit_price(dict(r))
         day = (r["invoice_date"] or "")[:10]
@@ -1685,11 +1741,20 @@ def forecast_products(
     since: str | None = None,
     until: date | None = None,
     dept: str = "",
+    categories: list[str] | None = None,
     today: date | None = None,
 ) -> list[dict[str, Any]]:
     today = today or date.today()
     until = until or today
-    products = list_products(user_id, sort="frequency", direction="desc", since=since, until=until, dept=dept)
+    products = list_products(
+        user_id,
+        sort="frequency",
+        direction="desc",
+        since=since,
+        until=until,
+        dept=dept,
+        categories=categories,
+    )
     typical = typical_unit_prices(user_id, since=since, until=until)
     out = []
     for p in products:
@@ -1797,16 +1862,20 @@ def ranked_products(
     sort: str = "spend",
     limit: int = 10,
     dept: str = "",
-    category: str = "",
+    categories: list[str] | None = None,
     range_key: str = "all",
     today: date | None = None,
 ) -> list[dict[str, Any]]:
     today = today or date.today()
     since, until, _ = resolve_window(user_id, range_key, end=today.isoformat())
-    rows = forecast_products(user_id, since=since, until=until, dept=dept, today=today)
-    cat = normalize_macro(category)
-    if cat:
-        rows = [p for p in rows if normalize_macro(p.get("macro_category")) == cat]
+    rows = forecast_products(
+        user_id,
+        since=since,
+        until=until,
+        dept=dept,
+        categories=categories,
+        today=today,
+    )
     if sort == "unit_price":
         rows = [p for p in rows if p.get("typical_unit_aed") is not None]
         rows.sort(key=lambda p: float(p["typical_unit_aed"]), reverse=True)
@@ -1869,13 +1938,14 @@ def spend_report(
     range_key: str = "1m",
     grain: str = "",
     dept: str = "",
+    categories: list[str] | None = None,
     today: date | None = None,
 ) -> dict[str, Any]:
     today = today or date.today()
     since, until, key = resolve_window(user_id, range_key, end=today.isoformat())
     if not grain:
         grain = "weekly" if key in ("1w", "2w", "1m") else "monthly"
-    days = daily_spend(user_id, since=since, until=until, dept=dept)
+    days = daily_spend(user_id, since=since, until=until, dept=dept, categories=categories)
     total = round(sum(d["spend"] for d in days), 2)
     if normalize_dept(dept):
         invoices = sum(int(d.get("count") or 0) for d in days)
@@ -1886,8 +1956,14 @@ def spend_report(
     span_days = max(1, (until - span_start).days + 1)
     last_week_since, last_week_until, _ = window("1w", end=until.isoformat())
     last_month_since, last_month_until, _ = window("1m", end=until.isoformat())
-    last_week = round(sum(d["spend"] for d in daily_spend(user_id, since=last_week_since, until=last_week_until, dept=dept)), 2)
-    last_month = round(sum(d["spend"] for d in daily_spend(user_id, since=last_month_since, until=last_month_until, dept=dept)), 2)
+    last_week = round(
+        sum(d["spend"] for d in daily_spend(user_id, since=last_week_since, until=last_week_until, dept=dept, categories=categories)),
+        2,
+    )
+    last_month = round(
+        sum(d["spend"] for d in daily_spend(user_id, since=last_month_since, until=last_month_until, dept=dept, categories=categories)),
+        2,
+    )
     by_store: dict[str, float] = {}
     for d in days:
         for inv in d.get("invoices") or []:
