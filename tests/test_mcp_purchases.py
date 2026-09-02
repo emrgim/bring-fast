@@ -47,7 +47,7 @@ def test_spend_report_week_and_month(bf):
     assert out["avg_per_week"] > 0
     stores = {r["store"]: r["spend"] for r in out["by_store"]}
     assert stores["Carrefour Meaisem"] == 12.0
-    tool = json_call(bf, user, "bf_spend", {"range": "1m"})
+    tool = json_call(bf, user, "bf_spend", {"range": "1m", "today": "2026-08-24"})
     assert tool["success"] is True
     assert tool["total"] == 20.5
 

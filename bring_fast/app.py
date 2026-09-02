@@ -2571,6 +2571,8 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
         return _compare(user, args)
     if name == "bf_spend":
         raw_range = str(args.get("range") or args.get("window") or "last_month")
+        today_raw = str(args.get("today") or args.get("end") or "").strip()
+        today = purchases._parse_day(today_raw) if today_raw else None
         return _ok(
             **purchases.spend_report(
                 uid,
@@ -2580,6 +2582,7 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
                 categories=purchases.normalize_categories(
                     args.get("category") or args.get("categories") or ""
                 ),
+                today=today,
             )
         )
     if name == "bf_orders":
