@@ -5,10 +5,7 @@
 <div class="filters">
   <div class="msort-wrap" id="category-wrap" data-filter-field="category">
     <div class="chip-row" aria-label="Department">
-      <button type="button" class="store-chip{% if categories or not dept %} on{% endif %}{% if categories %} is-filter{% endif %}" id="category-toggle" data-filter-toggle aria-expanded="false" aria-controls="category-panel">All{% if categories %} · {{ categories|length }}{% endif %}</button>
-      {% for key, label in [('Edible','Edible'),('Drinks','Drinks')] %}
-      <a class="{% if dept==key %}on{% endif %}" href="{{ action }}?{{ extra }}range={{ range }}&grain={{ grain }}{% if key %}&dept={{ key }}{% endif %}{{ store_tail }}{{ category_tail }}">{{ label }}</a>
-      {% endfor %}
+      <button type="button" class="store-chip on{% if categories %} is-filter{% endif %}" id="category-toggle" data-filter-toggle aria-expanded="false" aria-controls="category-panel">All{% if categories %} · {{ categories|length }}{% endif %}</button>
     </div>
     <form class="store-panel" id="category-panel" data-filter-panel method="get" action="{{ panel_action }}" hidden data-current="{{ category_q }}" aria-label="Categories">
       {% if sort %}

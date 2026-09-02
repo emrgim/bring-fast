@@ -145,7 +145,6 @@ def test_full_cycle_home_buys_stores_home_buys(bf, client):
     assert q.get("range") == "3m"
     assert q.get("grain") == "weekly"
     assert ">Likely<" in buys.text
-    assert ">Drinks<" in buys.text
 
     stores = client.get("/stores")
     assert stores.status_code == 200
@@ -333,7 +332,6 @@ def test_buys_store_and_dept_survive_home_and_stores(bf, client):
     assert q.get("dept") == "Edible"
     assert "carrefour" in dest
     assert "mmi" in dest
-    assert ">Edible<" in buys.text
     assert "Store ·" in buys.text
     assert home.status_code == 200
 
@@ -345,7 +343,6 @@ def test_department_chosen_on_home_stays_off_buys(bf, client):
     assert _q(dest).get("dept") != "Drinks"
     dest, home = _tap(client, "/dashboard")
     assert _q(dest).get("dept") == "Drinks"
-    assert 'class="on" href="/dashboard?range=1y&grain=yearly&dept=Drinks"' in home.text
     client.get("/dashboard", params={"range": "1y", "grain": "yearly"})
     dest, _buys = _tap(client, "/purchases")
     dest, home = _tap(client, "/dashboard")
@@ -395,7 +392,7 @@ def test_home_filter_bar_does_not_drift_across_twelve_tab_switches(bf, client):
 
     dest, home = _tap(client, "/dashboard")
     home_first = _filter_view(home.text)
-    assert home_first["dept_chips"] == ["All", "Edible", "Drinks"]
+    assert home_first["dept_chips"] == ["All"]
     assert home_first["range_chips"] == ["1w", "2w", "1m", "3m", "1y", "2y", "3y", "All"]
     assert home_first["dept_on"] == ["All"]
     assert home_first["range_on"] == ["1m"]
@@ -430,7 +427,7 @@ def test_chosen_filters_do_not_drift_across_twelve_switches(bf, client):
 
     dest, home = _tap(client, "/dashboard")
     home_first = _filter_view(home.text)
-    assert home_first["dept_on"] == ["Drinks"]
+    assert home_first["dept_on"] == ["All"]
     assert home_first["range_on"] == ["1y"]
     assert home_first["grain_on"] == ["Yearly"]
     dest_b, buys = _tap(client, "/purchases")
@@ -462,7 +459,7 @@ def test_home_and_buys_show_the_same_filter_chips(bf, client):
     home_view = _filter_view(home.text)
     buys_view = _filter_view(buys.text)
     home2_view = _filter_view(home2.text)
-    assert home_view["dept_chips"] == buys_view["dept_chips"] == ["All", "Edible", "Drinks"]
+    assert home_view["dept_chips"] == buys_view["dept_chips"] == ["All"]
     assert home_view["range_chips"] == buys_view["range_chips"] == [
         "1w",
         "2w",
@@ -508,7 +505,7 @@ def test_two_or_three_switches_do_not_apply_the_other_tabs_filters(bf, client):
     buys_first = _filter_view(buys.text)
     assert home_first["range_on"] == ["1y"]
     assert home_first["grain_on"] == ["Yearly"]
-    assert home_first["dept_on"] == ["Drinks"]
+    assert home_first["dept_on"] == ["All"]
     assert buys_first["range_on"] == ["3m"]
     assert buys_first["grain_on"] == ["Weekly"]
     assert buys_first["dept_on"] == ["All"]
