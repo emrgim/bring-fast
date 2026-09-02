@@ -392,7 +392,7 @@ def test_home_filter_bar_does_not_drift_across_twelve_tab_switches(bf, client):
 
     dest, home = _tap(client, "/dashboard")
     home_first = _filter_view(home.text)
-    assert home_first["dept_chips"] == ["All"]
+    assert home_first["dept_chips"] == ["All", "Today"]
     assert home_first["range_chips"] == ["1w", "2w", "1m", "3m", "1y", "2y", "3y", "All"]
     assert home_first["dept_on"] == ["All"]
     assert home_first["range_on"] == ["1m"]
@@ -459,7 +459,8 @@ def test_home_and_buys_show_the_same_filter_chips(bf, client):
     home_view = _filter_view(home.text)
     buys_view = _filter_view(buys.text)
     home2_view = _filter_view(home2.text)
-    assert home_view["dept_chips"] == buys_view["dept_chips"] == ["All"]
+    assert home_view["dept_chips"] == home2_view["dept_chips"] == ["All", "Today"]
+    assert buys_view["dept_chips"] == ["All"]
     assert home_view["range_chips"] == buys_view["range_chips"] == [
         "1w",
         "2w",
@@ -470,7 +471,6 @@ def test_home_and_buys_show_the_same_filter_chips(bf, client):
         "3y",
         "All",
     ]
-    assert home_view["dept_chips"] == home2_view["dept_chips"]
     assert home_view["range_chips"] == home2_view["range_chips"]
 
 

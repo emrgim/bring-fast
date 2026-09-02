@@ -6,6 +6,7 @@ import os
 import re
 import time
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
 
@@ -718,6 +719,177 @@ def since_date(range_key: str) -> str | None:
     if not days:
         return None
     return (date.today() - timedelta(days=days - 1)).isoformat()
+
+
+DUBAI_TZ = ZoneInfo("Asia/Dubai")
+
+
+def dubai_today(*, end: str = "") -> date:
+    """Calendar today in Asia/Dubai, or ?end= for deterministic tests."""
+    parsed = _parse_day(end)
+    if parsed:
+        return parsed
+    return datetime.now(DUBAI_TZ).date()
+
+
+def day_spend(
+    user_id: int,
+    day: date,
+    dept: str = "",
+    categories: list[str] | None = None,
+) -> float:
+    """Total spend on one calendar day (Asia/Dubai date string on invoices)."""
+    iso = day.isoformat()
+    rows = daily_spend(user_id, since=iso, until=day, dept=dept, categories=categories)
+    return round(sum(d["spend"] for d in rows), 2)
+
+
+def _product_price_series(user_id: int, product_key: str) -> list[dict[str, Any]]:
+    con = db.connect()
+    rows = con.execute(
+        """
+        SELECT i.invoice_date, it.unit_price, it.qty, it.line_total
+        FROM invoice_items it
+        JOIN invoices i ON i.id = it.invoice_id
+        WHERE i.user_id=? AND it.product_key=?
+        ORDER BY i.invoice_date ASC, i.id ASC
+        """,
+        (user_id, product_key),
+    ).fetchall()
+    con.close()
+    series: list[dict[str, Any]] = []
+    for r in rows:
+        price = _unit_price(dict(r))
+        day = (r["invoice_date"] or "")[:10]
+        if not day or price is None:
+            continue
+        series.append({"date": day, "price": round(price, 2)})
+    return series
+
+
+def _price_vs_previous(series: list[dict[str, Any]], day_iso: str, current: float) -> dict[str, Any]:
+    prior = [p for p in series if p["date"] < day_iso]
+    if not prior:
+        return {"change_pct": None, "label": "new"}
+    prev = prior[-1]["price"]
+    if prev in (None, 0):
+        return {"change_pct": None, "label": "new"}
+    pct = round(100.0 * (current - prev) / prev, 1)
+    sign = "+" if pct > 0 else ""
+    return {"change_pct": pct, "label": f"{sign}{pct:.1f}%"}
+
+
+def sparkline_svg(series: list[dict[str, Any]], *, width: int = 88, height: int = 28) -> str:
+    if not series:
+        return ""
+    prices = [p["price"] for p in series]
+    lo, hi = min(prices), max(prices)
+    if hi <= lo:
+        hi = lo + 1
+    span = hi - lo
+    pad = 2
+    w, h = width, height
+    inner_w = w - 2 * pad
+    inner_h = h - 2 * pad
+    pts = []
+    n = len(prices)
+    for i, price in enumerate(prices):
+        x = pad + inner_w * (i / max(n - 1, 1))
+        y = pad + inner_h * (1 - (price - lo) / span)
+        pts.append(f"{x:.1f},{y:.1f}")
+    line = " ".join(pts)
+    return (
+        f'<svg viewBox="0 0 {w} {h}" class="spark" preserveAspectRatio="none" aria-hidden="true">'
+        f'<polyline fill="none" stroke="currentColor" stroke-width="1.5" points="{line}"/>'
+        f"</svg>"
+    )
+
+
+def list_today_products(
+    user_id: int,
+    day: date,
+    dept: str = "",
+    categories: list[str] | None = None,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    """Products bought on one day, with unit price, sparkline, and % vs prior buy."""
+    day_iso = day.isoformat()
+    categories = normalize_categories(categories)
+    con = db.connect()
+    rows = con.execute(
+        """
+        SELECT it.product_key,
+               MAX(it.name) AS receipt_name,
+               MAX(NULLIF(pm.official_name,'')) AS official_name,
+               MAX(it.barcode) AS barcode,
+               MAX(COALESCE(NULLIF(it.image_url,''), NULLIF(pm.image_url,''))) AS image_url,
+               MAX(NULLIF(pm.macro_category,'')) AS macro_category,
+               SUM(it.line_total) AS spend_today,
+               SUM(it.qty) AS qty_today,
+               MAX(i.id) AS last_invoice_id
+        FROM invoice_items it
+        JOIN invoices i ON i.id = it.invoice_id
+        LEFT JOIN product_meta pm ON pm.product_key = it.product_key
+        WHERE i.user_id=? AND i.invoice_date=?
+        GROUP BY it.product_key
+        ORDER BY spend_today DESC
+        """,
+        (user_id, day_iso),
+    ).fetchall()
+    con.close()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        receipt = r["receipt_name"] or ""
+        official = r["official_name"] or ""
+        display = official or receipt
+        dept_label = classify_dept(receipt, official)
+        if not matches_dept(dept, receipt, official):
+            continue
+        macro = normalize_macro(r["macro_category"])
+        if not matches_categories(categories, macro):
+            continue
+        key = r["product_key"]
+        con = db.connect()
+        last_line = con.execute(
+            """
+            SELECT it.unit_price, it.qty, it.line_total
+            FROM invoice_items it
+            JOIN invoices i ON i.id = it.invoice_id
+            WHERE i.user_id=? AND it.product_key=? AND i.invoice_date=?
+            ORDER BY i.id DESC
+            LIMIT 1
+            """,
+            (user_id, key, day_iso),
+        ).fetchone()
+        con.close()
+        unit = _unit_price(dict(last_line)) if last_line else None
+        if unit is None:
+            continue
+        series = _product_price_series(user_id, key)
+        change = _price_vs_previous(series, day_iso, unit)
+        out.append(
+            {
+                "key": key,
+                "name": display,
+                "receipt_name": receipt,
+                "official_name": official,
+                "barcode": r["barcode"] or "",
+                "image_url": r["image_url"] or "",
+                "unit_price": round(unit, 2),
+                "spend_total": float(r["spend_today"] or 0),
+                "qty_total": float(r["qty_today"] or 0),
+                "times_bought": 1,
+                "price_change_pct": change["change_pct"],
+                "price_change_label": change["label"],
+                "sparkline_svg": sparkline_svg(series),
+                "dept": dept_label,
+                "macro_category": macro,
+            }
+        )
+    out.sort(key=lambda p: p["spend_total"], reverse=True)
+    if limit:
+        out = out[: max(0, int(limit))]
+    return out
 
 
 def _unit_price(row: dict[str, Any]) -> float | None:

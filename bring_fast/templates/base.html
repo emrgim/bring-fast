@@ -214,7 +214,7 @@
     }
     nav {
       display:flex; justify-content:space-between; align-items:center;
-      margin:0; padding:10px 14px;
+      margin:0; padding:6px 12px;
       background:var(--bg);
       border-bottom:1px dashed var(--line);
     }
@@ -227,15 +227,18 @@
        way out of the account once the page has moved, including on a phone
        Buys scroll where the spend pin also sticks under this header. */
     nav.is-compact .brand span, nav.is-compact .user .who { display:none; }
-    nav.is-compact .mark { width:32px; height:32px; font-size:13px; }
-    .brand { display:flex; align-items:center; gap:12px; color:var(--ink); text-decoration:none; }
+    nav.is-compact .mark { width:26px; height:26px; font-size:12px; }
+    .brand { display:flex; align-items:center; gap:8px; color:var(--ink); text-decoration:none; }
     .mark {
-      width:42px; height:42px; border-radius:0;
+      width:34px; height:34px; border-radius:0;
       background:var(--fill); color:var(--on-fill);
       font-weight:700; display:grid; place-items:center;
-      letter-spacing:-1px; font-size:15px;
+      letter-spacing:-1px; font-size:13px;
     }
-    .brand b { font-size:18px; font-weight:700; letter-spacing:.02em; text-transform:uppercase; }
+    .brand b { font-size:16px; font-weight:700; letter-spacing:.02em; text-transform:uppercase; }
+    nav.topnav .brand.is-today b {
+      animation: range-tick 1.8s steps(2, end) infinite;
+    }
     .brand span { display:block; color:var(--muted); font-size:10px; letter-spacing:.16em; text-transform:uppercase; }
     h1 { font-size:clamp(26px,5vw,36px); line-height:1.1; margin:0 0 12px; font-weight:700; text-transform:uppercase; letter-spacing:.02em; }
     h1 em { font-style:normal; text-decoration:underline; text-underline-offset:.12em; }
@@ -666,9 +669,17 @@
     }
     @media (prefers-reduced-motion: reduce) {
       .filters form.on input[type=date],
-      .chip-row .store-chip.is-filter { animation:none; }
+      .chip-row .store-chip.is-filter,
+      nav.topnav .brand.is-today b { animation:none; }
     }
     .chart { width:100%; height:auto; min-height:180px; display:block; color:var(--ink); }
+    .mcard-today .today-row { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:8px; }
+    .mcard-today .spark { width:88px; height:28px; flex:0 0 88px; color:var(--ink); display:block; }
+    .mcard-today .today-price { flex:0 0 auto; text-align:right; font-weight:700; font-size:15px; line-height:1.25; white-space:nowrap; }
+    .mcard-today .today-price small { display:block; font-weight:600; color:var(--muted); font-size:11px; }
+    .mcard-today .today-price small.price-up { color:var(--ink); }
+    .mcard-today .today-price small.price-down { color:var(--muted); }
+    .desk-table .spark { width:72px; height:24px; color:var(--ink); vertical-align:middle; }
     .buy { display:grid; grid-template-columns: 1fr auto; gap:4px 12px; padding:12px 0; border-top:1px dashed var(--line); }
     .buy:first-child { border-top:0; }
     .buy .when { font-weight:700; }
@@ -723,7 +734,7 @@
       .app-head { margin:0 -12px 8px; }
       .safe-mask-top { flex:0 0 max(env(safe-area-inset-top, 0px), var(--vvt, 0px)); }
       nav.topnav {
-        margin:0; padding:8px 12px;
+        margin:0; padding:4px 12px;
       }
       .app-head .filters { margin:0; padding:8px 0; }
       nav.topnav .tabs { display:none !important; }
@@ -735,8 +746,8 @@
       nav.topnav .user .who { display:none; }
       nav.topnav .nav-right { gap:10px; flex-shrink:0; }
       nav.topnav .brand span { display:none; }
-      nav.topnav .brand b { font-size:16px; }
-      nav.topnav .mark { width:34px; height:34px; font-size:12px; }
+      nav.topnav .brand b { font-size:15px; }
+      nav.topnav .mark { width:28px; height:28px; font-size:11px; }
       h1 { font-size:22px; margin-bottom:8px; }
       .purchases-board h1 { font-size:20px; }
       .lead { font-size:14px; margin-bottom:14px; }
@@ -1019,9 +1030,9 @@
   <div class="wrap">
     <header class="app-head">
     <nav class="topnav">
-      <a class="brand" href="/">
+      <a class="brand{% if today_mode %} is-today{% endif %}" href="/">
         <div class="mark">BF</div>
-        <div><b>Bring Fast</b><span>Agent grocery</span></div>
+        <div><b>{% if today_mode %}Today{% else %}Bring Fast{% endif %}</b><span>Agent grocery</span></div>
       </a>
       {% if user %}
         <div class="nav-right">

@@ -2,37 +2,42 @@
 {% import "_shelf_shapes.html" as shapes with context %}
 {% import "_filters.html" as filt with context %}
 {% block under_nav %}
-{{ filt.bar("/dashboard", category_q=category_q, category_tail=category_tail, categories=categories) }}
+{{ filt.bar("/dashboard", category_q=category_q, category_tail=category_tail, categories=categories, today_href=today_href, today_mode=today_mode) }}
 {% endblock %}
 {% block body %}
 <div class="spend-pin{% if day %} is-focus{% endif %}" id="spend-pin" aria-hidden="true">
   <div class="pin-in">
-    <span class="pin-avg">{{ period_word }} avg <b>AED {{ '%.2f'|format(period_avg) }}</b></span>
+    <span class="pin-avg">{% if today_mode %}Today{% else %}{{ period_word }}{% endif %} avg <b>AED {{ '%.2f'|format(period_avg) }}</b></span>
   </div>
 </div>
 <div class="dash{% if day %} is-focus{% endif %}">
   <div class="dash-top">
     <div>
-      <h1>Your <em>spend</em></h1>
+      <h1>{% if today_mode %}Today{% else %}Your <em>spend</em>{% endif %}</h1>
     </div>
     <div class="grain">
       {% for key, label in [('daily','Daily'),('weekly','Weekly'),('monthly','Monthly'),('yearly','Yearly')] %}
-      <a class="{% if grain==key %}on{% endif %}" href="/dashboard?range={{ range }}&grain={{ key }}{% if dept %}&dept={{ dept }}{% endif %}{{ category_tail }}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}">{{ label }}</a>
+      <a class="{% if grain==key %}on{% endif %}" href="/dashboard?range={{ range }}&grain={{ key }}{% if dept %}&dept={{ dept }}{% endif %}{{ category_tail }}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}{{ today_tail }}">{{ label }}</a>
       {% endfor %}
     </div>
   </div>
   <div class="dash-avg" id="spend-avg">
+    {% if today_mode %}
+    <span class="who">Total today · {{ dubai_day }}</span>
+    <b class="delta">AED {{ '%.2f'|format(period_avg) }}</b>
+    {% else %}
     <span class="who">{{ period_word }} average this period</span>
     <b class="delta">AED {{ '%.2f'|format(period_avg) }}</b>
     <span class="who fine">
       AED {{ '%.2f'|format(dash_spend) }} ÷ {{ periods_text }} {{ period_unit }}
       · {{ range_start }} → {{ range_end }}
     </span>
+    {% endif %}
   </div>
   <div class="bars-scroller">
     <div class="bars" id="spend-bars">
       {% for d in days %}
-      <a class="bar {% if grain!='daily' %}wide{% endif %} {% if d.selected %}on{% endif %}" href="/dashboard?range={{ range }}&grain={{ grain }}{% if dept %}&dept={{ dept }}{% endif %}{{ category_tail }}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}{% if not d.selected %}&day={{ d.date }}{% endif %}" title="{{ d.label }} · AED {{ '%.2f'|format(d.spend) }}">
+      <a class="bar {% if grain!='daily' %}wide{% endif %} {% if d.selected %}on{% endif %}" href="/dashboard?range={{ range }}&grain={{ grain }}{% if dept %}&dept={{ dept }}{% endif %}{{ category_tail }}{% if range=='custom' %}&start={{ start }}&end={{ end }}{% endif %}{{ today_tail }}{% if not d.selected %}&day={{ d.date }}{% endif %}" title="{{ d.label }} · AED {{ '%.2f'|format(d.spend) }}">
         <i style="height:{{ d.pct }}%"></i>
       </a>
       {% endfor %}
@@ -57,16 +62,37 @@
 {% endif %}
 
 <div class="mlist">
+  {% if today_mode %}
+  {% for p in products %}{{ shapes.today_card(p) }}{% else %}
+  <p class="off">Nothing bought today.</p>
+  {% endfor %}
+  {% else %}
   {% for p in products %}{{ shapes.card(p) }}{% else %}
   <p class="off">No invoices yet.</p>
   {% endfor %}
+  {% endif %}
 </div>
 <div class="card table-wrap desk-table">
   <table class="data">
     <thead>
-      <tr><th></th><th>Product</th><th>Times</th><th>Spent</th></tr>
+      <tr>{% if today_mode %}<th></th><th>Product</th><th>Price</th><th>Trend</th><th>Change</th>{% else %}<th></th><th>Product</th><th>Times</th><th>Spent</th>{% endif %}</tr>
     </thead>
     <tbody>
+    {% if today_mode %}
+    {% for p in products %}
+      <tr class="rowlink" onclick="location.href='/purchases/{{ p.key }}'">
+        <td>
+          {% if p.image_url %}<img class="thumb" src="{{ p.image_url }}" alt="" width="48" height="48" loading="eager" decoding="async" referrerpolicy="no-referrer"/>{% else %}<div class="thumb empty">{{ p.name[:1] }}</div>{% endif %}
+        </td>
+        <td>{{ p.name }}</td>
+        <td>AED {{ '%.2f'|format(p.unit_price) }}</td>
+        <td>{% if p.sparkline_svg %}{{ p.sparkline_svg|safe }}{% endif %}</td>
+        <td>{% if p.price_change_label == 'new' %}new{% else %}{{ p.price_change_label }}{% endif %}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5" class="off">Nothing bought today.</td></tr>
+    {% endfor %}
+    {% else %}
     {% for p in products %}
       <tr class="rowlink" onclick="location.href='/purchases/{{ p.key }}'">
         <td>
@@ -79,6 +105,7 @@
     {% else %}
       <tr><td colspan="4" class="off">No invoices yet.</td></tr>
     {% endfor %}
+    {% endif %}
     </tbody>
   </table>
 </div>
