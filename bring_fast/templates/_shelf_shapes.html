@@ -23,6 +23,12 @@
   <div class="likely-burst" aria-hidden="true"><i></i></div>
 </form>
 {% endmacro %}
+{% macro today_card(p) %}
+<div class="mcard mcard-today" data-product="{{ p.key }}"><a class="mcard-go" href="/purchases/{{ p.key }}?range=all">{{ shot(p, 56, false) }}</a><div class="copy">
+<div class="mcard-top"><a class="mcard-go" href="/purchases/{{ p.key }}?range=all"><b>{{ p.name }}</b></a></div>
+<div class="today-row">{% if p.sparkline_svg %}{{ p.sparkline_svg|safe }}{% endif %}<div class="today-price">AED {{ "%.2f"|format(p.unit_price) }}<small{% if p.price_change_label != 'new' and p.price_change_pct is not none and p.price_change_pct > 0 %} class="price-up"{% elif p.price_change_label != 'new' %} class="price-down"{% endif %}>{% if p.price_change_label == 'new' %}new{% else %}{{ p.price_change_label }}{% endif %}</small></div></div>
+</div></div>
+{% endmacro %}
 {% macro card(p, low) %}
 <div class="mcard" data-product="{{ p.key }}" data-likely="{{ p.likely or 0 }}" data-push="{{ p.likely_push or 0 }}"><a class="mcard-go" href="/purchases/{{ p.key }}?range={{ range }}{{ tail() }}">{{ shot(p, 56, low) }}</a><div class="copy">
 <div class="mcard-top"><a class="mcard-go" href="/purchases/{{ p.key }}?range={{ range }}{{ tail() }}"><b>{{ p.name }}</b></a><a class="amt mcard-go" href="/purchases/{{ p.key }}?range={{ range }}{{ tail() }}">AED {{ "%.0f"|format(p.spend_total) }}<small>{{ p.times_bought }} buys</small></a></div>

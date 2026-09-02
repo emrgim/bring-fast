@@ -1,11 +1,14 @@
 {# Same filter chrome on Home and Buys. Each tab keeps its own selection. #}
-{% macro bar(action, sort='', dir='', store_q='', store_tail='', category_q='', category_tail='', categories=[], filter_action='') %}
+{% macro bar(action, sort='', dir='', store_q='', store_tail='', category_q='', category_tail='', categories=[], filter_action='', today_href='', today_mode=False) %}
 {% set extra = ('sort=' ~ sort ~ '&dir=' ~ dir ~ '&') if sort else '' %}
 {% set panel_action = filter_action or action %}
 <div class="filters">
   <div class="msort-wrap" id="category-wrap" data-filter-field="category">
     <div class="chip-row" aria-label="Department">
       <button type="button" class="store-chip on{% if categories %} is-filter{% endif %}" id="category-toggle" data-filter-toggle aria-expanded="false" aria-controls="category-panel">All{% if categories %} · {{ categories|length }}{% endif %}</button>
+      {% if today_href %}
+      <a class="{% if today_mode %}on is-filter{% endif %}" href="{{ today_href }}" title="Today">Today</a>
+      {% endif %}
     </div>
     <form class="store-panel" id="category-panel" data-filter-panel method="get" action="{{ panel_action }}" hidden data-current="{{ category_q }}" aria-label="Categories">
       {% if sort %}

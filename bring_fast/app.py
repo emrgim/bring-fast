@@ -195,7 +195,23 @@ def _safe_next(target: str) -> str:
 
 
 _REMEMBER = ("/dashboard", "/purchases", "/stores")
-_DASHBOARD_KEYS = ("range", "grain", "start", "end", "day", "dept", "category")
+_DASHBOARD_KEYS = (
+    "range",
+    "grain",
+    "start",
+    "end",
+    "day",
+    "dept",
+    "category",
+    "today",
+    "prev_range",
+    "prev_grain",
+    "prev_start",
+    "prev_end",
+    "prev_day",
+    "prev_dept",
+    "prev_category",
+)
 _PURCHASES_KEYS = ("sort", "dir", "range", "grain", "start", "end", "day", "dept", "store", "category")
 _WINDOW_KEYS = ("range", "grain", "start", "end", "day", "dept")
 
@@ -273,23 +289,134 @@ def _remember_dashboard(
     day: str,
     dept: str = "",
     category_q: str = "",
+    *,
+    today_mode: bool = False,
+    prev: dict[str, str] | None = None,
 ) -> None:
+    resolved = {
+        "range": range_key,
+        "grain": grain,
+        "start": start if range_key == "custom" else "",
+        "end": end if range_key == "custom" else "",
+        "day": day,
+        "dept": dept,
+        "category": category_q,
+        "today": "1" if today_mode else "",
+    }
+    if today_mode and prev:
+        for key, val in prev.items():
+            if val:
+                resolved[key] = val
     q = _tab_query_from_request(
         user["id"],
         "/dashboard",
         request,
-        {
-            "range": range_key,
-            "grain": grain,
-            "start": start if range_key == "custom" else "",
-            "end": end if range_key == "custom" else "",
-            "day": day,
-            "dept": dept,
-            "category": category_q,
-        },
+        resolved,
         _DASHBOARD_KEYS,
     )
     db.set_last_view(user["id"], "/dashboard", q)
+
+
+def _dashboard_prev_snapshot(
+    request: Request,
+    range_key: str,
+    grain: str,
+    start: str,
+    end: str,
+    day: str,
+    dept: str,
+    category_q: str,
+) -> dict[str, str]:
+    params = request.query_params
+    if params.get("today") == "1" and params.get("prev_range"):
+        return {
+            "prev_range": params.get("prev_range") or "",
+            "prev_grain": params.get("prev_grain") or "",
+            "prev_start": params.get("prev_start") or "",
+            "prev_end": params.get("prev_end") or "",
+            "prev_day": params.get("prev_day") or "",
+            "prev_dept": params.get("prev_dept") or "",
+            "prev_category": params.get("prev_category") or "",
+        }
+    return {
+        "prev_range": range_key,
+        "prev_grain": grain,
+        "prev_start": start if range_key == "custom" else "",
+        "prev_end": end if range_key == "custom" else "",
+        "prev_day": day,
+        "prev_dept": dept,
+        "prev_category": category_q,
+    }
+
+
+def _today_query_tail(today_mode: bool, prev: dict[str, str]) -> str:
+    if not today_mode:
+        return ""
+    from urllib.parse import urlencode
+
+    q: dict[str, str] = {"today": "1"}
+    for key in ("prev_range", "prev_grain", "prev_start", "prev_end", "prev_day", "prev_dept", "prev_category"):
+        if prev.get(key):
+            q[key] = prev[key]
+    return "&" + urlencode(q)
+
+
+def _today_chip_href(
+    *,
+    today_mode: bool,
+    prev: dict[str, str],
+    range_key: str,
+    grain: str,
+    start: str,
+    end: str,
+    day: str,
+    dept: str,
+    category_q: str,
+    category_tail: str,
+) -> str:
+    from urllib.parse import urlencode
+
+    if today_mode:
+        q = {
+            "range": prev.get("prev_range") or range_key,
+            "grain": prev.get("prev_grain") or grain,
+        }
+        if prev.get("prev_dept"):
+            q["dept"] = prev["prev_dept"]
+        if prev.get("prev_category"):
+            q["category"] = prev["prev_category"]
+        if prev.get("prev_day"):
+            q["day"] = prev["prev_day"]
+        if (prev.get("prev_range") or range_key) == "custom":
+            if prev.get("prev_start"):
+                q["start"] = prev["prev_start"]
+            if prev.get("prev_end"):
+                q["end"] = prev["prev_end"]
+        return "/dashboard?" + urlencode(q)
+    q = {
+        "today": "1",
+        "range": range_key,
+        "grain": grain,
+        "prev_range": prev["prev_range"],
+        "prev_grain": prev["prev_grain"],
+    }
+    if dept:
+        q["dept"] = dept
+        q["prev_dept"] = dept
+    if category_q:
+        q["category"] = category_q
+        q["prev_category"] = category_q
+    if day:
+        q["day"] = day
+        q["prev_day"] = day
+    if range_key == "custom":
+        if start:
+            q["start"] = start
+            q["prev_start"] = start
+        if end:
+            q["end"] = end
+            q["prev_end"] = end
+    return "/dashboard?" + urlencode(q)
 
 
 def _remember_purchases(
@@ -479,6 +606,7 @@ def spend_home(
     day: str = "",
     dept: str = "",
     category: str = "",
+    today: str = "",
 ):
     user = current_user(request)
     if not user:
@@ -492,43 +620,106 @@ def spend_home(
     categories = _request_categories(request, category)
     category_q = purchases.category_query(categories)
     _, category_tail = _filter_tails(category_q=category_q)
+    today_mode = (today or "").strip() == "1"
+    dubai_day = purchases.dubai_today(end=end)
+    prev = _dashboard_prev_snapshot(request, range, grain, start, end, day, dept, category_q)
+    today_href = _today_chip_href(
+        today_mode=today_mode,
+        prev=prev,
+        range_key=range,
+        grain=grain,
+        start=start,
+        end=end,
+        day=day,
+        dept=dept,
+        category_q=category_q,
+        category_tail=category_tail,
+    )
     since, until, range_key = purchases.resolve_window(user["id"], range, start, end)
+    chart_since, chart_until, _ = (
+        purchases.resolve_window(user["id"], "all", start, end)
+        if today_mode
+        else (since, until, range_key)
+    )
     raw_days = purchases.daily_spend(
-        user["id"], since=since, until=until, dept=dept, categories=categories
+        user["id"], since=chart_since, until=chart_until, dept=dept, categories=categories
     )
     days = purchases.bucket_series(raw_days, grain)
     if grain == "daily":
-        days = purchases.fill_daily_calendar(days, since, until)
-    days = purchases.mark_day_windows(days, grain, since, until, day)
+        days = purchases.fill_daily_calendar(days, chart_since, chart_until)
+    days = purchases.mark_day_windows(days, grain, chart_since, chart_until, day)
     focus_since, focus_until = purchases.focus_products_window(day, grain, since, until)
     focus_end = (focus_until or until).isoformat()
-    card_days = [
-        d
-        for d in raw_days
-        if (not focus_since or (d.get("date") or "") >= focus_since)
-        and (d.get("date") or "") <= focus_end
-    ]
-    total_spend = sum(d["spend"] for d in card_days)
-    head = purchases.period_headline(total_spend, focus_since, focus_until, grain)
-    top = purchases.list_products(
-        user["id"],
-        sort="spend",
-        direction="desc",
-        since=focus_since,
-        until=focus_until,
-        dept=dept,
-        categories=categories,
-        limit=8,
+    if today_mode:
+        today_total = purchases.day_spend(
+            user["id"], dubai_day, dept=dept, categories=categories
+        )
+        total_spend = today_total
+        head = {
+            "period_avg": today_total,
+            "period_word": "Today",
+            "period_unit": "",
+            "periods_text": "",
+        }
+        top = purchases.list_today_products(
+            user["id"],
+            dubai_day,
+            dept=dept,
+            categories=categories,
+            limit=8,
+        )
+        trend = purchases.price_trend(
+            user["id"],
+            since=dubai_day.isoformat(),
+            until=dubai_day,
+            grain="daily",
+            dept=dept,
+            categories=categories,
+        )
+        range_start = dubai_day.isoformat()
+        range_end = dubai_day.isoformat()
+    else:
+        card_days = [
+            d
+            for d in raw_days
+            if (not focus_since or (d.get("date") or "") >= focus_since)
+            and (d.get("date") or "") <= focus_end
+        ]
+        total_spend = sum(d["spend"] for d in card_days)
+        head = purchases.period_headline(total_spend, focus_since, focus_until, grain)
+        top = purchases.list_products(
+            user["id"],
+            sort="spend",
+            direction="desc",
+            since=focus_since,
+            until=focus_until,
+            dept=dept,
+            categories=categories,
+            limit=8,
+        )
+        trend = purchases.price_trend(
+            user["id"],
+            since=focus_since,
+            until=focus_until,
+            grain=grain,
+            dept=dept,
+            categories=categories,
+        )
+        range_start = focus_since or ""
+        range_end = focus_end
+    _remember_dashboard(
+        user,
+        request,
+        range_key,
+        grain,
+        start,
+        end,
+        day,
+        dept,
+        category_q,
+        today_mode=today_mode,
+        prev=prev if today_mode else None,
     )
-    trend = purchases.price_trend(
-        user["id"],
-        since=focus_since,
-        until=focus_until,
-        grain=grain,
-        dept=dept,
-        categories=categories,
-    )
-    _remember_dashboard(user, request, range_key, grain, start, end, day, dept, category_q)
     return templates.TemplateResponse(
         request,
         "home.html",
@@ -542,8 +733,8 @@ def spend_home(
             "period_word": head["period_word"],
             "period_unit": head["period_unit"],
             "periods_text": head["periods_text"],
-            "range_start": focus_since or "",
-            "range_end": focus_end,
+            "range_start": range_start,
+            "range_end": range_end,
             "products": top,
             "trend": trend,
             "grain": grain,
@@ -557,6 +748,10 @@ def spend_home(
             "category_tail": category_tail,
             "macro_options": macro_categories.MACRO_CATEGORIES,
             "macro_labels": macro_categories.MACRO_LABELS,
+            "today_mode": today_mode,
+            "today_href": today_href,
+            "today_tail": _today_query_tail(today_mode, prev),
+            "dubai_day": dubai_day.isoformat(),
         },
     )
 
