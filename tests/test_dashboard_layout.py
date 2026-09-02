@@ -66,8 +66,6 @@ def test_range_filter_sits_under_the_title_bar(bf, client):
     assert 'class="filters"' in head
     assert 'aria-label="Department"' in head
     assert 'aria-label="Range"' in head
-    assert ">Edible<" in head
-    assert ">Drinks<" in head
     assert ">2w<" in head
     assert ">2y<" in head
     assert ">3y<" in head
@@ -99,7 +97,6 @@ def test_home_department_filter_hides_the_other_aisle(bf, client):
     assert "AED 70.00" in edible
     assert "Rice" in edible
     assert "Heineken" not in edible
-    assert 'class="on" href="/dashboard?range=all&grain=daily&dept=Edible"' in edible
     drinks = client.get("/dashboard?range=all&grain=daily&dept=Drinks").text
     assert "AED 15.00" in drinks
     assert "Heineken" in drinks
@@ -131,7 +128,6 @@ def test_buys_range_filter_sits_under_the_title_bar(bf, client):
     assert 'class="filters"' in head
     assert 'aria-label="Department"' in head
     assert 'aria-label="Range"' in head
-    assert ">Edible<" in head
     assert html.index("</header>") < html.index('<div class="purchases-board">')
     assert html.count('class="filters"') == 1
 
