@@ -658,11 +658,15 @@
       color:var(--on-fill); background:var(--fill); border-color:var(--fill);
       animation: range-tick 1.8s steps(2, end) infinite;
     }
+    .chip-row .store-chip.is-filter {
+      animation: range-tick 1.8s steps(2, end) infinite;
+    }
     @keyframes range-tick {
       50% { background:var(--bg); color:var(--ink); border-color:var(--ink); }
     }
     @media (prefers-reduced-motion: reduce) {
-      .filters form.on input[type=date] { animation:none; }
+      .filters form.on input[type=date],
+      .chip-row .store-chip.is-filter { animation:none; }
     }
     .chart { width:100%; height:auto; min-height:180px; display:block; color:var(--ink); }
     .buy { display:grid; grid-template-columns: 1fr auto; gap:4px 12px; padding:12px 0; border-top:1px dashed var(--line); }

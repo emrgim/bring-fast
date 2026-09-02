@@ -207,7 +207,8 @@ def test_custom_date_fields_tick_when_they_are_the_filter(bf, client):
     assert "@keyframes range-tick" in custom
     assert (
         "@media (prefers-reduced-motion: reduce) {\n"
-        "      .filters form.on input[type=date] { animation:none; }\n"
+        "      .filters form.on input[type=date],\n"
+        "      .chip-row .store-chip.is-filter { animation:none; }\n"
         "    }"
     ) in custom
 

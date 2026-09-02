@@ -1,7 +1,20 @@
 """Macro-category filter on Home and Buys (All chip dropdown)."""
 
+import re
+
 from bring_fast.macro_categories import CHEESE, DAIRY, MEAT, WATER
 from bring_fast import purchases
+
+_ALL_BTN = re.compile(
+    r'<button[^>]*id="category-toggle"[^>]*class="([^"]*)"[^>]*>'
+    r'|<button[^>]*class="([^"]*)"[^>]*id="category-toggle"[^>]*>'
+)
+
+
+def _category_toggle_classes(html):
+    match = _ALL_BTN.search(html)
+    assert match, "category-toggle button missing"
+    return match.group(1) or match.group(2) or ""
 
 
 def _buy(bf, user_id, no, day, items, retailer="carrefour"):
@@ -74,6 +87,38 @@ def test_selecting_cheese_filters_products_and_spend(bf, client):
     assert "Cheese" in html
     assert "Clear all" in html
     assert ">Done<" in html
+
+
+def test_all_chip_flashes_only_when_categories_selected(bf, client):
+    user = bf.db.create_user("flash@example.com", "secret1")
+    _buy(
+        bf,
+        user["id"],
+        "a",
+        "2026-08-10",
+        [{"name": "Brie", "qty": 1, "unit_price": 10, "line_total": 10, "barcode": "c1"}],
+    )
+    _tag(bf, purchases.product_key("c1", "Brie"), CHEESE)
+    client.post("/login", data={"email": "flash@example.com", "password": "secret1", "intent": "signin"})
+
+    idle = client.get("/dashboard", params={"range": "all", "grain": "daily"}).text
+    idle_classes = _category_toggle_classes(idle)
+    assert "on" in idle_classes.split()
+    assert "is-filter" not in idle_classes.split()
+    assert ".chip-row .store-chip.is-filter" in idle
+    assert "animation: range-tick 1.8s steps(2, end) infinite" in idle
+
+    active = client.get(
+        "/dashboard",
+        params={"range": "all", "grain": "daily", "category": CHEESE},
+    ).text
+    active_classes = _category_toggle_classes(active)
+    assert "on" in active_classes.split()
+    assert "is-filter" in active_classes.split()
+
+    cleared = client.get("/purchases", params={"range": "all", "grain": "daily"}).text
+    cleared_classes = _category_toggle_classes(cleared)
+    assert "is-filter" not in cleared_classes.split()
 
 
 def test_multi_select_categories(bf):
