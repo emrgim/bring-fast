@@ -208,9 +208,10 @@ def test_the_phone_header_paints_behind_the_status_bar(bf, client):
 def test_date_fields_do_not_zoom_the_page_on_ios(bf, client):
     _signed_in(bf, client, "zoom@example.com")
     html = client.get("/purchases").text
+    phone = html[html.index("@media (max-width:720px)") :]
 
     # Under 16px iOS zooms in on focus and never zooms back out.
-    assert ".filters input[type=date] { font-size:16px;" in html
+    assert "font-size:16px" in phone[phone.index(".filters input[type=date]") : phone.index(".filters form.filter-dates button")]
 
 
 def test_date_fields_do_not_collapse_to_a_sliver(bf, client):
@@ -220,8 +221,12 @@ def test_date_fields_do_not_collapse_to_a_sliver(bf, client):
     phone = html[html.index("@media (max-width:720px)") :]
 
     assert "min-width:14em" in html
-    assert "flex:0 0 14em" in html[html.index(".filters input[type=date]") :]
-    assert "min-width:14em" in phone
+    assert "flex:0 0 14em" in html[html.index(".filters input[type=date]") : html.index(".filters input[type=date]::-webkit-datetime-edit")]
+    # On a phone the row wraps and each date takes half the row — not 14em
+    # each, which shoved Apply past the screen edge at 390px.
+    assert "flex-wrap:wrap" in phone[phone.index(".filters form.filter-dates") : phone.index(".filters form.filter-dates button")]
+    assert "calc(50% - 2px)" in phone
+    assert "overflow-x:visible" in phone[phone.index(".filter-dates { overflow-x:visible") : phone.index(".filter-dates { overflow-x:visible") + 40]
     assert "::-webkit-date-and-time-value" in html
     assert "::-webkit-datetime-edit" in html
     assert "::-webkit-calendar-picker-indicator" in html
@@ -334,6 +339,22 @@ def test_buys_keeps_the_spend_bars_on_a_phone(bf, client):
     # which year was selected, so All + Yearly read as a 2025-only view.
     assert ".purchases-board .bars-scroller { display:none; }" not in html
     assert ".bars-scroller { display:block; }" in phone
+    # Bars must fit the card width on a phone — not bleed past it.
+    assert ".bars-scroller { overflow-x:hidden; max-width:100%; }" in phone
+    assert ".bars { width:100%; min-width:0; max-width:100%; }" in phone
+    assert "flex:1 1 0" in phone[phone.index(".bars .bar, .bars .bar.wide") : phone.index(".dash-kpis")]
+
+
+def test_custom_date_row_fits_a_phone_without_page_scroll(bf, client):
+    """Start, end, and Apply must stay inside 390px — wrap, not clip."""
+    _signed_in(bf, client, "daterow390@example.com")
+    html = client.get("/dashboard?range=custom&start=2026-01-01&end=2026-08-30&grain=monthly").text
+    phone = html[html.index("@media (max-width:720px)") :]
+    dates = phone[phone.index(".filters form.filter-dates") : phone.index(".filters form.filter-dates button")]
+    assert "flex-wrap:wrap" in dates
+    assert "overflow-x:visible" in dates or "overflow:visible" in dates
+    assert "flex:0 0 14em" not in phone[phone.index(".filters input[type=date]") : phone.index(".dash-kpis")]
+    assert ">Apply<" in html
 
 
 def test_receipt_popup_rows_keep_the_amount_on_the_right(bf, client):

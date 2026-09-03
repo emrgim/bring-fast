@@ -224,7 +224,7 @@ def test_theme_toggle_inverts_and_splits_on_auto(client):
     assert 'class="ghost theme-toggle"' not in html
     # Auto is both palettes, split at 45 degrees, letters inverted on each half.
     assert ':root[data-theme-pref="auto"] .theme-toggle' in html
-    assert "linear-gradient(45deg, #000 50%, #fff 50%)" in html
+    assert "linear-gradient(135deg, #000 50%, #fff 50%)" in html
     assert "mix-blend-mode:difference;" in html
 
 

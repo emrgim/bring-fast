@@ -92,12 +92,16 @@ def test_a_receipts_only_store_says_it_is_there_for_its_invoices(bf, client):
     page = client.get("/stores").text
 
     for store_id in ("careem", "mcdonalds"):
-        card = _caps(page.split(f'id="store-{store_id}"')[1].split("</a>")[0])
-        assert 'class="cap no">Search' in card
-        assert 'class="cap no">Compare' in card
-        assert 'class="cap no">Cart' in card
-        assert 'class="cap no">Login' in card
-        assert 'class="cap">Receipts' in card
+        card = page.split(f'id="store-{store_id}"')[1].split("</a>")[0]
+        caps = _caps(card)
+        assert 'class="cap no">Search' in caps
+        assert 'class="cap no">Compare' in caps
+        assert 'class="cap no">Cart' in caps
+        assert 'class="cap no">Login' in caps
+        assert 'class="cap">Receipts' in caps
+        # No login to link — say invoices, not "Not linked".
+        assert "Not linked" not in card
+        assert "Invoices by mail" in card
 
         store = client.get(f"/stores/{store_id}").text
         # No catalog and no login: the page says why, and offers no form.
