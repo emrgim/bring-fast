@@ -217,6 +217,7 @@
       margin:0; padding:6px 12px;
       background:var(--bg);
       border-bottom:1px dashed var(--line);
+      overflow:visible;
     }
     .app-head .filters {
       margin:0; padding:8px 14px;
@@ -383,7 +384,7 @@
     .nav-right .theme-toggle {
       padding:7px 10px; font-size:12px; width:auto; min-width:5.2em; min-height:36px; text-align:center;
       background:var(--fill); color:var(--on-fill); border-color:var(--fill);
-      position:relative; isolation:isolate;
+      position:relative; isolation:isolate; overflow:visible;
     }
     /* Auto is both palettes at once: a 45-degree split, half white, half
        black, with the letters inverted so they stay readable on either half. */
@@ -391,10 +392,11 @@
       background:#fff; color:#111; border-color:var(--line);
     }
     :root[data-theme-pref="auto"] .theme-toggle::after {
-      content:""; position:absolute; inset:0; pointer-events:none;
-      background:linear-gradient(45deg, #000 50%, #fff 50%);
+      content:""; position:absolute; inset:0; pointer-events:none; z-index:0;
+      background:linear-gradient(135deg, #000 50%, #fff 50%);
       mix-blend-mode:difference;
     }
+    :root[data-theme-pref="auto"] .theme-toggle { z-index:1; }
     .tabs { display:flex; gap:8px; }
     .tabs a {
       color:var(--muted); font-size:12px; font-weight:700; letter-spacing:.08em;
@@ -628,8 +630,8 @@
     .pop .row .amt { flex:0 0 auto; white-space:nowrap; }
     .filters { display:flex; flex-direction:column; gap:6px; margin:0 0 12px; }
     /* Date row only — store-panel is a vertical checklist, not a chip strip. */
-    .filters form.filter-dates { display:flex; gap:4px; align-items:center; flex-wrap:nowrap; flex:0 0 auto; }
-    .filter-dates { width:100%; min-width:0; overflow-x:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
+    .filters form.filter-dates { display:flex; gap:4px; align-items:center; flex-wrap:wrap; flex:0 0 auto; }
+    .filter-dates { width:100%; min-width:0; max-width:100%; overflow-x:visible; }
     /* An empty date field on iOS has no intrinsic width once appearance is
        stripped, and collapses to a sliver beside the end date. Chrome then
        draws a calendar glyph that clips “08/11/2023” down to “/11/2023”.
@@ -744,7 +746,9 @@
          wrap, not a document bounce. */
       nav.topnav .user { font-size:11px; flex-shrink:0; }
       nav.topnav .user .who { display:none; }
-      nav.topnav .nav-right { gap:10px; flex-shrink:0; }
+      nav.topnav .nav-right { gap:10px; flex-shrink:0; overflow:visible; }
+      nav.topnav .nav-right .theme-toggle { min-width:4.8em; padding:7px 12px; overflow:visible; }
+      :root[data-theme-pref="auto"] nav.topnav .nav-right .theme-toggle { padding-left:14px; text-align:left; }
       nav.topnav .brand span { display:none; }
       nav.topnav .brand b { font-size:15px; }
       nav.topnav .mark { width:28px; height:28px; font-size:11px; }
@@ -783,10 +787,25 @@
       .store-panel label { min-height:44px; justify-content:flex-start; text-align:left; }
       .store-panel input[type=checkbox] { width:20px; height:20px; flex-basis:20px; }
       .store-actions button { min-height:44px; }
-      .filters form.filter-dates { display:flex; }
+      .filters form.filter-dates { display:flex; flex-wrap:wrap; overflow:visible; }
+      .filter-dates { overflow-x:visible; }
       /* Under 16px iOS zooms the whole page the moment a field takes focus,
-         and never zooms back out. The row scrolls sideways, so it fits. */
-      .filters input[type=date] { font-size:16px; height:36px; width:14em; min-width:14em; max-width:14em; padding:4px 8px; flex:0 0 14em; }
+         and never zooms back out. Two dates share the row; Apply sits beside
+         them or drops to the next line — never past the screen edge. */
+      .filters input[type=date] {
+        font-size:16px; height:36px; padding:4px 8px;
+        flex:1 1 calc(50% - 2px); min-width:0; max-width:calc(50% - 2px);
+        width:auto;
+      }
+      .filters form.filter-dates button[type=submit] {
+        flex:0 0 auto; min-height:36px; align-self:flex-end;
+      }
+      /* The spend chart must stay inside the card, not bleed sideways. */
+      .bars-scroller { overflow-x:hidden; max-width:100%; }
+      .bars { width:100%; min-width:0; max-width:100%; }
+      .bars .bar, .bars .bar.wide {
+        flex:1 1 0; min-width:2px; max-width:none;
+      }
       /* Number and label stay on one line, so "AED 2537" and "34" never read as one figure. */
       .dash-kpis { gap:12px; font-size:12px; }
       .dash-kpis span { flex:0 1 auto; white-space:nowrap; }

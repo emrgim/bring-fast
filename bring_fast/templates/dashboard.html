@@ -13,7 +13,10 @@
         <h2>{{ r.name }}
           {% if r.enabled %}<span class="pill on">On</span>{% else %}<span class="pill off">Off</span>{% endif %}
         </h2>
-        {% if r.linked %}<div class="ok">Linked · {{ r.login_email }}</div>{% else %}<div class="off">Not linked</div>{% endif %}
+        {% if r.linked %}<div class="ok">Linked · {{ r.login_email }}</div>
+        {% elif not r.login and r.receipts %}<div class="off">Invoices by mail</div>
+        {% elif r.login %}<div class="off">Not linked</div>
+        {% else %}<div class="off">Search only</div>{% endif %}
       </div>
     </div>
     <div class="caps" aria-label="What this store can do">
