@@ -173,7 +173,7 @@ RETAILERS = [
         "checkout_url": "https://www.amazon.it/",
         "enabled": False,
         "search": False,
-        "receipts": True,
+        "receipts": False,
         "login": False,
         "shop": False,
         "checkout": False,
@@ -191,7 +191,7 @@ RETAILERS = [
         "checkout_url": "https://www.amazon.ae/",
         "enabled": False,
         "search": False,
-        "receipts": True,
+        "receipts": False,
         "login": False,
         "shop": False,
         "checkout": False,
@@ -819,6 +819,33 @@ def store_meta(retailer: str) -> dict[str, Any] | None:
         if r["id"] == retailer:
             return {**r, "enabled": is_store_enabled(retailer)}
     return None
+
+
+def _normalize_mail_domain(domain: str) -> str:
+    d = (domain or "").strip().lower()
+    if d.startswith("@"):
+        d = d[1:]
+    if "@" in d:
+        d = d.rsplit("@", 1)[-1]
+    return d
+
+
+def retailer_for_domain(domain: str) -> str | None:
+    """Map an email domain (e.g. amazon.it or order-update@amazon.it) to a store id."""
+    d = _normalize_mail_domain(domain)
+    if not d:
+        return None
+    for r in RETAILERS:
+        if (r.get("domain") or "").lower() == d:
+            return r["id"]
+    return None
+
+
+def domain_for_retailer(retailer: str) -> str | None:
+    meta = store_meta(retailer)
+    if not meta:
+        return None
+    return meta.get("domain") or None
 
 
 def is_store_enabled(retailer: str) -> bool:

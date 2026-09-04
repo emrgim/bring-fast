@@ -9,6 +9,7 @@
         {% if store.enabled %}<span class="pill on">On</span>{% else %}<span class="pill off">Off</span>{% endif %}
       </h1>
       <div class="site"><a href="{{ store.url }}" target="_blank" rel="noopener">{{ store.url }}</a></div>
+      {% if store.domain %}<div class="off">Mail domain · {{ store.domain }}</div>{% endif %}
     </div>
   </div>
 
@@ -92,6 +93,8 @@
 <p class="off">Turn {{ store.name }} on to keep a login for it.</p>
 {% elif store.receipts and not store.search %}
 <p class="off">{{ store.name }} invoices arrive by mail, so there is no login to keep here.</p>
+{% elif store.domain and not store.login %}
+<p class="off">{{ store.name }} orders arrive by mail on {{ store.domain }}. The external agent imports them with <code>bf_import_invoice</code>.</p>
 {% else %}
 <p class="off">No login is wired for {{ store.name }} yet, so there is nothing to keep here.</p>
 {% endif %}

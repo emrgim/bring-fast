@@ -173,12 +173,25 @@ def test_a_receipts_only_store_is_never_offered_a_search_tool(bf):
     assert "amazon_ae_search" not in names
 
     snap = json.loads(bf._call_tool(user, "bf_whoami", {}))
-    for store_id in ("careem", "mcdonalds", "amazon_it", "amazon_ae"):
+    for store_id in ("careem", "mcdonalds"):
         store = next(s for s in snap["stores"] if s["store_id"] == store_id)
         assert store["capabilities"] == ["receipts"]
         assert store["tools"] == []
         assert store["receipts_only"] is True
     assert "receipts-only" in snap["note"].lower()
+
+
+def test_amazon_stores_expose_domain_and_no_receipts_pill(bf):
+    user = bf.db.create_user("amazon@example.com", "secret1")
+    snap = json.loads(bf._call_tool(user, "bf_whoami", {}))
+    it = next(s for s in snap["stores"] if s["store_id"] == "amazon_it")
+    ae = next(s for s in snap["stores"] if s["store_id"] == "amazon_ae")
+    assert it["domain"] == "amazon.it"
+    assert ae["domain"] == "amazon.ae"
+    assert it["capabilities"] == []
+    assert ae["capabilities"] == []
+    assert it["receipts_only"] is False
+    assert ae["receipts_only"] is False
 
 
 def test_asking_a_receipts_only_store_for_prices_says_why_not(bf):
