@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import __version__, catalog, checkout, compare, db, forecast, macro_categories, mcp_skill, purchases, update, x
+from . import __version__, catalog, checkout, compare, db, forecast, macro_categories, mcp_skill, purchases, push, update, x
 from .macro_categories import MACRO_CATEGORIES, normalize_macro as normalize_macro_slug
 from .stores.cart_match import peel_remove_name
 
@@ -788,6 +788,50 @@ def stores_page(request: Request, welcome: int = 0, notice: str = ""):
             "tab": "stores",
         },
     )
+
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page(request: Request):
+    user = current_user(request)
+    if not user:
+        return RedirectResponse("/login?mode=signin&next=/settings", status_code=303)
+    return templates.TemplateResponse(
+        request,
+        "settings.html",
+        {
+            "user": user,
+            "title": "Settings · Bring Fast",
+            "tab": "settings",
+            "notify_on": db.get_notify(user["id"]),
+            "vapid_public": push.public_key(),
+        },
+    )
+
+
+@app.post("/push/subscribe")
+async def push_subscribe(request: Request):
+    user = current_user(request)
+    if not user:
+        return _live({"ok": False, "error": "login required"}, status_code=401)
+    data = await request.json()
+    keys = data.get("keys") or {}
+    try:
+        db.save_push_sub(user["id"], data.get("endpoint") or "", keys.get("p256dh") or "", keys.get("auth") or "")
+    except ValueError as e:
+        return _live({"ok": False, "error": str(e)}, status_code=400)
+    db.set_notify(user["id"], True)
+    return _live({"ok": True, "notify": True})
+
+
+@app.post("/push/unsubscribe")
+async def push_unsubscribe(request: Request):
+    user = current_user(request)
+    if not user:
+        return _live({"ok": False, "error": "login required"}, status_code=401)
+    data = await request.json()
+    db.delete_push_sub(user["id"], data.get("endpoint") or "")
+    db.set_notify(user["id"], False)
+    return _live({"ok": True, "notify": False})
 
 
 @app.get("/stores/{retailer}", response_class=HTMLResponse)

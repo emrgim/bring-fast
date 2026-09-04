@@ -392,6 +392,17 @@ def _init_schema(con: sqlite3.Connection) -> None:
     prefs_cols = {r[1] for r in con.execute("PRAGMA table_info(user_prefs)").fetchall()}
     if "tab_queries" not in prefs_cols:
         con.execute("ALTER TABLE user_prefs ADD COLUMN tab_queries TEXT")
+    if "notify" not in prefs_cols:
+        con.execute("ALTER TABLE user_prefs ADD COLUMN notify INTEGER NOT NULL DEFAULT 0")
+    con.execute(
+        """CREATE TABLE IF NOT EXISTS push_subs (
+            endpoint TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            p256dh TEXT NOT NULL,
+            auth TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        )"""
+    )
     con.execute(
         """CREATE TABLE IF NOT EXISTS catalog_prices (
             id INTEGER PRIMARY KEY,
@@ -1140,3 +1151,49 @@ def get_tab_query(user_id: int, path: str) -> str:
     if path == "/dashboard":
         return tabs.get("window") or ""
     return ""
+
+
+def get_notify(user_id: int) -> bool:
+    con = connect()
+    row = con.execute("SELECT notify FROM user_prefs WHERE user_id=?", (user_id,)).fetchone()
+    con.close()
+    return bool(row and int(row["notify"] or 0))
+
+
+def set_notify(user_id: int, on: bool) -> None:
+    con = connect()
+    con.execute(
+        """INSERT INTO user_prefs(user_id, notify) VALUES (?,?)
+           ON CONFLICT(user_id) DO UPDATE SET notify=excluded.notify""",
+        (user_id, 1 if on else 0),
+    )
+    con.commit()
+    con.close()
+
+
+def save_push_sub(user_id: int, endpoint: str, p256dh: str, auth: str) -> None:
+    endpoint, p256dh, auth = (endpoint or "").strip(), (p256dh or "").strip(), (auth or "").strip()
+    if not endpoint or not p256dh or not auth:
+        raise ValueError("push subscription incomplete")
+    con = connect()
+    con.execute(
+        """INSERT INTO push_subs(endpoint, user_id, p256dh, auth, created_at) VALUES (?,?,?,?,?)
+           ON CONFLICT(endpoint) DO UPDATE SET user_id=excluded.user_id, p256dh=excluded.p256dh, auth=excluded.auth""",
+        (endpoint, user_id, p256dh, auth, int(time.time())),
+    )
+    con.commit()
+    con.close()
+
+
+def delete_push_sub(user_id: int, endpoint: str) -> None:
+    con = connect()
+    con.execute("DELETE FROM push_subs WHERE user_id=? AND endpoint=?", (user_id, (endpoint or "").strip()))
+    con.commit()
+    con.close()
+
+
+def list_push_subs(user_id: int) -> list[dict[str, Any]]:
+    con = connect()
+    rows = con.execute("SELECT * FROM push_subs WHERE user_id=?", (user_id,)).fetchall()
+    con.close()
+    return [dict(r) for r in rows]

@@ -1059,6 +1059,7 @@
             <a href="/dashboard" class="{% if tab == 'dashboard' %}on{% endif %}"{% if tab == 'dashboard' %} aria-current="page"{% endif %}>Dashboard</a>
             <a href="/purchases" class="{% if tab == 'purchases' %}on{% endif %}"{% if tab == 'purchases' %} aria-current="page"{% endif %}>Purchases</a>
             <a href="/stores" class="{% if tab == 'stores' %}on{% endif %}"{% if tab == 'stores' %} aria-current="page"{% endif %}>Stores</a>
+            <a href="/settings" class="{% if tab == 'settings' %}on{% endif %}"{% if tab == 'settings' %} aria-current="page"{% endif %}>Settings</a>
           </div>
           <div class="user"><span class="who">{{ user.email }} · </span><a href="/logout">Sign out</a></div>
           <button class="ghost upd-btn" type="button" id="pwa-install">Install</button>
@@ -1107,6 +1108,7 @@
     <a href="/dashboard" class="{% if tab == 'dashboard' %}on{% endif %}"{% if tab == 'dashboard' %} aria-current="page"{% endif %}>Home</a>
     <a href="/purchases" class="{% if tab == 'purchases' %}on{% endif %}"{% if tab == 'purchases' %} aria-current="page"{% endif %}>Buys</a>
     <a href="/stores" class="{% if tab == 'stores' %}on{% endif %}"{% if tab == 'stores' %} aria-current="page"{% endif %}>Stores</a>
+    <a href="/settings" class="{% if tab == 'settings' %}on{% endif %}"{% if tab == 'settings' %} aria-current="page"{% endif %}>More</a>
   </footer>
   {% endif %}
   <script>
