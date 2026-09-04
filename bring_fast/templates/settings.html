@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block body %}
+<h1><em>Settings</em></h1>
+<p class="lead">Web app alerts when a new bill lands from your receipts.</p>
+
+<div class="card">
+  <h2>Notifications</h2>
+  <p class="off" style="margin-bottom:12px">When a new invoice is inserted, the installed app can alert you. On iPhone this needs Bring Fast on the Home Screen, and a tap on Enable.</p>
+  <p class="off" id="notif-status">{% if notify_on %}Notifications are on.{% else %}Notifications are off.{% endif %}</p>
+  <p class="token" id="vapid-public" hidden>{{ vapid_public }}</p>
+  <div class="split">
+    <button type="button" id="notif-on"{% if notify_on %} class="ghost"{% endif %}>Enable</button>
+    <button type="button" class="ghost" id="notif-off"{% if not notify_on %} style="display:none"{% endif %}>Disable</button>
+  </div>
+</div>
+<script>
+(function(){
+  var pubEl=document.getElementById("vapid-public");
+  var status=document.getElementById("notif-status");
+  var onBtn=document.getElementById("notif-on");
+  var offBtn=document.getElementById("notif-off");
+  function b64(s){
+    var pad="=".repeat((4-s.length%4)%4);
+    var raw=atob((s+pad).replace(/-/g,"+").replace(/_/g,"/"));
+    var out=new Uint8Array(raw.length);
+    for(var i=0;i<raw.length;i++) out[i]=raw.charCodeAt(i);
+    return out;
+  }
+  async function enable(){
+    if(!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)){
+      status.textContent="This browser cannot notify.";
+      return;
+    }
+    var perm=await Notification.requestPermission();
+    if(perm!=="granted"){ status.textContent="Permission denied."; return; }
+    var reg=await navigator.serviceWorker.ready;
+    var sub=await reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:b64(pubEl.textContent.trim())});
+    var j=sub.toJSON();
+    var r=await fetch("/push/subscribe",{method:"POST",credentials:"same-origin",headers:{"content-type":"application/json"},body:JSON.stringify({endpoint:j.endpoint,keys:j.keys})});
+    if(!r.ok){ status.textContent="Could not save the subscription."; return; }
+    location.reload();
+  }
+  async function disable(){
+    if("serviceWorker" in navigator){
+      try{
+        var reg=await navigator.serviceWorker.ready;
+        var sub=await reg.pushManager.getSubscription();
+        var endpoint=sub?sub.endpoint:"";
+        if(sub) await sub.unsubscribe();
+        await fetch("/push/unsubscribe",{method:"POST",credentials:"same-origin",headers:{"content-type":"application/json"},body:JSON.stringify({endpoint:endpoint})});
+      }catch(e){}
+    }
+    location.reload();
+  }
+  if(onBtn) onBtn.addEventListener("click", function(){ enable(); });
+  if(offBtn) offBtn.addEventListener("click", function(){ disable(); });
+})();
+</script>
+{% endblock %}

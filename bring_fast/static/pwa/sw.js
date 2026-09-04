@@ -9,7 +9,7 @@
  * so those are saved too — one after another, behind whatever the reader is
  * doing, never as one flood of requests the open page has to compete with.
  */
-const VERSION = "bf-pwa-v9";
+const VERSION = "bf-pwa-v10";
 const SHELL = VERSION + "-shell";
 const PAGES = VERSION + "-pages";
 const ASSETS = VERSION + "-assets";
@@ -18,7 +18,7 @@ const OFFLINE_URL = "/offline";
 /* Last remembered page, so opening `/` offline still shows where the
  * reader left off. `/` itself is a redirect and is never cached. */
 const RESUME = "/__resume";
-const REMEMBER = ["/dashboard", "/purchases", "/stores"];
+const REMEMBER = ["/dashboard", "/purchases", "/stores", "/settings"];
 const OFFLINE_REFRESH_MS = 600000;
 const NET_TIMEOUT_MS = 6000;
 const REFRESH_FLOOR_MS = 30000;
@@ -73,6 +73,7 @@ const LIVE_PATHS = [
   "/forgot",
   "/reset",
   "/rotate-token",
+  "/push/",
 ];
 
 /* Shown when a form is sent with no network: the browser's own error page
@@ -546,4 +547,32 @@ self.addEventListener("message", (event) => {
 /* Chrome only, and only for installed apps: same ten minute cadence. */
 self.addEventListener("periodicsync", (event) => {
   if (event.tag === "bf-refresh") event.waitUntil(refreshPages(true));
+});
+
+self.addEventListener("push", (event) => {
+  let data = { title: "Bring Fast", body: "New bill", url: "/purchases" };
+  try {
+    if (event.data) data = Object.assign(data, event.data.json());
+  } catch (e) {}
+  event.waitUntil(
+    self.registration.showNotification(data.title || "Bring Fast", {
+      body: data.body || "",
+      icon: "/static/pwa/icon-192.png",
+      badge: "/static/pwa/icon-192.png",
+      data: { url: data.url || "/purchases" },
+    })
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = (event.notification.data && event.notification.data.url) || "/purchases";
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
+      for (const c of list) {
+        if (c.url && "focus" in c) return c.focus();
+      }
+      if (self.clients.openWindow) return self.clients.openWindow(url);
+    })
+  );
 });

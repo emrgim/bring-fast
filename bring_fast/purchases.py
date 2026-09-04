@@ -350,6 +350,10 @@ def upsert_invoice(user_id: int, parsed: dict[str, Any], *, gmail_id: str = "") 
     if not parsed.get("invoice_no") or not parsed.get("items"):
         return None
     con = db.connect()
+    existed = con.execute(
+        "SELECT id FROM invoices WHERE user_id=? AND retailer=? AND invoice_no=?",
+        (user_id, parsed["retailer"], parsed["invoice_no"]),
+    ).fetchone()
     con.execute(
         """INSERT INTO invoices(user_id, retailer, invoice_no, order_no, invoice_date, store_name, gmail_id, source_file)
            VALUES (?,?,?,?,?,?,?,?)
@@ -400,6 +404,14 @@ def upsert_invoice(user_id: int, parsed: dict[str, Any], *, gmail_id: str = "") 
         pending.append((key, name, barcode))
     con.commit()
     con.close()
+    if not existed:
+        try:
+            from . import push
+
+            store = parsed.get("store_name") or parsed.get("retailer") or "Store"
+            push.send(user_id, "New bill", f"{store} · {parsed.get('invoice_no')}", "/purchases")
+        except Exception:
+            pass
     if pending and os.environ.get("BRINGFAST_FETCH_IMAGES", "1").strip().lower() not in {"0", "false", "no"}:
         from .product_images import attach_for_receipt
 
