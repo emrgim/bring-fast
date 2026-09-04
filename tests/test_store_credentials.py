@@ -91,7 +91,7 @@ def test_a_receipts_only_store_says_it_is_there_for_its_invoices(bf, client):
     _sign_in(client)
     page = client.get("/stores").text
 
-    for store_id in ("careem", "mcdonalds"):
+    for store_id in ("careem", "mcdonalds", "amazon_it", "amazon_ae"):
         card = page.split(f'id="store-{store_id}"')[1].split("</a>")[0]
         caps = _caps(card)
         assert 'class="cap no">Search' in caps

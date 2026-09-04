@@ -160,6 +160,42 @@ RETAILERS = [
         "shop": False,
         "checkout": False,
     },
+    {
+        # E-commerce, not a supermarket: no catalog to search. Amazon.it is here
+        # so emailed order receipts have a store to land on.
+        "id": "amazon_it",
+        "name": "Amazon.it",
+        "url": "https://www.amazon.it/",
+        "logo": "/static/logos/amazon.svg",
+        "color": "#ff9900",
+        "domain": "amazon.it",
+        "cart_url": "https://www.amazon.it/",
+        "checkout_url": "https://www.amazon.it/",
+        "enabled": False,
+        "search": False,
+        "receipts": True,
+        "login": False,
+        "shop": False,
+        "checkout": False,
+    },
+    {
+        # E-commerce, not a supermarket: no catalog to search. Amazon.ae is here
+        # so emailed order receipts have a store to land on.
+        "id": "amazon_ae",
+        "name": "Amazon.ae",
+        "url": "https://www.amazon.ae/",
+        "logo": "/static/logos/amazon.svg",
+        "color": "#ff9900",
+        "domain": "amazon.ae",
+        "cart_url": "https://www.amazon.ae/",
+        "checkout_url": "https://www.amazon.ae/",
+        "enabled": False,
+        "search": False,
+        "receipts": True,
+        "login": False,
+        "shop": False,
+        "checkout": False,
+    },
 ]
 
 

@@ -25,6 +25,8 @@ def test_retailers_have_logos_and_urls():
         "africaneastern",
         "careem",
         "mcdonalds",
+        "amazon_it",
+        "amazon_ae",
     }
     assert {r["id"] for r in db.RETAILERS if r.get("enabled")} == {"grandiose", "carrefour"}
     assert {r["id"] for r in db.RETAILERS if r.get("shop")} == {"grandiose", "unioncoop", "carrefour"}
@@ -80,6 +82,10 @@ def test_retailers_have_logos_and_urls():
         assert r["logo"].startswith("/static/")
         logo = Path(db.__file__).resolve().parent / r["logo"].lstrip("/")
         assert logo.is_file(), r["logo"]
+    amazon_it = next(r for r in db.RETAILERS if r["id"] == "amazon_it")
+    amazon_ae = next(r for r in db.RETAILERS if r["id"] == "amazon_ae")
+    assert amazon_it["domain"] == "amazon.it"
+    assert amazon_ae["domain"] == "amazon.ae"
 
 
 def test_a_store_that_can_be_searched_has_something_to_search_it_with():

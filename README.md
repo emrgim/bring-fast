@@ -177,6 +177,9 @@ when it does not.
 | [MMI](https://www.mmihomedelivery.ae/) | yes | yes | — | — | yes | yes |
 | [African + Eastern](https://www.africaneasternonline.com/) | yes | yes | — | — | yes | yes |
 | [Careem](https://www.careem.com/) | — | — | — | — | yes | — |
+| [McDonald's](https://www.mcdonalds.com/ae/en-ae.html) | — | — | — | — | yes | — |
+| [Amazon.it](https://www.amazon.it/) | — | — | — | — | yes | — |
+| [Amazon.ae](https://www.amazon.ae/) | — | — | — | — | yes | — |
 
 Search and price comparison read public catalog pages, so they go together and a
 store with no catalog has neither. Cart is a wired official basket — Magento
