@@ -1671,6 +1671,41 @@ def _store_tools() -> list[dict[str, Any]]:
                 },
             },
         },
+        {
+            "name": "bf_import_invoice",
+            "description": (
+                "WRITE: import or update an invoice/order for THIS user on any registered store "
+                "(retailer=grandiose|carrefour|amazon_it|…). Used by the external mail agent after "
+                "it parses a receipt. Requires invoice_no and items[]. Returns invoice_id. "
+                "Read registered stores and domain mapping with bf_stores."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "retailer": {"type": "string"},
+                    "invoice_no": {"type": "string"},
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "qty": {"type": "number"},
+                                "unit_price": {"type": "number"},
+                                "line_total": {"type": "number"},
+                                "barcode": {"type": "string"},
+                            },
+                        },
+                    },
+                    "order_no": {"type": "string"},
+                    "invoice_date": {"type": "string"},
+                    "store_name": {"type": "string"},
+                    "gmail_id": {"type": "string"},
+                    "source": {"type": "string"},
+                },
+                "required": ["retailer", "invoice_no", "items"],
+            },
+        },
     ]
     for r in db.RETAILERS:
         sid, name = r["id"], r["name"]
@@ -1858,6 +1893,7 @@ def _store_snapshot(user: dict[str, Any], retailer: str) -> dict[str, Any]:
         "delivery_instruction": "Leave with security. Do not ring, call, or leave at the door.",
         "cart_url": s.get("cart_url"),
         "checkout_url": s.get("checkout_url"),
+        "domain": s.get("domain") or "",
         "enabled": bool(s.get("enabled")),
         "shop": bool(s.get("shop")),
         "searchable": bool(s.get("search")),
@@ -2454,6 +2490,8 @@ def _normalize_tool(name: str, args: dict[str, Any]) -> tuple[str, dict[str, Any
         "order_history": "bf_orders",
         "invoices": "bf_orders",
         "history": "bf_orders",
+        "import_invoice": "bf_import_invoice",
+        "upsert_invoice": "bf_import_invoice",
         "products": "bf_products",
         "top_products": "bf_products",
         "shopping_list": "bf_shopping_list",
@@ -2548,6 +2586,43 @@ def _compare(user: dict[str, Any], args: dict[str, Any]) -> str:
     return json.dumps(out, ensure_ascii=False)
 
 
+def _import_invoice(user: dict[str, Any], args: dict[str, Any]) -> str:
+    retailer = str(args.get("retailer") or args.get("store") or "").strip().lower()
+    known = {r["id"] for r in db.RETAILERS}
+    if retailer not in known:
+        return json.dumps(
+            {"success": False, "error": f"unknown retailer {retailer!r}. Use bf_stores for registered store ids."},
+            ensure_ascii=False,
+        )
+    invoice_no = str(args.get("invoice_no") or "").strip()
+    if not invoice_no:
+        return json.dumps({"success": False, "error": "invoice_no is required."}, ensure_ascii=False)
+    items = args.get("items")
+    if not isinstance(items, list) or not items:
+        return json.dumps({"success": False, "error": "items must be a non-empty array."}, ensure_ascii=False)
+    meta = db.store_meta(retailer) or {}
+    parsed = {
+        "retailer": retailer,
+        "invoice_no": invoice_no,
+        "order_no": str(args.get("order_no") or "").strip(),
+        "invoice_date": str(args.get("invoice_date") or "").strip(),
+        "store_name": str(args.get("store_name") or meta.get("name") or retailer).strip(),
+        "source": str(args.get("source") or "mcp").strip(),
+        "items": items,
+    }
+    invoice_id = purchases.upsert_invoice(
+        int(user["id"]),
+        parsed,
+        gmail_id=str(args.get("gmail_id") or "").strip(),
+    )
+    if invoice_id is None:
+        return json.dumps(
+            {"success": False, "error": "Could not save invoice — check invoice_no and item names."},
+            ensure_ascii=False,
+        )
+    return _ok(invoice_id=invoice_id, retailer=retailer, invoice_no=invoice_no)
+
+
 def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
     uid = user["id"]
     name, args = _normalize_tool(name, args or {})
@@ -2597,6 +2672,8 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
                 limit=int(args.get("limit") or 40),
             )
         )
+    if name == "bf_import_invoice":
+        return _import_invoice(user, args)
     if name == "bf_products":
         sort = str(args.get("sort") or "spend")
         if sort in ("price", "expensive", "unit", "cost"):

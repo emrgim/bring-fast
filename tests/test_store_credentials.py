@@ -110,6 +110,19 @@ def test_a_receipts_only_store_says_it_is_there_for_its_invoices(bf, client):
         assert 'type="password"' not in store
 
 
+def test_a_domain_store_shows_mail_label_not_search_only(bf, client):
+    _sign_in(client)
+    page = client.get("/stores").text
+    for store_id, domain in (("amazon_it", "amazon.it"), ("amazon_ae", "amazon.ae")):
+        card = page.split(f'id="store-{store_id}"')[1].split("</a>")[0]
+        assert f"Mail · {domain}" in card
+        assert "Search only" not in card
+        assert 'class="cap no">Receipts' in _caps(card)
+        store = client.get(f"/stores/{store_id}").text
+        assert f"Mail domain · {domain}" in store
+        assert "bf_import_invoice" in store
+
+
 def test_a_saved_login_is_printed_inside_the_store_and_offers_edit(bf, client):
     _sign_in(client)
     client.post(

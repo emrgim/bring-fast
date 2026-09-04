@@ -15,6 +15,7 @@
         </h2>
         {% if r.linked %}<div class="ok">Linked · {{ r.login_email }}</div>
         {% elif not r.login and r.receipts %}<div class="off">Invoices by mail</div>
+        {% elif r.domain %}<div class="off">Mail · {{ r.domain }}</div>
         {% elif r.login %}<div class="off">Not linked</div>
         {% else %}<div class="off">Search only</div>{% endif %}
       </div>

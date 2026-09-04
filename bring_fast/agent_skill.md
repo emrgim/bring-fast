@@ -34,6 +34,7 @@ Carrefour UAE is **not search-only**. Official cart: `carrefour_cart` (also `bf_
 | How much this month | `bf_spend` `range=this_month` |
 | Last 30 days / last week / average | `bf_spend` `range=1m` or `1w` `grain=weekly\|monthly` |
 | Order history / receipts / items bought | `bf_orders` `range=last_month` (or `this_month` / `1m`) |
+| Import a parsed invoice / expense | `bf_import_invoice` — WRITE. `retailer=` any registered store id, `invoice_no`, `items[]`. External mail agent uses this after parsing Gmail. Registered stores and `domain` mapping: `bf_stores`. |
 | Most expensive product | `bf_products` `sort=unit_price` |
 | Where the money goes | `bf_products` `sort=spend` |
 | Bought most often | `bf_products` `sort=frequency` |
@@ -73,6 +74,7 @@ Optional: `dept=Edible` or `dept=Drinks`.
 - Do not call `placeOrder` unless the user explicitly asks to place the order. `ccod` is Magento card-on-delivery, not entering a card in Bring Fast.
 - Payment stays on the supermarket site (or at delivery for ccod/cashondelivery).
 - MMI and African + Eastern: License DXB login + search. No cart.
+- Amazon.it (`amazon_it`, domain `amazon.it`) and Amazon.ae (`amazon_ae`, domain `amazon.ae`): no catalog, no built-in invoice reader yet. External agent maps mail domain → store id via `bf_stores`, then imports with `bf_import_invoice`.
 - Delivery note when relevant: Leave with security. Do not ring, call, or leave at the door.
 
 ## X (Twitter)
