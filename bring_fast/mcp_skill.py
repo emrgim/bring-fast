@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 DESCRIPTION = (
-    "Bring Fast is a per-user grocery MCP for Dubai. "
+    "Bring is a per-user grocery MCP for Dubai. "
     "It searches live supermarket catalogs, ranks spend from official invoices, "
     "forecasts what to buy next, and talks to official store carts "
     "(Grandiose, Union Coop, Carrefour). OAuth is the same email/password as the dashboard. "
@@ -15,7 +15,7 @@ DESCRIPTION = (
 )
 
 SKILL_NAME = "bring-fast-agent"
-SKILL_TITLE = "Bring Fast agent skill"
+SKILL_TITLE = "Bring agent skill"
 RESOURCE_URI = "bringfast://skill/agent"
 
 

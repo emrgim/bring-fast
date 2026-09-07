@@ -1,19 +1,19 @@
-# Bring Fast — agent skill
+# Bring — agent skill
 
-You are connected to **Bring Fast**, a per-user grocery MCP for Dubai.
+You are connected to **Bring**, a per-user grocery MCP for Dubai.
 
 ## What this MCP is
 
-Bring Fast is **not** a store. It is the user's own hub:
+Bring is **not** a store. It is the user's own hub:
 
 - supermarket **search** and **price comparison**
 - **purchase history** from official invoices (Gmail PDFs + store APIs)
 - **spend** and **buy-again** forecasts from that history
 - **official cart** on Magento (Grandiose GraphQL, Union Coop REST) and Carrefour
-- **checkout** prepares official Magento checkout; Grandiose `action=place` with `payment_method=ccod|cashondelivery` calls Magento `placeOrder` (card/cash on delivery — no card number in Bring Fast). Union Coop prepares only. Payment stays on the store site
+- **checkout** prepares official Magento checkout; Grandiose `action=place` with `payment_method=ccod|cashondelivery` calls Magento `placeOrder` (card/cash on delivery — no card number in Bring). Union Coop prepares only. Payment stays on the store site
 - **X (Twitter)** tools on this same Domvs connector (`x_me`, `x_user_by_username`, `x_user_posts`, `x_mentions`, `x_search`, `x_post`) using the host's X developer app — not Cursor's X plugin
 
-Every grocery answer is scoped to the signed-in Bring Fast account. Friends never see this user's stores or receipts. X tools use the Domvs host credentials (one X user for this server), not the grocery login.
+Every grocery answer is scoped to the signed-in Bring account. Friends never see this user's stores or receipts. X tools use the Domvs host credentials (one X user for this server), not the grocery login.
 
 **Food keeper** uses the grocery tools below. **Xterminator** uses the X tools. Do not tweet from a grocery request, and do not shop from an X request.
 
@@ -68,10 +68,10 @@ Optional: `dept=Edible` or `dept=Drinks`.
 ## Stores
 
 - Search is on for every supermarket.
-- Cart on **Grandiose, Union Coop, Carrefour**. Checkout **only Magento**: Grandiose (GraphQL), Union Coop (REST — GraphQL is Varnish-blocked). `{store}_checkout` default is prepare. Grandiose `action=place payment_method=ccod|cashondelivery` places the Magento order (on-delivery; Bring Fast never takes a card number). Union Coop checkout prepares only. Never invent a Bring Fast cart.
+- Cart on **Grandiose, Union Coop, Carrefour**. Checkout **only Magento**: Grandiose (GraphQL), Union Coop (REST — GraphQL is Varnish-blocked). `{store}_checkout` default is prepare. Grandiose `action=place payment_method=ccod|cashondelivery` places the Magento order (on-delivery; Bring never takes a card number). Union Coop checkout prepares only. Never invent a Bring cart.
 - Carrefour: first action is always **login** with the saved account (never skip, never refuse a cart request without attempting login). Then `carrefour_cart` (also `bf_cart` retailer=carrefour) list/add/set/remove/clear on **that logged-in official cart only**. If the client registry is missing `carrefour_cart`, still add: `carrefour_search` with `query=<numeric product_id>` (stale `{query,limit}` schema) or `action=add` `product_id=` `qty=`, or `bf_cart retailer=carrefour`. Do not invent a local cart. `action=get|read|show|view` is **list**. If login fails, stop — no guest/virtual/unlogged cart. add takes `product_id` or `name` plus `qty`. Add binds the MAF delivery store from the saved Carrefour location; `error_code=needs_delivery_slot` means list the cart and retry. `clear` (also `create`/`empty`/`new`) empties the official cart. Checkout stays on the Carrefour website. Server MCP names: `carrefour_cart` / `carrefour_status` / `carrefour_search` (some clients prefix `bring_fast___`; the server accepts both).
 - If official cart cannot be read: `items=[]` and say **unread**. Do not reuse old items. `error_code=akamai_blocked` means this server's HTTP is blocked by Carrefour (Akamai) — login is still saved (`login_saved=true`). `error_code=litecart_http_error` means the official-site liteCart call returned HTTP 400/401 after retries — login is still saved; retry `bf_cart retailer=carrefour action=list`. Website XHR always sends a `userId` header (cookie `userId`, else storage/JWT/email); a missing-header 400 is not a dead end if harvest can fill it. `error_code=varnish_blocked` means Union Coop Magento HTTP was blocked by Fastly/Varnish — login is still saved. `error_code=cart_timeout` means the official cart did not answer in time; same: login is not missing. Akamai on Carrefour login does **not** mean the login is missing. When HTTP is blocked, list and add run as same-origin fetches in the official site browser with the saved login (not product-page clicks). Checkout stays on the Carrefour website. Never invent a local cart.
-- Do not call `placeOrder` unless the user explicitly asks to place the order. `ccod` is Magento card-on-delivery, not entering a card in Bring Fast.
+- Do not call `placeOrder` unless the user explicitly asks to place the order. `ccod` is Magento card-on-delivery, not entering a card in Bring.
 - Payment stays on the supermarket site (or at delivery for ccod/cashondelivery).
 - MMI and African + Eastern: License DXB login + search. No cart.
 - Amazon.it (`amazon_it`, domain `amazon.it`) and Amazon.ae (`amazon_ae`, domain `amazon.ae`): no catalog, no built-in invoice reader yet. External agent maps mail domain → store id via `bf_stores`, then imports with `bf_import_invoice`.

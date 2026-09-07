@@ -1,5 +1,5 @@
 [Unit]
-Description=Check Bring Fast GitHub updates every 10 minutes
+Description=Check Bring GitHub updates every 10 minutes
 
 [Timer]
 OnBootSec=2min

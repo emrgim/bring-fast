@@ -118,7 +118,7 @@ def test_today_toggle_restores_previous_range(bf, client):
     restored = client.get(off_href.group(1)).text
     assert 'class="brand is-today"' not in restored
     assert "Total today ·" not in restored
-    assert ">Bring Fast<" in restored
+    assert ">Bring<" in restored
 
 
 def test_today_products_show_price_sparkline_and_delta(bf, client):

@@ -1,6 +1,6 @@
 # Fonts
 
-IBM Plex Mono, served by Bring Fast itself so no page waits on a font CDN and an
+IBM Plex Mono, served by Bring itself so no page waits on a font CDN and an
 offline launch looks like the app.
 
 - `ibm-plex-mono-<weight>-<subset>.woff2` — the latin and latin-ext subsets of

@@ -1,4 +1,4 @@
-"""Official-site checkout executed inside the Bring Fast MCP server."""
+"""Official-site checkout executed inside the Bring MCP server."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ HOME = {
     "africaneastern": "https://www.africaneasternonline.com/",
 }
 
-# Bring Fast is multi-user but the desktop Chrome profile is shared, so a store
+# Bring is multi-user but the desktop Chrome profile is shared, so a store
 # session has to be tied to the account that opened it before it can be reused.
 ACCOUNT_MARKER = "bringfast_account"
 
@@ -303,7 +303,7 @@ def _click_first(page, names: list[str]) -> bool:
 
 
 def _marked_account(page) -> str:
-    """Which Bring Fast store account this browser profile last signed in as."""
+    """Which Bring store account this browser profile last signed in as."""
     try:
         return (page.evaluate(f"() => localStorage.getItem({ACCOUNT_MARKER!r}) || ''") or "").strip().lower()
     except Exception:
@@ -432,7 +432,7 @@ def ensure_store_login(page, store: str, email: str, password: str) -> dict[str,
             "logged_in": False,
             "reused": False,
             "final_url": "",
-            "error": f"No {store} login saved. Add the store email and password on the Bring Fast dashboard.",
+            "error": f"No {store} login saved. Add the store email and password on the Bring dashboard.",
         }
     if _reuse_session(page, store, wanted):
         return {"logged_in": True, "reused": True, "final_url": page.url, "error": None}
@@ -450,7 +450,7 @@ def ensure_store_login(page, store: str, email: str, password: str) -> dict[str,
             "final_url": getattr(page, "url", ""),
             "error": (
                 f"The {store} sign-in page did not accept the saved login for {email} ({e}). "
-                "Check the store email and password on the Bring Fast dashboard."
+                "Check the store email and password on the Bring dashboard."
             ),
         }
     if "login" in (page.url or "").lower():
@@ -465,7 +465,7 @@ def ensure_store_login(page, store: str, email: str, password: str) -> dict[str,
         "error": None
         if ok
         else (
-            f"Could not sign in to {store} as {email}. Check the store password on the Bring Fast dashboard; "
+            f"Could not sign in to {store} as {email}. Check the store password on the Bring dashboard; "
             "the store may also be asking for a one-time code."
         ),
     }
@@ -1555,7 +1555,7 @@ def _carrefour_browser_api_cart(
             "items": [],
             "logged_in": False,
             "driver": "playwright",
-            "error": "No carrefour login saved. Add the store email and password on the Bring Fast dashboard.",
+            "error": "No carrefour login saved. Add the store email and password on the Bring dashboard.",
         }
     pw = browser = context = page = None
     created_page = False
@@ -1857,7 +1857,7 @@ def _official_cart_sync(
             "ok": False,
             "official_count": None,
             "logged_in": False,
-            "error": f"No {store} login saved. Add the store email and password on the Bring Fast dashboard.",
+            "error": f"No {store} login saved. Add the store email and password on the Bring dashboard.",
         }
     pw = browser = context = None
     try:
@@ -2060,7 +2060,7 @@ def _run_checkout_sync(
         return {
             "ok": False,
             "stage": "credentials",
-            "error": "Store login missing. Save email+password on the Bring Fast dashboard for this store.",
+            "error": "Store login missing. Save email+password on the Bring dashboard for this store.",
         }
     if not items:
         return {"ok": False, "stage": "cart", "error": "Cart empty"}
@@ -2109,7 +2109,7 @@ def _run_checkout_sync(
                 if paid
                 else (
                     f"Logged into {store} on the MCP server, added items, opened checkout at {page.url}. "
-                    "Payment/3DS still on the official page (card is not stored in Bring Fast)."
+                    "Payment/3DS still on the official page (card is not stored in Bring)."
                     if at_pay
                     else f"Logged into {store} and pushed the cart to official checkout: {page.url}."
                 )

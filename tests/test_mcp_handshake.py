@@ -212,7 +212,7 @@ def test_resources_and_prompts_ship_the_agent_skill(client, token):
     read = client.post("/mcp", headers=auth(token),
                        json={"jsonrpc": "2.0", "id": 4, "method": "resources/read",
                              "params": {"uri": "bringfast://skill/agent"}}).json()["result"]
-    assert "Bring Fast" in read["contents"][0]["text"]
+    assert "Bring" in read["contents"][0]["text"]
 
 
 def test_initialize_loads_skill_and_mcp_description(client, token):

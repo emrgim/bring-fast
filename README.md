@@ -1,8 +1,8 @@
-# Bring Fast
+# Bring
 
 Multi-user grocery MCP + dashboard for the UAE.
 
-Each person has a Bring Fast account and only their own supermarket logins. Grok connects with OAuth (Dynamic Client Registration) — users sign in with the same Bring Fast email/password. No Client ID / secret to paste.
+Each person has a Bring account and only their own supermarket logins. Grok connects with OAuth (Dynamic Client Registration) — users sign in with the same Bring email/password. No Client ID / secret to paste.
 
 ## Login
 
@@ -13,14 +13,14 @@ form creates the account — there is no separate registration page to find.
   when `BRINGFAST_PUBLIC_URL` is https.
 - A wrong password keeps the email you typed, and `?next=` brings you back to the
   page you were heading for.
-- When Grok asks for access and you are already signed in, Bring Fast hands the
+- When Grok asks for access and you are already signed in, Bring hands the
   code straight back with no extra screen. When you are not, the authorize page
   signs you in — or creates the account — and continues the same flow.
 - Connectors get a `refresh_token`, so a running connector is never dropped back
   to a login screen.
 - Authorization codes only go to a `redirect_uri` the client registered.
 
-Store logins live inside each store's own page. Bring Fast reuses a live
+Store logins live inside each store's own page. Bring reuses a live
 supermarket session when it belongs to you, and signs in again when it does not,
 so a shared browser profile never mixes two people's carts. Use **Check login**
 on the store's page to test the saved credentials.
@@ -101,7 +101,7 @@ and “Not now” sticks.
 - The app's own markup goes out compressed — a page of a thousand bars is the
   same forty characters over and over — while fonts, logos and receipt scans are
   handed on untouched, being compressed formats already.
-- The font is served by Bring Fast itself. No font CDN means nothing
+- The font is served by Bring itself. No font CDN means nothing
   third-party blocks the first paint, and the app reads the same offline.
 - Safe areas on all four sides, so a notch in landscape and the iPhone home bar
   never sit on top of a row. Date fields are 16px on a phone, because anything
@@ -186,7 +186,7 @@ store with no catalog has neither. Cart is a wired official basket — Magento
 GraphQL for Grandiose, Magento REST for Union Coop (GraphQL there is
 Varnish-blocked), the Android APIs for Carrefour. Checkout prepares the official
 Magento cart. Grandiose can place with Magento `placeOrder` when asked (`ccod` /
-`cashondelivery` — on-delivery, no card number in Bring Fast). Union Coop REST
+`cashondelivery` — on-delivery, no card number in Bring). Union Coop REST
 checkout prepares only. Receipts means there is a
 parser for that store's invoices, and login means a saved store account, which is
 what receipts and baskets are read with.
@@ -234,7 +234,7 @@ The first `FAIL` line is the reason the connector never finishes.
 
 Custom connector URL: `https://<your-host>/mcp`
 
-Grok discovers OAuth and opens the Bring Fast login. Friends register their own Bring Fast account; they never see another user’s stores.
+Grok discovers OAuth and opens the Bring login. Friends register their own Bring account; they never see another user’s stores.
 
 Official checkout stays on each supermarket site. Grandiose Magento `ccod` /
 `cashondelivery` place the order on grandiose.ae without taking a card number.

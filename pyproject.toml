@@ -1,7 +1,7 @@
 [project]
 name = "bring-fast"
 version = "1.10.33"
-description = "Bring Fast — multi-user grocery MCP + dashboard"
+description = "Bring — multi-user grocery MCP + dashboard"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"

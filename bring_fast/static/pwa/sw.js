@@ -1,4 +1,4 @@
-/* Bring Fast service worker — the whole app works offline.
+/* Bring service worker — the whole app works offline.
  *
  * Online, every page comes from the network so an update shows up at once.
  * Offline, the last copy of a page is served and the client retries on a
@@ -9,7 +9,7 @@
  * so those are saved too — one after another, behind whatever the reader is
  * doing, never as one flood of requests the open page has to compete with.
  */
-const VERSION = "bf-pwa-v11";
+const VERSION = "bf-pwa-v12";
 const SHELL = VERSION + "-shell";
 const PAGES = VERSION + "-pages";
 const ASSETS = VERSION + "-assets";
@@ -47,6 +47,10 @@ const PRECACHE = [
   "/static/pwa/icon-512.png",
   "/static/pwa/icon-180.png",
   "/static/pwa/icon-512-maskable.png",
+  "/static/pwa/icon-dark-192.png",
+  "/static/pwa/icon-light-192.png",
+  "/static/pwa/icon-dark-180.png",
+  "/static/pwa/icon-light-180.png",
   /* Every weight and subset, not just the two the head preloads: a weight
    * first met while offline would otherwise fall back mid-page. */
   "/static/fonts/ibm-plex-mono-400-latin.woff2",
@@ -81,7 +85,7 @@ const LIVE_PATHS = [
 const NOT_SAVED = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
-<title>Not saved · Bring Fast</title>
+<title>Not saved · Bring</title>
 <style>
   *{scrollbar-width:none;-ms-overflow-style:none}
   *::-webkit-scrollbar{display:none}
@@ -96,7 +100,7 @@ const NOT_SAVED = `<!doctype html>
 </style></head>
 <body><div class="w">
 <h1>Not saved</h1>
-<p>Bring Fast could not be reached, so this change was not stored. Nothing was
+<p>Bring could not be reached, so this change was not stored. Nothing was
 half-written — go back and send it again once the connection is up.</p>
 <button class="b" type="button" onclick="history.back()">Go back</button>
 </div>
@@ -550,12 +554,12 @@ self.addEventListener("periodicsync", (event) => {
 });
 
 self.addEventListener("push", (event) => {
-  let data = { title: "Bring Fast", body: "New bill", url: "/purchases" };
+  let data = { title: "Bring", body: "New bill", url: "/purchases" };
   try {
     if (event.data) data = Object.assign(data, event.data.json());
   } catch (e) {}
   event.waitUntil(
-    self.registration.showNotification(data.title || "Bring Fast", {
+    self.registration.showNotification(data.title || "Bring", {
       body: data.body || "",
       icon: "/static/pwa/icon-192.png",
       badge: "/static/pwa/icon-192.png",
