@@ -5,17 +5,19 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
   <meta name="theme-color" content="#ffffff"/>
   <meta name="color-scheme" content="light dark"/>
-  <meta name="application-name" content="Bring Fast"/>
+  <meta name="application-name" content="Bring"/>
   <meta name="mobile-web-app-capable" content="yes"/>
   <meta name="apple-mobile-web-app-capable" content="yes"/>
   <meta name="apple-mobile-web-app-status-bar-style" content="default"/>
-  <meta name="apple-mobile-web-app-title" content="Bring Fast"/>
+  <meta name="apple-mobile-web-app-title" content="Bring"/>
   <meta name="format-detection" content="telephone=no"/>
-  <title>{{ title or "Bring Fast" }}</title>
+  <title>{{ title or "Bring" }}</title>
   <link rel="manifest" href="/manifest.webmanifest"/>
   <link rel="icon" href="/favicon.ico" sizes="32x32"/>
-  <link rel="icon" type="image/png" href="/static/pwa/icon-192.png" sizes="192x192"/>
-  <link rel="apple-touch-icon" href="/apple-touch-icon.png"/>
+  <link rel="icon" type="image/png" href="/static/pwa/icon-dark-192.png" sizes="192x192" media="(prefers-color-scheme: dark)"/>
+  <link rel="icon" type="image/png" href="/static/pwa/icon-light-192.png" sizes="192x192" media="(prefers-color-scheme: light)"/>
+  <link rel="apple-touch-icon" href="/static/pwa/icon-dark-180.png" media="(prefers-color-scheme: dark)"/>
+  <link rel="apple-touch-icon" href="/static/pwa/icon-light-180.png" media="(prefers-color-scheme: light)"/>
   {% include "_fonts.html" %}
   <script>
     /* A pinch has nothing to reveal in an installed app: the layout already
@@ -1051,7 +1053,7 @@
     <nav class="topnav">
       <a class="brand{% if today_mode %} is-today{% endif %}" href="/">
         <div class="mark">BF</div>
-        <div><b>{% if today_mode %}Today{% else %}Bring Fast{% endif %}</b><span>Agent grocery</span></div>
+        <div><b>{% if today_mode %}Today{% else %}Bring{% endif %}</b><span>Agent grocery</span></div>
       </a>
       {% if user %}
         <div class="nav-right">
@@ -1079,7 +1081,7 @@
     {% if error %}<p class="err">{{ error }}</p>{% endif %}
     {% if notice %}<p class="notice">{{ notice }}</p>{% endif %}
     <div class="hint" id="ios-install">
-      <div><b>Install Bring Fast</b> · tap Share, then “Add to Home Screen”. It then opens full screen and works offline.</div>
+      <div><b>Install Bring</b> · tap Share, then “Add to Home Screen”. It then opens full screen and works offline.</div>
       <button class="ghost" type="button" id="ios-install-hide">Not now</button>
     </div>
     {% if user %}
@@ -1093,7 +1095,7 @@
       <div class="panel">
         <div class="mark">BF</div>
         <h2 id="upd-title">Installing update</h2>
-        <p id="upd-note">Bring Fast is pulling the new code from GitHub.</p>
+        <p id="upd-note">Bring is pulling the new code from GitHub.</p>
         <div class="count" id="upd-count">—<small id="upd-unit"></small></div>
         <div class="track"><i id="upd-fill"></i></div>
         <div class="step" id="upd-step">Fetching…</div>
@@ -1627,7 +1629,7 @@
         poller=setInterval(function(){
           if(Date.now()>deadline){
             stop();
-            say("Restart is slow", "Bring Fast has not answered yet. The page is still here — reload when you are ready.", "Waiting for the server");
+            say("Restart is slow", "Bring has not answered yet. The page is still here — reload when you are ready.", "Waiting for the server");
             if(manual) manual.classList.add("on");
             return;
           }
@@ -1645,7 +1647,7 @@
       function restart(before, d){
         var ready=Math.max(3, Math.round(d.ready_in||10));
         var quiet=Math.max(0, Math.round((d.restart_in||2)*1000));
-        say("Restarting Bring Fast", "Now on "+(d.local||"the new version")+". This page comes back on its own — nothing to press.", "Restarting…");
+        say("Restarting Bring", "Now on "+(d.local||"the new version")+". This page comes back on its own — nothing to press.", "Restarting…");
         countdown(ready);
         setTimeout(function(){ comeBack(before); }, quiet);
       }
@@ -1665,7 +1667,7 @@
         running=true;
         if(go){ go.disabled=true; go.textContent="Updating…"; }
         open();
-        say("Installing update", "Bring Fast is pulling the new code from GitHub.", "Fetching…");
+        say("Installing update", "Bring is pulling the new code from GitHub.", "Fetching…");
         if(count) count.textContent="—";
         if(unit) unit.textContent="";
         if(fill) fill.style.width="8%";

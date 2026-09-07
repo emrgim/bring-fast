@@ -122,7 +122,7 @@ def test_a_page_that_stays_signed_out_is_reported_not_logged_in():
     page = FakePage(text="Log in or Sign up", signed_in_text="Log in or Sign up")
     result = checkout.ensure_store_login(page, "carrefour", "me@example.com", "pw")
     assert not result["logged_in"]
-    assert "Bring Fast dashboard" in result["error"]
+    assert "Bring dashboard" in result["error"]
 
 
 def test_missing_credentials_say_what_to_do():

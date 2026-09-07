@@ -340,7 +340,7 @@ def test_normalize_mcp_prefixed_carrefour_tools(bf):
     assert args["action"] == "list"
     name, _ = bf._normalize_tool("bring_fast___carrefour_status", {})
     assert name == "carrefour_status"
-    name, _ = bf._normalize_tool("Bring Fast carrefour cart", {"action": "add"})
+    name, _ = bf._normalize_tool("Bring carrefour cart", {"action": "add"})
     assert name == "carrefour_cart"
 
 
@@ -1226,7 +1226,7 @@ def test_grandiose_checkout_unknown_method_is_not_placed(bf, monkeypatch):
             "stage": "place",
             "error": (
                 "action=place needs payment_method=ccod or cashondelivery. "
-                "ccod is Magento card-on-delivery — Bring Fast never takes a card number. "
+                "ccod is Magento card-on-delivery — Bring never takes a card number. "
                 f"Got {kw.get('payment_method')!r}."
             ),
         }

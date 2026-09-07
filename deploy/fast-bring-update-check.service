@@ -1,5 +1,5 @@
 [Unit]
-Description=Check Bring Fast updates on GitHub
+Description=Check Bring updates on GitHub
 
 [Service]
 Type=oneshot

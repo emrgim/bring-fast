@@ -17,7 +17,7 @@ def test_forgot_page_is_english(client):
 def test_forgot_does_not_reveal_missing_accounts(client):
     r = client.post("/forgot", data={"email": "nobody@example.com"})
     assert r.status_code == 200
-    assert "If that email has a Bring Fast account" in r.text
+    assert "If that email has a Bring account" in r.text
 
 
 def test_reset_token_sets_new_password(bf, client):

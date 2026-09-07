@@ -1,4 +1,4 @@
-"""Replay the Grok connector handshake against a Bring Fast URL.
+"""Replay the Grok connector handshake against a Bring URL.
 
     python -m bring_fast.doctor https://your-host/mcp [--token MCP_TOKEN]
 
@@ -97,11 +97,11 @@ def check_tls(base: str) -> bool:
             BAD,
             "TLS handshake times out",
             f"{host}:{port} accepts the TCP connection but never completes TLS.\n"
-            "       The proxy in front of Bring Fast is answering while nothing is serving behind it.\n"
+            "       The proxy in front of Bring is answering while nothing is serving behind it.\n"
             "       With Tailscale, check on the host machine:\n"
             "         tailscale status          # is this machine online?\n"
-            "         tailscale funnel status   # is 443 funnelled to the Bring Fast port?\n"
-            "         curl -sS http://127.0.0.1:8877/health   # is Bring Fast itself running?\n"
+            "         tailscale funnel status   # is 443 funnelled to the Bring port?\n"
+            "         curl -sS http://127.0.0.1:8877/health   # is Bring itself running?\n"
             "       Re-enable with: tailscale funnel --bg 8877  (--bg keeps it alive after the shell exits)",
         )
         return False
@@ -217,7 +217,7 @@ def check_registration(meta: dict) -> dict | None:
         r = requests.post(
             endpoint,
             json={
-                "client_name": "Bring Fast doctor",
+                "client_name": "Bring doctor",
                 "redirect_uris": [redirect_uri],
                 "grant_types": ["authorization_code"],
                 "response_types": ["code"],
@@ -307,7 +307,7 @@ def check_authenticated(mcp: str, token: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Diagnose a Bring Fast MCP connector URL")
+    parser = argparse.ArgumentParser(description="Diagnose a Bring MCP connector URL")
     parser.add_argument("url", help="the connector URL you paste into Grok, e.g. https://host/mcp")
     parser.add_argument("--token", default="", help="an MCP token, to also test the authenticated calls")
     args = parser.parse_args(argv)

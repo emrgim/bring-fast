@@ -50,7 +50,7 @@ SECRET = _session_secret()
 BOOT_ID = secrets.token_hex(8)
 
 templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
-app = FastAPI(title="Bring Fast")
+app = FastAPI(title="Bring")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -473,18 +473,18 @@ def _authenticate(email: str, password: str, intent: str) -> tuple[dict[str, Any
     if intent not in ("signup", "signin"):
         intent = "signup"
     if not email or "@" not in email:
-        return None, "Enter the email you want to use for Bring Fast.", False
+        return None, "Enter the email you want to use for Bring.", False
     if not password:
         return None, "Enter your password.", False
     user = db.get_user_by_email(email)
     if intent == "signin":
         if not user:
-            return None, "No Bring Fast account for this email. Create one.", False
+            return None, "No Bring account for this email. Create one.", False
         if db.verify_password(user, password):
             return user, "", False
-        return None, "That password does not match this Bring Fast account.", False
+        return None, "That password does not match this Bring account.", False
     if user:
-        return None, "This email already has a Bring Fast account. Sign in.", False
+        return None, "This email already has a Bring account. Sign in.", False
     if len(password) < 6:
         return None, "Password must be at least 6 characters.", False
     try:
@@ -509,7 +509,7 @@ def _login_page(
         "login.html",
         {
             "user": None,
-            "title": "Sign in · Bring Fast" if intent == "signin" else "Create account · Bring Fast",
+            "title": "Sign in · Bring" if intent == "signin" else "Create account · Bring",
             "error": error,
             "email": email,
             "next": _safe_next(next_url),
@@ -725,7 +725,7 @@ def spend_home(
         "home.html",
         {
             "user": user,
-            "title": "Dashboard · Bring Fast",
+            "title": "Dashboard · Bring",
             "tab": "dashboard",
             "days": days,
             "dash_spend": total_spend,
@@ -779,9 +779,9 @@ def stores_page(request: Request, welcome: int = 0, notice: str = ""):
                 for r in db.list_retailer_accounts(user["id"])
             ],
             "mcp_url": mcp_url(request),
-            "title": "Stores · Bring Fast",
+            "title": "Stores · Bring",
             "notice": (
-                f"Welcome to Bring Fast, {user['email']}. Open Grandiose below to link it."
+                f"Welcome to Bring, {user['email']}. Open Grandiose below to link it."
                 if welcome
                 else notice
             ),
@@ -800,7 +800,7 @@ def settings_page(request: Request):
         "settings.html",
         {
             "user": user,
-            "title": "Settings · Bring Fast",
+            "title": "Settings · Bring",
             "tab": "settings",
             "notify_on": db.get_notify(user["id"]),
             "vapid_public": push.public_key(),
@@ -856,7 +856,7 @@ def store_page(request: Request, retailer: str, notice: str = "", edit: int = 0)
             "store": store,
             "caps": db.store_capabilities(retailer, user_id=user["id"]),
             "edit": bool(edit) or not store["login_email"],
-            "title": f"{store['name']} · Bring Fast",
+            "title": f"{store['name']} · Bring",
             "notice": notice,
             "tab": "stores",
         },
@@ -919,7 +919,7 @@ def _auth_page(request: Request, template: str, *, title: str, error: str = "", 
 def forgot_page(request: Request):
     if current_user(request):
         return RedirectResponse("/", status_code=303)
-    return _auth_page(request, "forgot.html", title="Forgot password · Bring Fast")
+    return _auth_page(request, "forgot.html", title="Forgot password · Bring")
 
 
 @app.post("/forgot")
@@ -934,8 +934,8 @@ def forgot_submit(request: Request, email: str = Form("")):
     return _auth_page(
         request,
         "forgot.html",
-        title="Forgot password · Bring Fast",
-        notice="If that email has a Bring Fast account, we sent a reset link. It expires in one hour.",
+        title="Forgot password · Bring",
+        notice="If that email has a Bring account, we sent a reset link. It expires in one hour.",
     )
 
 
@@ -944,8 +944,8 @@ def reset_page(request: Request, token: str = ""):
     if current_user(request):
         return RedirectResponse("/", status_code=303)
     if not token:
-        return _auth_page(request, "forgot.html", title="Forgot password · Bring Fast", error="Missing reset token.")
-    return _auth_page(request, "reset.html", title="Reset password · Bring Fast", token=token)
+        return _auth_page(request, "forgot.html", title="Forgot password · Bring", error="Missing reset token.")
+    return _auth_page(request, "reset.html", title="Reset password · Bring", token=token)
 
 
 @app.post("/reset")
@@ -955,7 +955,7 @@ def reset_submit(request: Request, token: str = Form(""), password: str = Form("
         return _auth_page(
             request,
             "forgot.html",
-            title="Forgot password · Bring Fast",
+            title="Forgot password · Bring",
             error="This reset link is invalid or expired. Request a new one.",
             status_code=400,
         )
@@ -963,7 +963,7 @@ def reset_submit(request: Request, token: str = Form(""), password: str = Form("
         db.set_password(user["id"], password)
     except ValueError as e:
         return _auth_page(
-            request, "reset.html", title="Reset password · Bring Fast", token=token, error=str(e), status_code=400
+            request, "reset.html", title="Reset password · Bring", token=token, error=str(e), status_code=400
         )
     return _login_page(request, notice="Password updated. Sign in.", intent="signin")
 
@@ -986,9 +986,9 @@ def _send_reset_email(to_email: str, link: str) -> None:
             "--to",
             to_email,
             "--subject",
-            "Reset your Bring Fast password",
+            "Reset your Bring password",
             "--body",
-            f"Reset your Bring Fast password:\n\n{link}\n\nThis link expires in one hour.",
+            f"Reset your Bring password:\n\n{link}\n\nThis link expires in one hour.",
         ],
         check=False,
         timeout=30,
@@ -1196,7 +1196,7 @@ def purchases_page(
         "purchases.html",
         {
             "user": user,
-            "title": "Purchases · Bring Fast",
+            "title": "Purchases · Bring",
             "tab": "purchases",
             "products": first["rows"],
             "low": False,
@@ -1337,7 +1337,7 @@ def purchase_detail(request: Request, key: str, range: str = "all", start: str =
         "purchase_detail.html",
         {
             "user": user,
-            "title": f"{product['name']} · Bring Fast",
+            "title": f"{product['name']} · Bring",
             "tab": "purchases",
             "product": product,
             "compare": compare.compare_board(user["id"], key, product.get("last_price")),
@@ -1506,7 +1506,7 @@ def health(request: Request):
     base = _issuer(request)
     return {
         "ok": True,
-        "server": "Bring Fast",
+        "server": "Bring",
         "version": __version__,
         "boot": BOOT_ID,
         "revision": (update.load_saved().get("local") or ""),
@@ -1529,10 +1529,10 @@ def _store_tools() -> list[dict[str, Any]]:
             "name": "bf_whoami",
             "description": (
                 "THIS user's snapshot only: email, which supermarket logins are saved, and `version` "
-                "(this Bring Fast build). "
+                "(this Bring build). "
                 "Does NOT return order history or spend. For last month / invoices use bf_spend or bf_orders. "
                 "linked=true means the store login is saved. Do not say logins are missing when linked is true. "
-                "Delivery address lives on the supermarket account, not on Bring Fast. "
+                "Delivery address lives on the supermarket account, not on Bring. "
                 "Use version to answer whether a given 1.10.x is live."
             ),
             "inputSchema": {"type": "object", "properties": {}},
@@ -1540,11 +1540,11 @@ def _store_tools() -> list[dict[str, Any]]:
         {
             "name": "bf_stores",
             "description": (
-                "THIS user's stores and saved logins. Includes `version` (this Bring Fast build). "
+                "THIS user's stores and saved logins. Includes `version` (this Bring build). "
                 "linked=true means the supermarket login is saved. "
                 "Does NOT include order history, spend totals, or a last-seen cart. "
                 "For invoices / last month use bf_spend or bf_orders. "
-                "Address is the one on the supermarket account — do not ask to set it on Bring Fast."
+                "Address is the one on the supermarket account — do not ask to set it on Bring."
             ),
             "inputSchema": {"type": "object", "properties": {}},
         },
@@ -1570,7 +1570,7 @@ def _store_tools() -> list[dict[str, Any]]:
         {
             "name": "bf_cart",
             "description": (
-                "Official supermarket account cart (not a local Bring Fast cart). "
+                "Official supermarket account cart (not a local Bring cart). "
                 "retailer=grandiose|unioncoop|carrefour. Waitrose and Spinneys are search-only. "
                 "action=list|add|set|remove|clear. "
                 "list aliases: get, read, show, view. add needs product_id or name, plus qty. "
@@ -1857,7 +1857,7 @@ def _store_tools() -> list[dict[str, Any]]:
                     "Official Grandiose Magento checkout. "
                     "action=prepare (default) binds address + Home Delivery and lists methods; does not place. "
                     "action=place payment_method=ccod|cashondelivery sets the Magento method and calls placeOrder. "
-                    "ccod is card-on-delivery — Bring Fast never takes a card number. "
+                    "ccod is card-on-delivery — Bring never takes a card number. "
                     "Does not charge a card."
                 )
                 checkout_schema: dict[str, Any] = {
@@ -1918,7 +1918,7 @@ def _no_catalog(retailer: str) -> str:
 
 
 def _store_snapshot(user: dict[str, Any], retailer: str) -> dict[str, Any]:
-    """Saved Bring Fast state. Does not invent or write a dashboard delivery address."""
+    """Saved Bring state. Does not invent or write a dashboard delivery address."""
     stores = {s["id"]: s for s in db.list_retailer_accounts(user["id"])}
     s = stores[retailer]
     return {
@@ -1932,7 +1932,7 @@ def _store_snapshot(user: dict[str, Any], retailer: str) -> dict[str, Any]:
         "delivery_address": s.get("delivery_address") or "",
         "address_note": (
             "The only cart is the official supermarket account cart. "
-            "Bring Fast does not keep a local or virtual cart."
+            "Bring does not keep a local or virtual cart."
         ),
         "delivery_instruction": "Leave with security. Do not ring, call, or leave at the door.",
         "cart_url": s.get("cart_url"),
@@ -1983,7 +1983,7 @@ def _account_snapshot(user: dict[str, Any]) -> dict[str, Any]:
             "Waitrose and Spinneys are search-only — not tested for orders. "
             "Careem is receipts-only: its emailed invoices are read into purchases, "
             "and it has no catalog to search and nothing to compare. "
-            "Never invent or report a Bring Fast local cart or awaiting_official_payment order."
+            "Never invent or report a Bring local cart or awaiting_official_payment order."
         ),
         "stores": stores,
     }
@@ -2921,7 +2921,7 @@ async def _dispatch(user: dict[str, Any], message: Any) -> dict[str, Any] | None
                     "resources": {"listChanged": False},
                 },
                 "serverInfo": {
-                    "name": "Bring Fast",
+                    "name": "Bring",
                     "version": __version__,
                     "description": mcp_skill.DESCRIPTION,
                 },
@@ -3030,10 +3030,10 @@ def _cors_preflight():
 def _oauth_challenge(request: Request | None = None):
     meta = f"{_issuer(request)}/.well-known/oauth-protected-resource/mcp"
     return JSONResponse(
-        {"jsonrpc": "2.0", "id": None, "error": {"code": -32001, "message": "OAuth required. Sign in with your Bring Fast account."}},
+        {"jsonrpc": "2.0", "id": None, "error": {"code": -32001, "message": "OAuth required. Sign in with your Bring account."}},
         status_code=401,
         headers={
-            "WWW-Authenticate": f'Bearer realm="Bring Fast", resource_metadata="{meta}"',
+            "WWW-Authenticate": f'Bearer realm="Bring", resource_metadata="{meta}"',
             "Access-Control-Expose-Headers": "WWW-Authenticate",
         },
     )
@@ -3062,7 +3062,7 @@ def _prm_metadata(request: Request | None = None) -> dict:
         "authorization_servers": [base],
         "bearer_methods_supported": ["header"],
         "scopes_supported": ["mcp"],
-        "resource_name": "Bring Fast",
+        "resource_name": "Bring",
     }
 
 
@@ -3148,7 +3148,7 @@ def _authorize_error(request: Request, reason: str):
     return templates.TemplateResponse(
         request,
         "oauth_error.html",
-        {"user": current_user(request), "title": "Bring Fast", "error": reason},
+        {"user": current_user(request), "title": "Bring", "error": reason},
         status_code=400,
     )
 
@@ -3200,7 +3200,7 @@ def _authorize_page(
         "oauth_authorize.html",
         {
             "user": user,
-            "title": "Authorize Bring Fast",
+            "title": "Authorize Bring",
             "redirect_uri": redirect_uri,
             "state": state,
             "client_id": client_id,

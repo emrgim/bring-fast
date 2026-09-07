@@ -3,10 +3,10 @@
 <div class="auth-shell">
   {% if intent == "signin" %}
   <h1>Sign <em>in</em></h1>
-  <p class="lead">Grok wants to use your Bring Fast account.</p>
+  <p class="lead">Grok wants to use your Bring account.</p>
   {% else %}
   <h1>Create <em>account</em></h1>
-  <p class="lead">First time connecting Grok. Create Bring Fast, then the connector continues.</p>
+  <p class="lead">First time connecting Grok. Create Bring, then the connector continues.</p>
   {% endif %}
   <div class="card">
     <form method="post" action="/oauth/authorize">
@@ -25,7 +25,7 @@
     {% if intent == "signin" %}
     <p class="switch">New here? Use create account on the main site first, then come back.</p>
     {% else %}
-    <p class="switch">Already have an account? Submit again after changing nothing if this is a new email — or open Bring Fast and sign in first.</p>
+    <p class="switch">Already have an account? Submit again after changing nothing if this is a new email — or open Bring and sign in first.</p>
     {% endif %}
     <p class="off">Grok only sees your enabled stores. Payment stays on the supermarket site.</p>
   </div>

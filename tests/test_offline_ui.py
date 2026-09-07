@@ -15,7 +15,7 @@ def test_pressing_update_hands_over_to_a_countdown(bf, client):
     assert 'id="upd-step"' in html
     # The overlay covers the page instead of leaving it half-updated.
     assert ".veil {\n      position:fixed; inset:0; z-index:300" in html
-    assert "Restarting Bring Fast" in html
+    assert "Restarting Bring" in html
     # The countdown reads the seconds the server itself reported.
     assert "d.ready_in" in html
     assert "d.restart_in" in html

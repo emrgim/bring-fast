@@ -51,7 +51,7 @@ def test_signup_does_not_sign_in_existing(bf, client):
         follow_redirects=False,
     )
     assert r.status_code == 401
-    assert "already has a Bring Fast account" in r.text
+    assert "already has a Bring account" in r.text
 
 
 def test_email_case_and_spacing_do_not_create_a_second_account(bf, client):

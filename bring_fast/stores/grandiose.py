@@ -20,7 +20,7 @@ CONFIRM_URL = f"{SITE}/gagstore/deliverymode/confirm/"
 CHECKOUT_URL = f"{SITE}/checkout/"
 PACKAGE = "net.grandiose.retail"
 DELIVERY_NOTE = "Leave with security. Do not ring, call, or leave at the door."
-# Magento on-delivery methods. ccod = card at the door — Bring Fast never takes PAN.
+# Magento on-delivery methods. ccod = card at the door — Bring never takes PAN.
 PLACE_PAYMENT_METHODS = frozenset({"ccod", "cashondelivery"})
 # Element Meaisam / Dubai Production City — same point as Carrefour.
 LAT = 25.0321285
@@ -752,7 +752,7 @@ def place_payment_method(code: str | None) -> str:
         return m
     raise StoreAPIError(
         "action=place needs payment_method=ccod or cashondelivery. "
-        "ccod is Magento card-on-delivery — Bring Fast never takes a card number. "
+        "ccod is Magento card-on-delivery — Bring never takes a card number. "
         f"Got {code!r}.",
         status=400,
         error_code="payment_method_missing" if not m else "payment_method_unknown",
@@ -936,7 +936,7 @@ def prepare_checkout(*, token: str, address_id: int | None = None) -> dict[str, 
             + pay_txt
             + ". Payment stays on grandiose.ae — no order is placed until you say so. "
             "To place: action=place payment_method=ccod or cashondelivery "
-            "(card/cash on delivery; Bring Fast never takes a card number)."
+            "(card/cash on delivery; Bring never takes a card number)."
         ),
     }
 
@@ -973,7 +973,7 @@ def place_checkout(*, token: str, payment_method: str, address_id: int | None = 
         "selected_payment_method": {"code": method, "title": title},
         "what_happens": (
             f"Order {order_id} placed on grandiose.ae with {title} ({method}). "
-            "Bring Fast did not take a card number. Payment stays with Grandiose at delivery."
+            "Bring did not take a card number. Payment stays with Grandiose at delivery."
         ),
     }
 
