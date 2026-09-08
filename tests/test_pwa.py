@@ -3,14 +3,23 @@ from pathlib import Path
 from PIL import Image
 
 
-def _icon_is_monochrome(path: Path) -> bool:
+def _icon_is_strict_bw(path: Path) -> bool:
     img = Image.open(path).convert("RGBA")
     for r, g, b, a in img.getdata():
         if a < 10:
             continue
-        if r != g or g != b:
+        if (r, g, b) not in ((0, 0, 0), (255, 255, 255)):
             return False
     return True
+
+
+def _icon_polarity(path: Path) -> str:
+    img = Image.open(path).convert("RGBA")
+    w, h = img.size
+    px = img.load()
+    corners = [px[0, 0], px[w - 1, 0], px[0, h - 1], px[w - 1, h - 1]]
+    avg = sum(c[0] for c in corners if c[3] >= 10) / len(corners)
+    return "light" if avg > 127 else "dark"
 
 
 def test_pwa_app_icons_are_monochrome():
@@ -18,7 +27,16 @@ def test_pwa_app_icons_are_monochrome():
     icons = sorted(pwa.glob("icon*.png")) + [pwa / "favicon.ico"]
     assert icons, "expected PWA icon assets"
     for path in icons:
-        assert _icon_is_monochrome(path), f"{path.name} must be pure grayscale (B/W)"
+        assert _icon_is_strict_bw(path), f"{path.name} must be pure #000000 / #ffffff only"
+
+
+def test_pwa_icon_personal_polarity():
+    pwa = Path(__file__).resolve().parents[1] / "bring_fast" / "static" / "pwa"
+    for size in (180, 192, 512):
+        assert _icon_polarity(pwa / f"icon-light-{size}.png") == "light"
+        assert _icon_polarity(pwa / f"icon-dark-{size}.png") == "dark"
+    for name in ("icon-180.png", "icon-192.png", "icon-512.png"):
+        assert _icon_polarity(pwa / name) == "light"
 
 
 def test_pwa_manifest_and_icons(client):
@@ -29,11 +47,14 @@ def test_pwa_manifest_and_icons(client):
     assert data["display"] == "standalone"
     assert data["start_url"] == "/"
     assert data["name"] == "Bring"
-    assert data["background_color"] == "#1a0a0c"
-    assert data["theme_color"] == "#1a0a0c"
+    assert data["background_color"] == "#ffffff"
+    assert data["theme_color"] == "#ffffff"
     sizes = {icon["sizes"] for icon in data["icons"]}
     assert "192x192" in sizes
     assert "512x512" in sizes
+    srcs = {icon["src"] for icon in data["icons"]}
+    assert "/static/pwa/icon-light-192.png" in srcs
+    assert "/static/pwa/icon-dark-192.png" in srcs
     # An installed app opens straight on the tab you long-pressed for.
     assert {s["url"] for s in data["shortcuts"]} == {"/purchases", "/stores"}
 
@@ -190,8 +211,8 @@ def test_pwa_apple_icon_and_head(client):
     assert "apple-mobile-web-app-capable" in html
     assert "mobile-web-app-capable" in html
     assert "apple-touch-icon" in html
+    assert 'href="/static/pwa/icon-light-180.png"' in html
     assert "prefers-color-scheme: dark" in html
-    assert "prefers-color-scheme: light" in html
     assert "icon-dark-180.png" in html
     assert "icon-light-180.png" in html
     assert "serviceWorker" in html
