@@ -1,6 +1,6 @@
 [project]
 name = "bring-fast"
-version = "1.10.34"
+version = "1.10.35"
 description = "Bring — multi-user grocery MCP + dashboard"
 readme = "README.md"
 license = "MIT"
