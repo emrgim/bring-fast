@@ -1,3 +1,26 @@
+from pathlib import Path
+
+from PIL import Image
+
+
+def _icon_is_monochrome(path: Path) -> bool:
+    img = Image.open(path).convert("RGBA")
+    for r, g, b, a in img.getdata():
+        if a < 10:
+            continue
+        if r != g or g != b:
+            return False
+    return True
+
+
+def test_pwa_app_icons_are_monochrome():
+    pwa = Path(__file__).resolve().parents[1] / "bring_fast" / "static" / "pwa"
+    icons = sorted(pwa.glob("icon*.png")) + [pwa / "favicon.ico"]
+    assert icons, "expected PWA icon assets"
+    for path in icons:
+        assert _icon_is_monochrome(path), f"{path.name} must be pure grayscale (B/W)"
+
+
 def test_pwa_manifest_and_icons(client):
     man = client.get("/manifest.webmanifest")
     assert man.status_code == 200
