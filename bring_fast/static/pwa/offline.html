@@ -7,10 +7,10 @@
   <meta name="color-scheme" content="light dark"/>
   <title>Offline · Bring</title>
   <link rel="icon" href="/favicon.ico" sizes="32x32"/>
+  <link rel="icon" type="image/png" href="/static/pwa/icon-light-192.png" sizes="192x192"/>
   <link rel="icon" type="image/png" href="/static/pwa/icon-dark-192.png" sizes="192x192" media="(prefers-color-scheme: dark)"/>
-  <link rel="icon" type="image/png" href="/static/pwa/icon-light-192.png" sizes="192x192" media="(prefers-color-scheme: light)"/>
+  <link rel="apple-touch-icon" href="/static/pwa/icon-light-180.png"/>
   <link rel="apple-touch-icon" href="/static/pwa/icon-dark-180.png" media="(prefers-color-scheme: dark)"/>
-  <link rel="apple-touch-icon" href="/static/pwa/icon-light-180.png" media="(prefers-color-scheme: light)"/>
   <script>
     /* The same zoom lock as the rest of the shell: a screen reached inside the
        installed app must not be pinchable just because the network is down. */
@@ -112,7 +112,7 @@
         document.documentElement.setAttribute("data-theme",t);
         document.documentElement.setAttribute("data-theme-pref",p);
         var m=document.querySelector('meta[name="theme-color"]');
-        if(m) m.setAttribute("content", t==="dark"?"#0a0a0a":"#ffffff");
+        if(m) m.setAttribute("content", t==="dark"?"#000000":"#ffffff");
       }
       function onOs(){ if(pref()==="auto") apply("auto"); }
       if(mq){
