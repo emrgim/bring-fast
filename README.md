@@ -155,6 +155,24 @@ restart down instead of going blank or dying on a reload.
 - `deploy/fast-bring-update-check.timer` checks GitHub every 10 minutes; an
   online page also checks when it loads and whenever the network comes back.
 
+## Backup
+
+**Settings → Backup** configures a folder on the server (not in the browser),
+connects to it, and shows the last successful backup time. **Connect to backup**
+validates that the path is absolute, creates it when needed, checks that Bring
+can write there, stores the connection in SQLite, and writes the first archive.
+While connected, Bring also runs a daily backup in-process and keeps the last 14
+days (`BRINGFAST_BACKUP_RETENTION_DAYS`).
+
+- **Download backup** exports the current database, secrets, receipts and
+  product images as a tar.gz in the browser. It does not replace the server
+  folder or the daily schedule.
+- On Domvs, `deploy/fast-bring-backup.timer` runs
+  `python -m bring_fast.backup run` once per day as a durable fallback when the
+  app process is restarted. Set `BRINGFAST_DATA` in the unit like the update
+  timer. Disable the in-process scheduler with `BRINGFAST_BACKUP_SCHEDULER=0`
+  if you rely on systemd only.
+
 ## Stores
 
 The **Stores** tab reads the stores out and changes none of them: a card per

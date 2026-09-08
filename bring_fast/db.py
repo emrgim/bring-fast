@@ -458,6 +458,19 @@ def _init_schema(con: sqlite3.Connection) -> None:
     con.execute("CREATE INDEX IF NOT EXISTS idx_invoice_items_product ON invoice_items(product_key)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_product_aliases_canonical ON product_aliases(canonical_key)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_product_meta_ean ON product_meta(official_ean)")
+    con.execute(
+        """CREATE TABLE IF NOT EXISTS backup_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            server_path TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'disconnected',
+            last_check_at INTEGER,
+            last_check_error TEXT,
+            last_backup_at INTEGER,
+            connected_at INTEGER
+        )"""
+    )
+    if not con.execute("SELECT 1 FROM backup_settings WHERE id=1").fetchone():
+        con.execute("INSERT INTO backup_settings(id) VALUES (1)")
     con.commit()
 
 
@@ -1197,3 +1210,74 @@ def list_push_subs(user_id: int) -> list[dict[str, Any]]:
     rows = con.execute("SELECT * FROM push_subs WHERE user_id=?", (user_id,)).fetchall()
     con.close()
     return [dict(r) for r in rows]
+
+
+def get_backup_settings() -> dict[str, Any]:
+    con = connect()
+    row = con.execute("SELECT * FROM backup_settings WHERE id=1").fetchone()
+    con.close()
+    if not row:
+        return {
+            "server_path": "",
+            "status": "disconnected",
+            "last_check_at": None,
+            "last_check_error": "",
+            "last_backup_at": None,
+            "connected_at": None,
+        }
+    return {
+        "server_path": row["server_path"] or "",
+        "status": row["status"] or "disconnected",
+        "last_check_at": row["last_check_at"],
+        "last_check_error": row["last_check_error"] or "",
+        "last_backup_at": row["last_backup_at"],
+        "connected_at": row["connected_at"],
+    }
+
+
+def set_backup_path(path: str) -> None:
+    con = connect()
+    con.execute(
+        """INSERT INTO backup_settings(id, server_path) VALUES (1, ?)
+           ON CONFLICT(id) DO UPDATE SET server_path=excluded.server_path""",
+        ((path or "").strip(),),
+    )
+    con.commit()
+    con.close()
+
+
+def set_backup_status(status: str, *, error: str = "", checked_at: int | None = None) -> None:
+    ts = checked_at if checked_at is not None else int(time.time())
+    con = connect()
+    row = con.execute("SELECT connected_at FROM backup_settings WHERE id=1").fetchone()
+    connected_at = row["connected_at"] if row and row["connected_at"] else None
+    if status == "connected" and not connected_at:
+        connected_at = ts
+    con.execute(
+        """INSERT INTO backup_settings(id, status, last_check_at, last_check_error, connected_at)
+           VALUES (1, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             status=excluded.status,
+             last_check_at=excluded.last_check_at,
+             last_check_error=excluded.last_check_error,
+             connected_at=COALESCE(backup_settings.connected_at, excluded.connected_at)""",
+        (status, ts, error or "", connected_at),
+    )
+    con.commit()
+    con.close()
+
+
+def set_last_backup_at(ts: int) -> None:
+    con = connect()
+    con.execute(
+        """INSERT INTO backup_settings(id, last_backup_at, status, last_check_at, last_check_error)
+           VALUES (1, ?, 'connected', ?, '')
+           ON CONFLICT(id) DO UPDATE SET
+             last_backup_at=excluded.last_backup_at,
+             status='connected',
+             last_check_at=excluded.last_check_at,
+             last_check_error=''""",
+        (ts, ts),
+    )
+    con.commit()
+    con.close()
