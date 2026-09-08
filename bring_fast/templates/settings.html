@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block body %}
 <h1><em>Settings</em></h1>
-<p class="lead">Web app alerts when a new bill lands from your receipts.</p>
+<p class="lead">Notifications, and server-side backups of your Bring data.</p>
 
 <div class="card">
   <h2>Notifications</h2>
@@ -13,6 +13,38 @@
     <button type="button" class="ghost" id="notif-off"{% if not notify_on %} style="display:none"{% endif %}>Disable</button>
   </div>
 </div>
+
+<div class="card">
+  <h2>Backup</h2>
+  <p class="off" style="margin-bottom:12px">Point Bring at a folder on this server. When connected, Bring writes a daily archive there and keeps the last {{ backup.retention_days }} days. Download backup exports a copy to your browser without changing the server schedule.</p>
+
+  <label for="backup-path" class="off">Backup folder (server path)</label>
+  <input id="backup-path" name="server_path" type="text" spellcheck="false" autocomplete="off" placeholder="/var/backups/bring-fast" value="{{ backup.server_path or '' }}" style="width:100%;margin:6px 0 12px;padding:10px 12px;font:inherit;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:4px"/>
+
+  <p class="off" id="backup-status">
+    {% if backup.status == 'connected' %}
+    Connected to <span class="token">{{ backup.server_path }}</span>.
+    {% elif backup.status == 'error' %}
+    Error{% if backup.last_check_error %}: {{ backup.last_check_error }}{% endif %}.
+    {% else %}
+    Not connected.
+    {% endif %}
+  </p>
+  <p class="off" id="backup-last">
+    {% if backup.last_backup_label %}
+    Last successful backup: {{ backup.last_backup_label }} UTC.
+    {% else %}
+    No successful backup yet.
+    {% endif %}
+  </p>
+
+  <div class="split">
+    <button type="button" id="backup-connect">Connect to backup</button>
+    <a class="ghost" id="backup-download" href="/settings/backup/download">Download backup</a>
+  </div>
+  <p class="off" id="backup-msg" hidden></p>
+</div>
+
 <script>
 (function(){
   var pubEl=document.getElementById("vapid-public");
@@ -54,6 +86,49 @@
   }
   if(onBtn) onBtn.addEventListener("click", function(){ enable(); });
   if(offBtn) offBtn.addEventListener("click", function(){ disable(); });
+})();
+</script>
+<script>
+(function(){
+  var pathEl=document.getElementById("backup-path");
+  var statusEl=document.getElementById("backup-status");
+  var lastEl=document.getElementById("backup-last");
+  var msgEl=document.getElementById("backup-msg");
+  var connectBtn=document.getElementById("backup-connect");
+  function showMsg(text, ok){
+    if(!msgEl) return;
+    msgEl.hidden=false;
+    msgEl.textContent=text;
+    msgEl.style.color=ok?"var(--ink)":"var(--bad, #b00020)";
+  }
+  async function connect(){
+    var path=(pathEl&&pathEl.value||"").trim();
+    if(!path){ showMsg("Enter an absolute server path.", false); return; }
+    if(connectBtn) connectBtn.disabled=true;
+    showMsg("Checking folder and writing the first backup…", true);
+    try{
+      var r=await fetch("/settings/backup/connect",{
+        method:"POST",
+        credentials:"same-origin",
+        headers:{"content-type":"application/json"},
+        body:JSON.stringify({server_path:path})
+      });
+      var data=await r.json();
+      if(!r.ok || !data.ok){
+        showMsg(data.error||"Could not connect.", false);
+        if(statusEl) statusEl.textContent="Error: "+(data.error||data.last_check_error||"unknown");
+        return;
+      }
+      if(statusEl) statusEl.textContent="Connected to "+(data.path||data.server_path||path)+".";
+      if(lastEl && data.last_backup_label) lastEl.textContent="Last successful backup: "+data.last_backup_label+" UTC.";
+      showMsg("Connected. Daily backups will run on this server.", true);
+    }catch(e){
+      showMsg("Could not reach the server.", false);
+    }finally{
+      if(connectBtn) connectBtn.disabled=false;
+    }
+  }
+  if(connectBtn) connectBtn.addEventListener("click", connect);
 })();
 </script>
 {% endblock %}

@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import __version__, catalog, checkout, compare, db, forecast, macro_categories, mcp_skill, purchases, push, update, x
+from . import __version__, backup, catalog, checkout, compare, db, forecast, macro_categories, mcp_skill, purchases, push, update, x
 from .macro_categories import MACRO_CATEGORIES, normalize_macro as normalize_macro_slug
 from .stores.cart_match import peel_remove_name
 
@@ -90,6 +90,11 @@ class CompressMarkup:
 app.add_middleware(CompressMarkup)
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 STATIC = Path(__file__).resolve().parent / "static"
+
+
+@app.on_event("startup")
+def _startup_backup_scheduler() -> None:
+    backup.start_scheduler()
 
 # A font subset is fixed for the life of its filename, so it is fetched once
 # and never asked about again. A page carries live money figures, so the
@@ -804,7 +809,43 @@ def settings_page(request: Request):
             "tab": "settings",
             "notify_on": db.get_notify(user["id"]),
             "vapid_public": push.public_key(),
+            "backup": backup.settings_view(),
         },
+    )
+
+
+@app.post("/settings/backup/connect")
+async def settings_backup_connect(request: Request):
+    user = current_user(request)
+    if not user:
+        return _live({"ok": False, "error": "login required"}, status_code=401)
+    data: dict[str, Any] = {}
+    try:
+        data = await request.json()
+    except Exception:
+        form = await request.form()
+        data = dict(form)
+    path = str(data.get("server_path") or data.get("path") or "").strip()
+    if not path:
+        return _live({"ok": False, "error": "Enter an absolute server path."}, status_code=400)
+    result = backup.connect_backup_path(path)
+    view = backup.settings_view()
+    if not result.get("ok"):
+        return _live({**result, **view}, status_code=400)
+    return _live({**result, **view})
+
+
+@app.get("/settings/backup/download")
+def settings_backup_download(request: Request):
+    user = current_user(request)
+    if not user:
+        return RedirectResponse("/login?mode=signin&next=/settings", status_code=303)
+    archive, filename = backup.export_download_archive()
+    return FileResponse(
+        archive,
+        media_type="application/gzip",
+        filename=filename,
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -3344,6 +3385,7 @@ def main() -> None:
     import uvicorn
 
     db.connect()
+    backup.start_scheduler()
     if not PUBLIC_URL:
         print(
             "WARNING: BRINGFAST_PUBLIC_URL is unset. "

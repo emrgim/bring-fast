@@ -10,7 +10,8 @@ def bf(tmp_path, monkeypatch):
     monkeypatch.setenv("BRINGFAST_DATA", str(tmp_path / "data"))
     monkeypatch.setenv("BRINGFAST_SECRET", "test-secret")
     monkeypatch.setenv("BRINGFAST_FETCH_IMAGES", "0")
-    for name in ("bring_fast.app", "bring_fast.db", "bring_fast.checkout", "bring_fast.catalog", "bring_fast.purchases", "bring_fast.compare"):
+    monkeypatch.setenv("BRINGFAST_BACKUP_SCHEDULER", "0")
+    for name in ("bring_fast.app", "bring_fast.db", "bring_fast.checkout", "bring_fast.catalog", "bring_fast.purchases", "bring_fast.compare", "bring_fast.backup"):
         sys.modules.pop(name, None)
     db = importlib.import_module("bring_fast.db")
     app_module = importlib.import_module("bring_fast.app")

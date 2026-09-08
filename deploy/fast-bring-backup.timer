@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Bring Fast backup once per day
+
+[Timer]
+OnBootSec=15min
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target
