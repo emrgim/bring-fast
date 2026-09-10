@@ -199,7 +199,7 @@ def test_bf_product_ambiguous_query(bf):
 
 def test_purchase_tools_are_listed(bf):
     names = {t["name"] for t in bf.tools_catalog()}
-    assert {"bf_spend", "bf_products", "bf_shopping_list", "bf_product", "bf_orders"} <= names
+    assert {"bf_spend", "bf_products", "bf_shopping_list", "bf_product", "bf_orders", "bf_delete_invoice"} <= names
     assert {"x_me", "x_user_by_username", "x_user_posts", "x_mentions", "x_search", "x_post"} <= names
     who = next(t for t in bf.tools_catalog() if t["name"] == "bf_whoami")
     assert "recent official orders" not in who["description"]

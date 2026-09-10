@@ -1791,6 +1791,22 @@ def _store_tools() -> list[dict[str, Any]]:
                 "required": ["retailer", "invoice_no", "items"],
             },
         },
+        {
+            "name": "bf_delete_invoice",
+            "description": (
+                "WRITE: delete one invoice/order for THIS user. Use when a duplicate or wrong "
+                "receipt was imported (e.g. order confirmation vs tax invoice). Pass invoice_id "
+                "OR retailer+invoice_no. Returns deleted invoice_id, invoice_no, retailer, items_removed."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "invoice_id": {"type": "integer"},
+                    "retailer": {"type": "string"},
+                    "invoice_no": {"type": "string"},
+                },
+            },
+        },
     ]
     for r in db.RETAILERS:
         sid, name = r["id"], r["name"]
@@ -2577,6 +2593,7 @@ def _normalize_tool(name: str, args: dict[str, Any]) -> tuple[str, dict[str, Any
         "history": "bf_orders",
         "import_invoice": "bf_import_invoice",
         "upsert_invoice": "bf_import_invoice",
+        "delete_invoice": "bf_delete_invoice",
         "products": "bf_products",
         "top_products": "bf_products",
         "shopping_list": "bf_shopping_list",
@@ -2708,6 +2725,58 @@ def _import_invoice(user: dict[str, Any], args: dict[str, Any]) -> str:
     return _ok(invoice_id=invoice_id, retailer=retailer, invoice_no=invoice_no)
 
 
+def _delete_invoice(user: dict[str, Any], args: dict[str, Any]) -> str:
+    raw_id = args.get("invoice_id")
+    retailer = str(args.get("retailer") or args.get("store") or "").strip().lower()
+    invoice_no = str(args.get("invoice_no") or "").strip()
+    has_id = raw_id is not None and str(raw_id).strip() != ""
+    has_pair = bool(retailer and invoice_no)
+    if has_id and has_pair:
+        return json.dumps(
+            {"success": False, "error": "Pass invoice_id or retailer+invoice_no, not both."},
+            ensure_ascii=False,
+        )
+    if not has_id and not has_pair:
+        return json.dumps(
+            {"success": False, "error": "Pass invoice_id or retailer+invoice_no."},
+            ensure_ascii=False,
+        )
+    inv_id: int | None = None
+    if has_id:
+        try:
+            inv_id = int(raw_id)
+        except (TypeError, ValueError):
+            return json.dumps(
+                {"success": False, "error": "invoice_id must be an integer."},
+                ensure_ascii=False,
+            )
+    else:
+        known = {r["id"] for r in db.RETAILERS}
+        if retailer not in known:
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": f"unknown retailer {retailer!r}. Use bf_stores for registered store ids.",
+                },
+                ensure_ascii=False,
+            )
+    try:
+        result = purchases.delete_invoice(
+            int(user["id"]),
+            invoice_id=inv_id,
+            retailer=retailer if not has_id else None,
+            invoice_no=invoice_no if not has_id else None,
+        )
+    except ValueError as exc:
+        return json.dumps({"success": False, "error": str(exc)}, ensure_ascii=False)
+    if result is None:
+        return json.dumps(
+            {"success": False, "error": "Invoice not found for this user."},
+            ensure_ascii=False,
+        )
+    return _ok(**result)
+
+
 def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
     uid = user["id"]
     name, args = _normalize_tool(name, args or {})
@@ -2759,6 +2828,8 @@ def _call_tool(user: dict[str, Any], name: str, args: dict[str, Any]) -> str:
         )
     if name == "bf_import_invoice":
         return _import_invoice(user, args)
+    if name == "bf_delete_invoice":
+        return _delete_invoice(user, args)
     if name == "bf_products":
         sort = str(args.get("sort") or "spend")
         if sort in ("price", "expensive", "unit", "cost"):

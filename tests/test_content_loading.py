@@ -1,6 +1,9 @@
 """Nothing waits for a scroll, nothing waits on a font CDN, nothing is fetched twice."""
 
+from datetime import date, timedelta
+
 WEIGHTS = ("400", "500", "600", "700")
+RECENT_DAY = (date.today() - timedelta(days=7)).isoformat()
 
 
 def _shelf(bf, email="load@example.com"):
@@ -12,7 +15,7 @@ def _shelf(bf, email="load@example.com"):
             "store_name": "Carrefour",
             "invoice_no": "LOAD1",
             "order_no": "1",
-            "invoice_date": "2026-08-10",
+            "invoice_date": RECENT_DAY,
             "items": [
                 {
                     "name": "Milk",

@@ -330,13 +330,11 @@ def _init_schema(con: sqlite3.Connection) -> None:
             PRIMARY KEY (user_id, retailer, capability)
         )"""
     )
-    existing = {r[0] for r in con.execute("SELECT retailer FROM store_flags").fetchall()}
     for r in RETAILERS:
-        if r["id"] not in existing:
-            con.execute(
-                "INSERT INTO store_flags(retailer, enabled) VALUES (?,?)",
-                (r["id"], 1 if r.get("enabled") else 0),
-            )
+        con.execute(
+            "INSERT OR IGNORE INTO store_flags(retailer, enabled) VALUES (?,?)",
+            (r["id"], 1 if r.get("enabled") else 0),
+        )
     con.execute(
         """CREATE TABLE IF NOT EXISTS password_resets (
             token TEXT PRIMARY KEY,
