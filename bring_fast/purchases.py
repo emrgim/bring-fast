@@ -439,6 +439,53 @@ def upsert_invoice(user_id: int, parsed: dict[str, Any], *, gmail_id: str = "") 
     return invoice_id
 
 
+def delete_invoice(
+    user_id: int,
+    *,
+    invoice_id: int | None = None,
+    retailer: str | None = None,
+    invoice_no: str | None = None,
+) -> dict[str, Any] | None:
+    """Delete one invoice and its line items, scoped to user_id only."""
+    has_id = invoice_id is not None
+    retailer_s = (retailer or "").strip().lower()
+    invoice_no_s = (invoice_no or "").strip()
+    has_pair = bool(retailer_s and invoice_no_s)
+    if has_id == has_pair:
+        raise ValueError("Pass invoice_id or retailer+invoice_no, not both.")
+    if not has_id and not has_pair:
+        raise ValueError("Pass invoice_id or retailer+invoice_no.")
+    con = db.connect()
+    if has_id:
+        row = con.execute(
+            "SELECT id, invoice_no, retailer FROM invoices WHERE id=? AND user_id=?",
+            (int(invoice_id), user_id),
+        ).fetchone()
+    else:
+        row = con.execute(
+            "SELECT id, invoice_no, retailer FROM invoices WHERE user_id=? AND retailer=? AND invoice_no=?",
+            (user_id, retailer_s, invoice_no_s),
+        ).fetchone()
+    if not row:
+        con.close()
+        return None
+    inv_id = int(row["id"])
+    items_removed = int(
+        con.execute("SELECT COUNT(*) AS n FROM invoice_items WHERE invoice_id=?", (inv_id,)).fetchone()["n"]
+    )
+    con.execute("DELETE FROM invoice_items WHERE invoice_id=?", (inv_id,))
+    con.execute("DELETE FROM invoices WHERE id=? AND user_id=?", (inv_id, user_id))
+    con.commit()
+    con.close()
+    forget_shelf()
+    return {
+        "invoice_id": inv_id,
+        "invoice_no": row["invoice_no"],
+        "retailer": row["retailer"],
+        "items_removed": items_removed,
+    }
+
+
 def _parse_day(raw: str | None) -> date | None:
     if not raw:
         return None

@@ -35,6 +35,7 @@ Carrefour UAE is **not search-only**. Official cart: `carrefour_cart` (also `bf_
 | Last 30 days / last week / average | `bf_spend` `range=1m` or `1w` `grain=weekly\|monthly` |
 | Order history / receipts / items bought | `bf_orders` `range=last_month` (or `this_month` / `1m`) |
 | Import a parsed invoice / expense | `bf_import_invoice` — WRITE. `retailer=` any registered store id, `invoice_no`, `items[]`. External mail agent uses this after parsing Gmail. Registered stores and `domain` mapping: `bf_stores`. |
+| Remove a wrong / duplicate invoice | `bf_delete_invoice` — WRITE. `invoice_id=` OR `retailer=` + `invoice_no=`. Deletes line items then the invoice for this user only. |
 | Most expensive product | `bf_products` `sort=unit_price` |
 | Where the money goes | `bf_products` `sort=spend` |
 | Bought most often | `bf_products` `sort=frequency` |
