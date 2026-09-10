@@ -1,5 +1,9 @@
 """Installed, Bring Fast has to behave like an app: no zoom, no clipping, no dead ends."""
 
+from datetime import date, timedelta
+
+RECENT_DAY = (date.today() - timedelta(days=7)).isoformat()
+
 
 def _signed_in(bf, client, email="app@example.com"):
     bf.db.create_user(email, "secret1")
@@ -13,7 +17,7 @@ def test_the_phone_card_puts_spend_on_the_title_row(bf, client):
         {
             "retailer": "carrefour",
             "invoice_no": "card1",
-            "invoice_date": "2026-08-10",
+            "invoice_date": RECENT_DAY,
             "items": [{"name": "Heineken Cans 50 cl", "qty": 1, "unit_price": 15, "line_total": 15, "barcode": "111"}],
         },
     )
