@@ -567,6 +567,10 @@ def mcp_url(request: Request | None = None) -> str:
     return f"{_issuer(request)}/mcp"
 
 
+def mcp_connector_url(request: Request | None, user: dict[str, Any]) -> str:
+    return f"{mcp_url(request)}?token={user['mcp_token']}"
+
+
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request, next: str = "/", welcome: int = 0, notice: str = "", mode: str = ""):
     user = current_user(request)
@@ -783,7 +787,6 @@ def stores_page(request: Request, welcome: int = 0, notice: str = ""):
                 {**r, "caps": db.store_capabilities(r["id"], probes=probes)}
                 for r in db.list_retailer_accounts(user["id"])
             ],
-            "mcp_url": mcp_url(request),
             "title": "Stores · Bring",
             "notice": (
                 f"Welcome to Bring, {user['email']}. Open Grandiose below to link it."
@@ -810,6 +813,7 @@ def settings_page(request: Request):
             "notify_on": db.get_notify(user["id"]),
             "vapid_public": push.public_key(),
             "backup": backup.settings_view(),
+            "mcp_connector_url": mcp_connector_url(request, user),
         },
     )
 
@@ -1127,7 +1131,7 @@ def rotate(request: Request):
     user = current_user(request)
     if user:
         db.rotate_token(user["id"])
-    return RedirectResponse("/stores", status_code=303)
+    return RedirectResponse("/settings", status_code=303)
 
 
 def _shelf_url(**params: Any) -> str:
@@ -1561,6 +1565,8 @@ def health(request: Request):
 def _user_from_request(request: Request):
     auth = request.headers.get("authorization") or ""
     token = auth[7:].strip() if auth.lower().startswith("bearer ") else auth.strip()
+    if not token:
+        token = (request.query_params.get("token") or "").strip()
     return db.get_user_by_token(token)
 
 

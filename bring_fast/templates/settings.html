@@ -1,7 +1,20 @@
 {% extends "base.html" %}
 {% block body %}
 <h1><em>Settings</em></h1>
-<p class="lead">Notifications, and server-side backups of your Bring data.</p>
+<p class="lead">Grok connector, notifications, and server-side backups of your Bring data.</p>
+
+<div class="card mcp">
+  <h2>Grok connector</h2>
+  <p class="off" style="margin-bottom:12px">Paste this single URL into Grok's Custom MCP connector. Your token is included — no OAuth setup.</p>
+  <p class="token" id="mcp-connector-url">{{ mcp_connector_url }}</p>
+  <div class="split">
+    <button type="button" id="mcp-copy">Copy URL</button>
+    <form method="post" action="/rotate-token" style="margin:0;flex:1;min-width:160px">
+      <button class="ghost" type="submit" style="width:100%">Generate new token</button>
+    </form>
+  </div>
+  <p class="off" id="mcp-copy-msg" hidden style="margin-top:8px">Copied.</p>
+</div>
 
 <div class="card">
   <h2>Notifications</h2>
@@ -129,6 +142,30 @@
     }
   }
   if(connectBtn) connectBtn.addEventListener("click", connect);
+})();
+</script>
+<script>
+(function(){
+  var urlEl=document.getElementById("mcp-connector-url");
+  var copyBtn=document.getElementById("mcp-copy");
+  var msgEl=document.getElementById("mcp-copy-msg");
+  if(!urlEl||!copyBtn) return;
+  async function copy(){
+    var text=(urlEl.textContent||"").trim();
+    if(!text) return;
+    try{
+      if(navigator.clipboard&&navigator.clipboard.writeText) await navigator.clipboard.writeText(text);
+      else{
+        var ta=document.createElement("textarea");
+        ta.value=text; ta.style.position="fixed"; ta.style.left="-9999px";
+        document.body.appendChild(ta); ta.select(); document.execCommand("copy"); document.body.removeChild(ta);
+      }
+      if(msgEl){ msgEl.hidden=false; msgEl.textContent="Copied."; }
+    }catch(e){
+      if(msgEl){ msgEl.hidden=false; msgEl.textContent="Could not copy — select the URL and copy manually."; }
+    }
+  }
+  copyBtn.addEventListener("click", copy);
 })();
 </script>
 {% endblock %}

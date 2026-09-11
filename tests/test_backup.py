@@ -143,3 +143,19 @@ def test_settings_page_shows_backup_section(client, tmp_path, monkeypatch):
     assert "Backup folder (server path)" in page.text
     assert "Connect to backup" in page.text
     assert "Download backup" in page.text
+
+
+def test_settings_page_shows_grok_connector_url(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("BRINGFAST_DATA", str(tmp_path / "data"))
+    from bring_fast import db
+
+    _signup(client, "grok@example.com")
+    token = db.get_user_by_email("grok@example.com")["mcp_token"]
+    page = client.get("/settings", headers={"Host": "bring-fast.example.com", "X-Forwarded-Proto": "https"})
+    assert page.status_code == 200
+    assert "Grok connector" in page.text
+    assert f"/mcp?token={token}" in page.text
+    assert "Copy URL" in page.text
+    assert "Generate new token" in page.text
+    assert "no OAuth setup" in page.text
+    assert "Grok connector" not in client.get("/stores").text
