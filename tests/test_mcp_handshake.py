@@ -84,6 +84,28 @@ def test_get_mcp_with_valid_token_is_not_an_auth_failure(client, token):
     assert "POST" in r.headers["allow"]
 
 
+def test_get_mcp_with_query_token_is_not_an_auth_failure(client, token):
+    """Grok Custom MCP connectors pass ?token= in the URL instead of Bearer."""
+    r = client.get(f"/mcp?token={token}", headers={"Accept": "text/event-stream"})
+    assert r.status_code == 405
+    assert "POST" in r.headers["allow"]
+
+
+def test_tools_list_accepts_query_token(client):
+    """Custom connector URL is /mcp?token=… — handshake must work without Bearer."""
+    from bring_fast import db
+
+    client.post("/register", data={"email": "url@example.com", "password": "probe-password"})
+    token = db.get_user_by_email("url@example.com")["mcp_token"]
+    r = client.post(
+        f"/mcp?token={token}",
+        headers={"Accept": ACCEPT, "MCP-Protocol-Version": "2025-06-18"},
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+    )
+    assert r.status_code == 200
+    assert "tools" in r.json()["result"]
+
+
 def test_unauthenticated_requests_still_challenge(client):
     for call in (lambda: client.get("/mcp"),
                  lambda: client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "ping"})):

@@ -27,13 +27,4 @@
   </a>
 {% endfor %}
 </div>
-
-<div class="card mcp" style="margin-top:16px">
-  <h2>Grok connector</h2>
-  <p class="off">MCP URL</p>
-  <p><code>{{ mcp_url }}</code></p>
-  <p class="off">Personal token — keep it private</p>
-  <p class="token">{{ user.mcp_token }}</p>
-  <form method="post" action="/rotate-token"><button class="ghost" type="submit">Generate new token</button></form>
-</div>
 {% endblock %}
